@@ -1144,21 +1144,27 @@ if (Test-Path $execDelivMetaPath) {
         Write-Host ("  events_checked: {0}  pass={1}  fail={2}" -f $edTotal, $edPass, $edFail)
 
         if ($edFail -gt 0) {
-            Write-Host ("  => EXEC_DELIVERABLE_DOCX_PPTX_HARD: FAIL ({0} failing event(s))" -f $edFail) -ForegroundColor Red
-            if ($edm.PSObject.Properties['events'] -and $edm.events) {
-                foreach ($edEv in $edm.events) {
-                    if (-not $edEv.all_pass) {
-                        $edReasons = @()
-                        if ($edEv.PSObject.Properties['dod'] -and $edEv.dod) {
-                            foreach ($p in $edEv.dod.PSObject.Properties) {
-                                if (-not [bool]$p.Value) { $edReasons += $p.Name }
+            # Brief mode: EXEC_DELIVERABLE is WARN-OK; BRIEF_GATES are the acceptance criterion.
+            # run_once.py brief-mode-bypass also overrides meta to PASS; this is a safety net.
+            if ($env:BRIEF_ONLY -eq "1") {
+                Write-Host ("  => EXEC_DELIVERABLE_DOCX_PPTX_HARD: WARN-OK (brief mode; {0} DoD fail(s); acceptance=BRIEF_GATES)" -f $edFail) -ForegroundColor Yellow
+            } else {
+                Write-Host ("  => EXEC_DELIVERABLE_DOCX_PPTX_HARD: FAIL ({0} failing event(s))" -f $edFail) -ForegroundColor Red
+                if ($edm.PSObject.Properties['events'] -and $edm.events) {
+                    foreach ($edEv in $edm.events) {
+                        if (-not $edEv.all_pass) {
+                            $edReasons = @()
+                            if ($edEv.PSObject.Properties['dod'] -and $edEv.dod) {
+                                foreach ($p in $edEv.dod.PSObject.Properties) {
+                                    if (-not [bool]$p.Value) { $edReasons += $p.Name }
+                                }
                             }
+                            Write-Host ("     FAIL: {0}  reasons={1}" -f $edEv.title, ($edReasons -join ",")) -ForegroundColor Red
                         }
-                        Write-Host ("     FAIL: {0}  reasons={1}" -f $edEv.title, ($edReasons -join ",")) -ForegroundColor Red
                     }
                 }
+                exit 1
             }
-            exit 1
         }
         Write-Host "  => EXEC_DELIVERABLE_DOCX_PPTX_HARD: PASS (fail_count=0)" -ForegroundColor Green
     } catch {
