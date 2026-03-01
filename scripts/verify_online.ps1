@@ -22,7 +22,8 @@ $env:PYTHONIOENCODING = "utf-8"
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $_voRunId = (Get-Date -Format "yyyyMMdd_HHmmss")
 $_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 3600 }
+$_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 600 }
+$env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
 
 Write-Output "=== verify_online.ps1 開始 ==="
 Write-Output ""

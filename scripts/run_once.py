@@ -614,11 +614,13 @@ _BRIEF_EVENT_ACTION_RE = re.compile(
     r"(?:\b(?:launch|release|announce|deploy|acquire|raise|ban|ship|expand|update|introduce|publish|"
     r"train|integrate|partner|merge|fund|cut|block|approve|adopt|close|halt|reduce|increase|"
     r"improve|complete|end|consider|designate|build|pick|choose|select|will|enable|allow|"
-    r"achieve|demonstrate|evaluate|establish|outperform|provide|assess|surpass|apply|develop)\b"
+    r"achieve|demonstrate|evaluate|establish|outperform|provide|assess|surpass|apply|develop|"
+    r"reveal|disclose|detail|clarify|sign|agree|detect|generate|restrict|grant|settle|warn|confirm|support|commit)\b"
     r"|\u767c\u5e03|\u63a8\u51fa|\u5ba3\u5e03|\u5347\u7d1a|\u90e8\u7f72|\u5408\u4f5c|\u6536\u8cfc|\u52df\u8cc7|"
     r"\u64f4\u5927|\u6574\u5408|\u5c0e\u5165|\u4e0a\u7dda|\u6539\u5584|\u63d0\u5347|\u589e\u52a0|\u4e0b\u964d|"
     r"\u9810\u8a08|\u5c07|\u5141\u8a31|\u5e36\u52d5|\u5f71\u97ff|\u767c\u8868|\u63ed\u793a|\u8868\u660e|\u63d0\u51fa|\u63a8\u9032|"
-    r"\u5efa\u7acb|\u5be6\u73fe|\u9054\u5230|\u8a55\u4f30|\u5c55\u793a|\u8d85\u8d8a|\u63d0\u4f9b|\u61c9\u7528|\u8a2d\u8a08|\u89e3\u6c7a)",
+    r"\u5efa\u7acb|\u5be6\u73fe|\u9054\u5230|\u8a55\u4f30|\u5c55\u793a|\u8d85\u8d8a|\u63d0\u4f9b|\u61c9\u7528|\u8a2d\u8a08|\u89e3\u6c7a|"
+    r"\u62ab\u9732|\u63ed\u9732|\u540c\u610f|\u7c3d\u7f72|\u5f37\u8abf|\u8a8d\u70ba|\u57f7\u884c|\u6aa2\u6e2c|\u9650\u5236|\u652f\u6301|\u8b66\u544a)",
     re.IGNORECASE,
 )
 
@@ -628,14 +630,16 @@ _BRIEF_EVENT_OBJECT_RE = re.compile(
     r"product|products|feature|service|services|version|chip|algorithm|architecture|"
     r"inference|training|vector|prompt|API|GPU|LLM|parameter|performance|pipeline|"
     r"solution|solutions|capabilit|categor|investment|partner|partnership|funding|"
-    r"contract|market|competition|custom|employee|workforce|"
+    r"agreement|deal|contract|copyright|policy|restriction|market|competition|custom|employee|workforce|"
+    r"detector|detection|hallucination|experiment|evaluation|"
     r"video|task|tasks|accuracy|encoder|application|applications|approach|result|results)\b"
     r"|\u6a21\u578b|\u4ee3\u7406|\u5de5\u5177|\u5e73\u53f0|\u6846\u67b6|\u8cc7\u6599\u96c6|"
     r"\u7cfb\u7d71|\u7522\u54c1|\u529f\u80fd|\u670d\u52d9|\u7248\u672c|\u6676\u7247|\u6f14\u7b97\u6cd5|"
     r"\u67b6\u69cb|\u63a8\u8ad6|\u8a13\u7df4|API|GPU|LLM|\u53c3\u6578|\u6548\u80fd|\u6d41\u7a0b|"
     r"\u65b9\u6848|\u6295\u8cc7|\u5408\u4f5c|\u878d\u8cc7|\u5408\u7d04|\u5e02\u5834|\u7af6\u722d|"
     r"\u5ba2\u6236|\u54e1\u5de5|\u4f9b\u61c9\u93c8|\u57fa\u790e\u8a2d\u65bd|\u6210\u679c|\u7814\u7a76|\u8ad6\u6587|\u65b9\u6cd5|\u6280\u8853|\u767c\u73fe|"
-    r"\u4efb\u52d9|\u7cbe\u5ea6|\u8996\u8a0a|\u8996\u983c|\u61c9\u7528\u5834\u666f|\u7d50\u679c|\u51fa\u80fd|\u6587\u672c)",
+    r"\u4efb\u52d9|\u7cbe\u5ea6|\u8996\u8a0a|\u8996\u983c|\u61c9\u7528\u5834\u666f|\u7d50\u679c|\u51fa\u80fd|\u6587\u672c|"
+    r"\u5354\u8b70|\u7248\u6b0a|\u5f71\u97ff|\u9650\u5236|\u6e96\u5247|\u653f\u7b56|\u5167\u5bb9|\u5be6\u9a57|\u8a55\u4f30|\u5075\u6e2c|\u5e7b\u89ba)",
     re.IGNORECASE,
 )
 
@@ -5441,7 +5445,7 @@ def run_pipeline() -> None:
     log.info("PIPELINE START")
     log.info("=" * 60)
     t_start = time.time()
-    _pipeline_budget_sec = int(os.environ.get("PIPELINE_TIME_BUDGET_SEC", "3600"))
+    _pipeline_budget_sec = int(os.environ.get("PIPELINE_TIME_BUDGET_SEC", "600"))
     _pipeline_run_id_bgt = os.environ.get("PIPELINE_RUN_ID", "unknown")
 
     def _check_time_budget(stage: str) -> None:
@@ -5524,6 +5528,27 @@ def run_pipeline() -> None:
         except Exception as _z0_exc:
             log.warning("Z0 load failed (%s); falling back to online fetch", _z0_exc)
             raw_items = fetch_all_feeds()
+        # BRIEF_FAST_PRESELECT: In brief mode, truncate to top candidates before expensive hydration.
+        # Uses frontier_score (recency+quality signal) as primary sort; falls back to published_at_ts.
+        # Reduces hydration load from 2000+ items to ~300, enabling 5-10 min pipeline.
+        if _is_brief_mode and len(raw_items) > 300:
+            _bfp_before = len(raw_items)
+            _bfp_limit = int(os.environ.get("BRIEF_PRESELECT_LIMIT", "300"))
+            def _bfp_score(it):
+                try:
+                    fs = float(getattr(it, "frontier_score", 0) or 0)
+                except Exception:
+                    fs = 0.0
+                try:
+                    pub = float(getattr(it, "published_at_ts", 0) or 0)
+                except Exception:
+                    pub = 0.0
+                return (fs, pub)
+            raw_items = sorted(raw_items, key=_bfp_score, reverse=True)[:_bfp_limit]
+            log.info(
+                "BRIEF_FAST_PRESELECT: %d → %d (limit=%d, budget=%ds)",
+                _bfp_before, len(raw_items), _bfp_limit, _pipeline_budget_sec,
+            )
         # Z0 mode: fulltext hydration (normally runs inside fetch_all_feeds; must run here too)
         try:
             from utils.fulltext_hydrator import hydrate_items_batch
