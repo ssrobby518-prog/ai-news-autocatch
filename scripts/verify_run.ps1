@@ -269,8 +269,11 @@ foreach ($ef in $execFiles) {
             $binPass = $false
         }
     } else {
+        $isBriefOptional  = ($ef.Name -eq "Notion" -or $ef.Name -eq "XMind") -and ($env:BRIEF_ONLY -eq "1")
         $isSparseOptional = ($ef.Name -eq "Notion" -or $ef.Name -eq "XMind") -and $vrSparseDay
-        if ($isSparseOptional) {
+        if ($isBriefOptional) {
+            Write-Host "  SKIP: $($ef.Path) not found (brief mode — not produced per req D)" -ForegroundColor Yellow
+        } elseif ($isSparseOptional) {
             Write-Host "  SKIP: $($ef.Path) not found (sparse day - optional)" -ForegroundColor Yellow
         } else {
             Write-Host "  FAIL: $($ef.Path) not found" -ForegroundColor Red
