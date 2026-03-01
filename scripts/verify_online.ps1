@@ -491,11 +491,12 @@ if (Test-Path $metaPath) {
 }
 
 # ---- Step 2: Set Z0_ENABLED so pipeline reads local JSONL ----
-if (-not $SkipPipeline) {
-    Write-Output "[2/3] 設定 Z0_ENABLED=1（Pipeline 將讀取本機 JSONL）..."
-    $env:Z0_ENABLED = "1"
-} else {
-    Write-Output "[2/3] Z0_ENABLED 設定已略過（-SkipPipeline 模式）"
+# -SkipPipeline: skip online collection but STILL re-run pipeline with existing JSONL.
+# This allows fast re-verification (regex/logic changes) without going online.
+Write-Output "[2/3] 設定 Z0_ENABLED=1（Pipeline 將讀取本機 JSONL）..."
+$env:Z0_ENABLED = "1"
+if ($SkipPipeline) {
+    Write-Output "  (-SkipPipeline 模式：跳過 Z0 收集，用現有 JSONL 重跑 Pipeline 驗證新邏輯)"
 }
 
 # (C) Set EXEC KPI gates — enabled by default; override with env vars before calling this script
@@ -533,13 +534,10 @@ $_verifyRunLogPath = Join-Path $repoRoot "outputs\verify_run.latest.log"
 $_prevVerifyRunEap = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 try {
-    if ($SkipPipeline) {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "verify_run.ps1") -SkipPipeline *>&1 |
-            Tee-Object -FilePath $_verifyRunLogPath
-    } else {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "verify_run.ps1") *>&1 |
-            Tee-Object -FilePath $_verifyRunLogPath
-    }
+    # Always run verify_run.ps1 WITHOUT -SkipPipeline so run_once.py re-executes.
+    # -SkipPipeline on verify_online only skips online Z0 collection (step 1); pipeline still runs.
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "verify_run.ps1") *>&1 |
+        Tee-Object -FilePath $_verifyRunLogPath
     $exitCode = $LASTEXITCODE
 } finally {
     $ErrorActionPreference = $_prevVerifyRunEap
