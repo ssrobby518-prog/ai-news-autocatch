@@ -6196,6 +6196,10 @@ def run_pipeline() -> None:
                             "BRIEF_TRANSLATION_READY!=1 — FAIL-fast: %s; NOT_READY.md written",
                             _ted_fail_reason,
                         )
+                        # Exit immediately so verify_run sees failure and triggers NOT_READY
+                        # three-piece via verify_online.ps1 --not-ready-report path.
+                        # Avoids ~2 min of unnecessary brief pool/gate processing.
+                        sys.exit(1)
                     _brief_diag = {"quote_stoplist_hits_count": 0}
                     _brief_pool = list(_final_cards or [])
                     if len(_brief_pool) < 6:

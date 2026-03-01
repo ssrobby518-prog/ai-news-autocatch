@@ -578,8 +578,11 @@ if ($exitCode -ne 0) {
         # Generate NOT_READY_report.md/docx/pptx for direct invocation (Iteration 19 DoD FAIL scenario)
         Write-Output "  Generating NOT_READY_report (calling run_once.py --not-ready-report)..."
         Set-Location $repoRoot
+        # Re-expose run_id so NOT_READY_report files carry correct run_id (env was cleared above)
+        $env:PIPELINE_RUN_ID = $_voRunId
         & python (Join-Path $repoRoot "scripts\run_once.py") "--not-ready-report" 2>&1 |
             ForEach-Object { Write-Output "  [not-ready-report] $_" }
+        $env:PIPELINE_RUN_ID = $null
         # Write LAST_RUN_SUMMARY.txt with FAIL status for direct invocation
         $_voLrsFailPath = Join-Path $repoRoot "outputs\LAST_RUN_SUMMARY.txt"
         $_voFailReason  = "PIPELINE_FAIL (verify_run exit $exitCode)"
@@ -2331,8 +2334,9 @@ if (Test-Path $voBfpPath) {
         $_bfpRunId  = if ($voBfp.PSObject.Properties["run_id"]) { [string]$voBfp.run_id } else { "" }
         Write-Output ("  total_events={0}  fail_count={1}  run_id={2}" -f $voBfpTotal, $voBfpFail, $_bfpRunId)
         # STALE_META check: meta must belong to the current pipeline run
-        if ($_bfpRunId -and ([string]$env:PIPELINE_RUN_ID) -and ($_bfpRunId -ne [string]$env:PIPELINE_RUN_ID)) {
-            Write-Output ("  => BRIEF_FACT_PACK_HARD: FAIL (STALE_META meta.run_id={0} != expected={1})" -f $_bfpRunId, [string]$env:PIPELINE_RUN_ID)
+        # Note: compare against $_voRunId (not $env:PIPELINE_RUN_ID which is cleared after verify_run)
+        if ($_bfpRunId -and ($_bfpRunId -ne $_voRunId)) {
+            Write-Output ("  => BRIEF_FACT_PACK_HARD: FAIL (STALE_META meta.run_id={0} != current={1})" -f $_bfpRunId, $_voRunId)
             exit 1
         }
         if ($voBfpGate -eq "PASS") {
@@ -2370,10 +2374,9 @@ if (Test-Path $voBtlPath) {
         $voBtlBullets   = if ($voBtl.PSObject.Properties["template_leak_bullets_count"]) { [int]$voBtl.template_leak_bullets_count } else { 0 }
         Write-Output ("  run_id={0}  generated_at={1}" -f $voBtlRunId, $voBtlGenAt)
         Write-Output ("  template_leak_events_count={0}  template_leak_bullets_count={1}" -f $voBtlEvents, $voBtlBullets)
-        # STALE_META check (Iteration 19): meta must belong to the current pipeline run
-        $_expectedRunId = [string]($env:PIPELINE_RUN_ID)
-        if ($voBtlRunId -and $_expectedRunId -and ($voBtlRunId -ne $_expectedRunId)) {
-            Write-Output ("  => BRIEF_TEMPLATE_LEAK_HARD: FAIL (STALE_META: meta.run_id={0} != expected={1})" -f $voBtlRunId, $_expectedRunId)
+        # STALE_META check: compare against $_voRunId (not $env:PIPELINE_RUN_ID which is cleared after verify_run)
+        if ($voBtlRunId -and ($voBtlRunId -ne $_voRunId)) {
+            Write-Output ("  => BRIEF_TEMPLATE_LEAK_HARD: FAIL (STALE_META: meta.run_id={0} != current={1})" -f $voBtlRunId, $_voRunId)
             exit 1
         }
         if ($voBtlGate -eq "PASS") {
@@ -2843,13 +2846,18 @@ if (Test-Path $_tdMetaPath) {
 }
 
 Write-Output ""
-# --- Template Leak soft indicator (Iteration 18) ---
+# --- Template Leak soft indicator + STALE_META guard ---
 $_btlSumPath = Join-Path $repoRoot "outputs\brief_template_leak.meta.json"
 if (Test-Path $_btlSumPath) {
     try {
-        $_btlSum = Get-Content $_btlSumPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $_btlEvtCnt = if ($_btlSum.PSObject.Properties["template_leak_events_count"]) { [int]$_btlSum.template_leak_events_count } else { 0 }
-        Write-Output ("template_leak_events_count: {0}" -f $_btlEvtCnt)
+        $_btlSum       = Get-Content $_btlSumPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $_btlMetaRunId = if ($_btlSum.PSObject.Properties["run_id"]) { [string]$_btlSum.run_id } else { "" }
+        if ($_btlMetaRunId -ne $_voRunId) {
+            Write-Output ("template_leak_events_count: STALE_META (meta.run_id={0} != current={1}) — skipping display" -f $_btlMetaRunId, $_voRunId)
+        } else {
+            $_btlEvtCnt = if ($_btlSum.PSObject.Properties["template_leak_events_count"]) { [int]$_btlSum.template_leak_events_count } else { 0 }
+            Write-Output ("template_leak_events_count: {0}" -f $_btlEvtCnt)
+        }
     } catch {
         Write-Output "template_leak_events_count: (parse error)"
     }
