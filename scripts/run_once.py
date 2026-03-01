@@ -3645,8 +3645,10 @@ def _evaluate_brief_fact_pack_hard(prepared: list[dict]) -> dict:
 def _write_brief_fact_pack_hard_meta(prepared: list[dict]) -> None:
     try:
         import json as _bfp_json
+        from datetime import datetime as _bfp_dt, timezone as _bfp_tz
 
         out = _evaluate_brief_fact_pack_hard(prepared)
+        out["generated_at"] = _bfp_dt.now(_bfp_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         out_path = Path(settings.PROJECT_ROOT) / "outputs" / "brief_fact_pack_hard.meta.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(_bfp_json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -5695,7 +5697,9 @@ def run_pipeline() -> None:
 
     # Z4: Deep Analysis (non-blocking)
     z4_report = None  # optional fallback input for Z5 renderer
-    if settings.DEEP_ANALYSIS_ENABLED:
+    if os.environ.get("SKIP_DEEP_ANALYSIS") == "1":
+        log.info("Z4: skipped (SKIP_DEEP_ANALYSIS=1 / BRIEF_ONLY mode)")
+    elif settings.DEEP_ANALYSIS_ENABLED:
         passed_results = [r for r in all_results if r.passed_gate]
         if passed_results:
             try:
@@ -6034,16 +6038,19 @@ def run_pipeline() -> None:
                 if da_path.exists():
                     z5_text = da_path.read_text(encoding="utf-8")
 
-            notion_md, ppt_md, xmind_md = render_education_report(
-                results=z5_results,
-                report=z5_report,
-                metrics=metrics_dict,
-                deep_analysis_text=z5_text,
-                max_items=settings.EDU_REPORT_MAX_ITEMS,
-                filter_summary=filter_summary_dict,
-            )
-            edu_paths = write_education_reports(notion_md, ppt_md, xmind_md)
-            log.info("Z5: education reports written: %s", [str(p) for p in edu_paths])
+            if os.environ.get("SKIP_EDUCATION_RENDERER") != "1":
+                notion_md, ppt_md, xmind_md = render_education_report(
+                    results=z5_results,
+                    report=z5_report,
+                    metrics=metrics_dict,
+                    deep_analysis_text=z5_text,
+                    max_items=settings.EDU_REPORT_MAX_ITEMS,
+                    filter_summary=filter_summary_dict,
+                )
+                edu_paths = write_education_reports(notion_md, ppt_md, xmind_md)
+                log.info("Z5: education reports written: %s", [str(p) for p in edu_paths])
+            else:
+                log.info("Z5: education reports skipped (SKIP_EDUCATION_RENDERER=1)")
 
             # Register item_id ??URL so _backfill_hydrate can resolve cards whose
             # source_url was set to a source name (e.g. "TechCrunch AI") by
@@ -8213,14 +8220,15 @@ def run_pipeline() -> None:
                 log.error("Executive report generation failed (non-blocking): %s", exc_bin)
         except Exception as exc:
             log.error("Z5 Education Renderer failed (non-blocking): %s", exc)
-            try:
-                err_md = render_error_report(exc)
-                err_path = Path(settings.PROJECT_ROOT) / "outputs" / "deep_analysis_education.md"
-                err_path.parent.mkdir(parents=True, exist_ok=True)
-                err_path.write_text(err_md, encoding="utf-8")
-                log.info("Z5: error report written: %s", err_path)
-            except Exception:
-                log.error("Z5: failed to write error report")
+            if os.environ.get("SKIP_EDUCATION_RENDERER") != "1":
+                try:
+                    err_md = render_error_report(exc)
+                    err_path = Path(settings.PROJECT_ROOT) / "outputs" / "deep_analysis_education.md"
+                    err_path.parent.mkdir(parents=True, exist_ok=True)
+                    err_path.write_text(err_md, encoding="utf-8")
+                    log.info("Z5: error report written: %s", err_path)
+                except Exception:
+                    log.error("Z5: failed to write error report")
     else:
         log.info("Z5: Education report disabled")
 

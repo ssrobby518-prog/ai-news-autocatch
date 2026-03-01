@@ -40,6 +40,7 @@ if (-not $SkipPipeline) {
         "docs\reports\deep_analysis_education_version.md",
         "docs\reports\deep_analysis_education_version_ppt.md",
         "docs\reports\deep_analysis_education_version_xmind.md",
+        "outputs\deep_analysis.md",
         "outputs\deep_analysis_education.md",
         "outputs\education_report.docx",
         "outputs\education_report.pptx",
@@ -61,12 +62,18 @@ if (-not $SkipPipeline) {
     # brief mode matches the production deployment (run_pipeline.ps1 -Mode manual)
     # and prevents EXEC_ZH_NARRATIVE legacy gate from firing without llama.cpp
     Write-Host "`n[2/9] Running pipeline with RUN_PROFILE=calibration REPORT_MODE=brief..." -ForegroundColor Yellow
-    $env:RUN_PROFILE = "calibration"
-    $env:PIPELINE_REPORT_MODE = "brief"
+    $env:RUN_PROFILE             = "calibration"
+    $env:PIPELINE_REPORT_MODE    = "brief"
+    $env:BRIEF_ONLY              = "1"
+    $env:SKIP_DEEP_ANALYSIS      = "1"
+    $env:SKIP_EDUCATION_RENDERER = "1"
     & $py scripts/run_once.py
     $exitCode = $LASTEXITCODE
-    $env:RUN_PROFILE = $null
-    $env:PIPELINE_REPORT_MODE = $null
+    $env:RUN_PROFILE             = $null
+    $env:PIPELINE_REPORT_MODE    = $null
+    $env:BRIEF_ONLY              = $null
+    $env:SKIP_DEEP_ANALYSIS      = $null
+    $env:SKIP_EDUCATION_RENDERER = $null
 
     if ($exitCode -ne 0) {
         Write-Host "  Pipeline failed (exit code: $exitCode)" -ForegroundColor Red
@@ -1327,6 +1334,19 @@ Write-Host "[AI Purity Gate] BRIEF_FACT_PACK_HARD..." -ForegroundColor Yellow
 Invoke-MetaGate -Label "BRIEF_FACT_PACK_HARD" -MetaFile "brief_fact_pack_hard.meta.json" -InfoBuilder {
     param($d)
     "total_events=$((Get-MetaInt $d 'total_events' 0)) fail_count=$((Get-MetaInt $d 'fail_count' 0))"
+}
+# STALE_META check: meta.run_id must match PIPELINE_RUN_ID for this run
+if ($env:PIPELINE_RUN_ID) {
+    try {
+        $_bfpMetaV  = Get-Content (Join-Path $PSScriptRoot "..\outputs\brief_fact_pack_hard.meta.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+        $_bfpRunIdV = if ($_bfpMetaV.PSObject.Properties["run_id"]) { [string]$_bfpMetaV.run_id } else { "" }
+        if ($_bfpRunIdV -and ($_bfpRunIdV -ne [string]$env:PIPELINE_RUN_ID)) {
+            Write-Host ("BRIEF_FACT_PACK_HARD: STALE_META (meta.run_id={0} != PIPELINE_RUN_ID={1}) => FAIL" -f $_bfpRunIdV, $env:PIPELINE_RUN_ID) -ForegroundColor Red
+            exit 1
+        }
+    } catch {
+        Write-Host "BRIEF_FACT_PACK_HARD: STALE_META check skipped (parse error: $_)" -ForegroundColor DarkYellow
+    }
 }
 
 Write-Host ""

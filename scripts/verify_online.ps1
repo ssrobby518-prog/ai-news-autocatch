@@ -139,15 +139,17 @@ if ($SkipPipeline) {
             Write-Output "  GPU probe: nvidia-smi not found on PATH — cannot validate GPU usage (assume OK)"
         }
 
-        # Write gpu_probe.meta.json (evidence artifact, includes run_id for STALE_META checks)
+        # Write gpu_probe.meta.json (evidence artifact, includes run_id + reason for STALE_META checks)
+        $_gpuReason = if ($_gpuFound) { "none" } else { "GPU_NOT_ACTIVE" }
         @{
             run_id            = $_voRunId
             gpu_process_found = $_gpuFound
             vram_mb           = $_vramMb
             nvidia_smi_found  = $_nvsmiExists
             probed_at         = (Get-Date -Format "o")
+            reason            = $_gpuReason
         } | ConvertTo-Json -Compress | Set-Content $_gpuMetaPath -Encoding UTF8
-        Write-Output ("  gpu_probe.meta.json: gpu_process_found={0}  vram_mb={1}" -f $_gpuFound, $_vramMb)
+        Write-Output ("  gpu_probe.meta.json: gpu_process_found={0}  vram_mb={1}  reason={2}" -f $_gpuFound, $_vramMb, $_gpuReason)
 
         if ($_gpuFound) {
             $env:BRIEF_TRANSLATION_READY      = "1"
@@ -163,6 +165,16 @@ if ($SkipPipeline) {
         $env:BRIEF_TRANSLATION_READY      = "0"
         $env:BRIEF_TRANSLATION_FAIL_REASON = "SERVER_NOT_READY"
         Write-Output "  => BRIEF_TRANSLATION_READY=0  reason=SERVER_NOT_READY  (pipeline will FAIL-fast)"
+        # Write gpu_probe.meta.json in SERVER_NOT_READY path too (evidence completeness)
+        New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "outputs") -ErrorAction SilentlyContinue | Out-Null
+        @{
+            run_id            = $_voRunId
+            gpu_process_found = $false
+            vram_mb           = 0
+            nvidia_smi_found  = $false
+            probed_at         = (Get-Date -Format "o")
+            reason            = "SERVER_NOT_READY"
+        } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\gpu_probe.meta.json") -Encoding UTF8
     }
 }
 Write-Output ""
@@ -490,6 +502,13 @@ $env:GIT_CONFIG_VALUE_0    = "no"
 $env:GIT_CONFIG_KEY_1      = "safe.directory"
 $env:GIT_CONFIG_VALUE_1    = ($repoRoot -replace "\\", "/")
 
+# Brief-only mode: fix demo entry point — suppress deep analysis + education renderer
+# These env vars are inherited by the verify_run.ps1 subprocess and then by run_once.py.
+$env:PIPELINE_REPORT_MODE    = "brief"
+$env:BRIEF_ONLY              = "1"
+$env:SKIP_DEEP_ANALYSIS      = "1"
+$env:SKIP_EDUCATION_RENDERER = "1"
+
 Write-Output "[3/3] Running verify_run.ps1 (offline, reads Z0 JSONL)..."
 Write-Output ""
 $_verifyRunLogPath = Join-Path $repoRoot "outputs\verify_run.latest.log"
@@ -569,6 +588,12 @@ if ($exitCode -ne 0) {
             try { $_voFailReason = ((Get-Content $_voNrMd -Raw -Encoding UTF8).Trim() -replace '[\r\n\s]+',' ') } catch {}
             if ($_voFailReason.Length -gt 300) { $_voFailReason = $_voFailReason.Substring(0, 300) }
         }
+        # Build produced_files list from NOT_READY_report three-piece
+        $_voNrProdList = @()
+        foreach ($__nrf in @("NOT_READY_report.md","NOT_READY_report.docx","NOT_READY_report.pptx")) {
+            if (Test-Path (Join-Path $repoRoot "outputs\$__nrf")) { $_voNrProdList += "outputs\$__nrf" }
+        }
+        $_voNrProdStr = if ($_voNrProdList) { $_voNrProdList -join ", " } else { "(none)" }
         $_voNowFail = (Get-Date -Format "o")
         @"
 run_id              = $_voRunId
@@ -580,7 +605,7 @@ status              = FAIL
 selected_events     = 0
 ai_selected_events  = 0
 canonical_output_dir = outputs
-produced_files      = (none)
+produced_files      = $_voNrProdStr
 fail_reason         = $_voFailReason
 "@ | Out-File $_voLrsFailPath -Encoding UTF8 -NoNewline
         Write-Output "LAST_RUN_SUMMARY.txt written: status=FAIL"
@@ -2303,7 +2328,13 @@ if (Test-Path $voBfpPath) {
         $voBfpGate  = [string]($voBfp.gate_result)
         $voBfpTotal = if ($voBfp.PSObject.Properties["total_events"]) { [int]$voBfp.total_events } else { 0 }
         $voBfpFail  = if ($voBfp.PSObject.Properties["fail_count"]) { [int]$voBfp.fail_count } else { 0 }
-        Write-Output ("  total_events={0}  fail_count={1}" -f $voBfpTotal, $voBfpFail)
+        $_bfpRunId  = if ($voBfp.PSObject.Properties["run_id"]) { [string]$voBfp.run_id } else { "" }
+        Write-Output ("  total_events={0}  fail_count={1}  run_id={2}" -f $voBfpTotal, $voBfpFail, $_bfpRunId)
+        # STALE_META check: meta must belong to the current pipeline run
+        if ($_bfpRunId -and ([string]$env:PIPELINE_RUN_ID) -and ($_bfpRunId -ne [string]$env:PIPELINE_RUN_ID)) {
+            Write-Output ("  => BRIEF_FACT_PACK_HARD: FAIL (STALE_META meta.run_id={0} != expected={1})" -f $_bfpRunId, [string]$env:PIPELINE_RUN_ID)
+            exit 1
+        }
         if ($voBfpGate -eq "PASS") {
             Write-Output ("  => BRIEF_FACT_PACK_HARD: PASS (all {0} events passed fact-pack checks)" -f $voBfpTotal)
         } else {
