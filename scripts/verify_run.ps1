@@ -14,7 +14,7 @@ chcp 65001 | Out-Null
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $env:PYTHONIOENCODING = "utf-8"
 
-Write-Host "=== Verification Start ===" -ForegroundColor Cyan
+Write-Host "=== 驗證開始 ===" -ForegroundColor Cyan
 
 # Python binary resolution (always needed for steps 3-9 in both pipeline and SkipPipeline modes)
 $venvPython = Join-Path $PSScriptRoot "..\venv\Scripts\python.exe"
@@ -22,7 +22,7 @@ if (Test-Path $venvPython) { $py = $venvPython } else { $py = "python" }
 
 if (-not $SkipPipeline) {
     # 0) Text integrity pre-check (CRLF / BOM / autocrlf)
-    Write-Host "`n[0/9] Running text integrity check..." -ForegroundColor Yellow
+    Write-Host "`n[0/9] 執行文字完整性檢查..." -ForegroundColor Yellow
     $integrityScript = Join-Path $PSScriptRoot "check_text_integrity.ps1"
     if (Test-Path $integrityScript) {
         & powershell.exe -ExecutionPolicy Bypass -File $integrityScript
@@ -35,7 +35,7 @@ if (-not $SkipPipeline) {
     }
 
     # 1) Remove previous outputs
-    Write-Host "`n[1/9] Removing previous outputs..." -ForegroundColor Yellow
+    Write-Host "`n[1/9] 清除先前的輸出..." -ForegroundColor Yellow
     $filesToRemove = @(
         "docs\reports\deep_analysis_education_version.md",
         "docs\reports\deep_analysis_education_version_ppt.md",
@@ -61,7 +61,7 @@ if (-not $SkipPipeline) {
     # 2) Run pipeline with calibration profile + brief report mode
     # brief mode matches the production deployment (run_pipeline.ps1 -Mode manual)
     # and prevents EXEC_ZH_NARRATIVE legacy gate from firing without llama.cpp
-    Write-Host "`n[2/9] Running pipeline with RUN_PROFILE=calibration REPORT_MODE=brief..." -ForegroundColor Yellow
+    Write-Host "`n[2/9] 以 RUN_PROFILE=calibration REPORT_MODE=brief 執行 Pipeline..." -ForegroundColor Yellow
     $env:RUN_PROFILE             = "calibration"
     $env:PIPELINE_REPORT_MODE    = "brief"
     $env:BRIEF_ONLY              = "1"
@@ -79,7 +79,7 @@ if (-not $SkipPipeline) {
     }
     Write-Host "  Pipeline succeeded" -ForegroundColor Green
 } else {
-    Write-Host "`n[2/9] Pipeline step SKIPPED (-SkipPipeline mode; gate checks use existing outputs)" -ForegroundColor Yellow
+    Write-Host "`n[2/9] Pipeline 步驟已略過（-SkipPipeline 模式；關卡檢查使用現有輸出）" -ForegroundColor Yellow
 }
 
 # NOT_READY gate — always checked regardless of SkipPipeline.
@@ -139,7 +139,7 @@ if (Test-Path $vrScPath) {
 }
 
 # 3) Verify FILTER_SUMMARY exists in log
-Write-Host "`n[3/9] Verifying FILTER_SUMMARY log..." -ForegroundColor Yellow
+Write-Host "`n[3/9] 驗證 FILTER_SUMMARY 記錄..." -ForegroundColor Yellow
 $filterLog = Select-String -Path "logs\app.log" -Pattern "FILTER_SUMMARY" -SimpleMatch | Select-Object -Last 1
 if ($filterLog) {
     Write-Host "  FILTER_SUMMARY hit:" -ForegroundColor Green
@@ -150,7 +150,7 @@ if ($filterLog) {
 }
 
 # 4) Verify education report exists on disk (NOT required to be git-tracked)
-Write-Host "`n[4/9] Checking education report file..." -ForegroundColor Yellow
+Write-Host "`n[4/9] 檢查教育報告檔案..." -ForegroundColor Yellow
 $eduFile = "docs\reports\deep_analysis_education_version.md"
 if ($env:BRIEF_ONLY -eq "1") {
     Write-Host "  SKIP: education report check (BRIEF_ONLY=1 — not produced in brief-only mode)" -ForegroundColor Yellow
@@ -162,7 +162,7 @@ if ($env:BRIEF_ONLY -eq "1") {
 }
 
 # 5) Verify education report contains key sections
-Write-Host "`n[5/9] Verifying education report content..." -ForegroundColor Yellow
+Write-Host "`n[5/9] 驗證教育報告內容..." -ForegroundColor Yellow
 if ($env:BRIEF_ONLY -eq "1") {
     Write-Host "  SKIP: education report content check (BRIEF_ONLY=1)" -ForegroundColor Yellow
 } else {
@@ -185,7 +185,7 @@ if ($env:BRIEF_ONLY -eq "1") {
 }
 
 # 6) Artifact policy hard-fail guard
-Write-Host "`n[6/9] Artifact policy check (hard-fail)..." -ForegroundColor Yellow
+Write-Host "`n[6/9] 產物原則檢查（硬性失敗）..." -ForegroundColor Yellow
 
 function Assert-NotTracked($pattern) {
     $tracked = git ls-files -- $pattern 2>$null
@@ -203,7 +203,7 @@ Assert-NotTracked "outputs/*"
 Write-Host "  Artifact policy check passed." -ForegroundColor Green
 
 # 7) Education report quality gate
-Write-Host "`n[7/9] Education report quality gate..." -ForegroundColor Yellow
+Write-Host "`n[7/9] 教育報告品質關卡..." -ForegroundColor Yellow
 if ($env:BRIEF_ONLY -eq "1") {
     Write-Host "  SKIP: education quality gate (BRIEF_ONLY=1 — education reports not produced)" -ForegroundColor Yellow
 } else {
@@ -216,7 +216,7 @@ if ($env:BRIEF_ONLY -eq "1") {
 }
 
 # 8) Executive output files check (DOCX/PPTX/Notion/XMind)
-Write-Host "`n[8/9] Checking executive output files..." -ForegroundColor Yellow
+Write-Host "`n[8/9] 檢查執行摘要輸出檔案..." -ForegroundColor Yellow
 # Detect sparse day: Notion/XMind are only required when main events passed the pipeline.
 $vrSparseDay = $false
 $vrFlowCountsPath = "outputs\flow_counts.meta.json"
@@ -294,7 +294,7 @@ $docxPathForPy = $docxPathForChecks -replace '\\', '/'
 $pptxPathForPy = $pptxPathForChecks -replace '\\', '/'
 
 # 9) Executive Output v3 guard ??banned words + embedded images
-Write-Host "`n[9/9] Executive Output v3 guard..." -ForegroundColor Yellow
+Write-Host "`n[9/9] 執行摘要輸出 v3 守衛..." -ForegroundColor Yellow
 
 $bannedWords = @(
     "ai???", "AI Intel", "Z1", "Z2", "Z3", "Z4", "Z5",
@@ -687,7 +687,7 @@ if (Test-Path $vrSupplyMetaPath) {
     Write-Host "  supply_resilience.meta.json not found (skipped)" -ForegroundColor Yellow
 }
 
-Write-Host "`n=== Verification Complete ===" -ForegroundColor Cyan
+Write-Host "`n=== 驗證完成 ===" -ForegroundColor Cyan
 Write-Host "NOTE: Executive reports are build artifacts. Do NOT commit them." -ForegroundColor DarkGray
 Write-Host "      To share, use file transfer or CI release artifacts." -ForegroundColor DarkGray
 

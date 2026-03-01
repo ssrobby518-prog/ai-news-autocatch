@@ -5441,6 +5441,27 @@ def run_pipeline() -> None:
     log.info("PIPELINE START")
     log.info("=" * 60)
     t_start = time.time()
+    _pipeline_budget_sec = int(os.environ.get("PIPELINE_TIME_BUDGET_SEC", "3600"))
+    _pipeline_run_id_bgt = os.environ.get("PIPELINE_RUN_ID", "unknown")
+
+    def _check_time_budget(stage: str) -> None:
+        """Fail-fast if the pipeline has exceeded its time budget."""
+        _elapsed = time.time() - t_start
+        if _elapsed > _pipeline_budget_sec:
+            _bgt_nr = Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md"
+            _bgt_nr.parent.mkdir(parents=True, exist_ok=True)
+            _bgt_nr.write_text(
+                f"# NOT_READY\n\ngate: TIME_BUDGET_EXCEEDED\n"
+                f"run_id: {_pipeline_run_id_bgt}\n"
+                f"reason: TIME_BUDGET_EXCEEDED; stage={stage};"
+                f" elapsed={_elapsed:.0f}s > budget={_pipeline_budget_sec}s\n",
+                encoding="utf-8",
+            )
+            log.error(
+                "TIME_BUDGET_EXCEEDED stage=%s (%.0fs > %ds); NOT_READY.md written",
+                stage, _elapsed, _pipeline_budget_sec,
+            )
+            sys.exit(1)
 
     t_start_iso = datetime.now(UTC).isoformat()
     _report_mode = _resolve_report_mode()
@@ -5547,6 +5568,8 @@ def run_pipeline() -> None:
     )
     # Write supply fallback meta (reads env vars from verify_online.ps1 Step 1)
     _write_supply_fallback_meta()
+    # TIME_BUDGET checkpoint 1: after Z0 hydration
+    _check_time_budget("after_z0_hydration")
 
     # Write per-source counts to feed_stats.meta.json (covers both Z0 and RSS paths).
     # ingestion.py already writes this for RSS path; for Z0 path we overwrite with live counts.
@@ -8461,6 +8484,9 @@ def run_pipeline() -> None:
             os.environ.get("PIPELINE_MODE", "manual"),
             os.environ.get("PIPELINE_REPORT_MODE", "brief"),
         )
+
+        # TIME_BUDGET checkpoint 2: before Translation-First ZH Delivery
+        _check_time_budget("before_translation")
 
         # ---------------------------------------------------------------
         # Iteration 20: Translation-First ZH Delivery

@@ -21,8 +21,10 @@ $env:PYTHONIOENCODING = "utf-8"
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $_voRunId = (Get-Date -Format "yyyyMMdd_HHmmss")
+$_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 3600 }
 
-Write-Output "=== verify_online.ps1 START ==="
+Write-Output "=== verify_online.ps1 開始 ==="
 Write-Output ""
 
 # ---------------------------------------------------------------------------
@@ -32,7 +34,7 @@ Write-Output ""
 #   When -SkipPipeline: assume the previous run had Qwen running (READY=1),
 #   and resolve PIPELINE_RUN_ID from the existing brief_template_leak meta.
 # ---------------------------------------------------------------------------
-Write-Output "[0/4] Translation engine (Qwen) + GPU preflight..."
+Write-Output "[0/4] 翻譯引擎（Qwen）+ GPU 前置檢查..."
 $_qwenUrl   = "http://127.0.0.1:8080/v1/models"
 $_qwenReady = $false
 $_btlMetaP  = Join-Path $repoRoot "outputs\brief_template_leak.meta.json"
@@ -198,7 +200,7 @@ $env:Z0_SUPPLY_FALLBACK_SNAPSHOT_PATH         = ""
 $env:Z0_SUPPLY_FALLBACK_SNAPSHOT_AGE_HOURS    = ""
 
 if (-not $SkipPipeline) {
-    Write-Output "[1/3] Running Z0 collector (online)..."
+    Write-Output "[1/3] 執行 Z0 收集器（線上模式）..."
 
     # Save snapshot BEFORE collection (parallel-safe: each run uses its own $_voRunId dir)
     New-Item -ItemType Directory -Force -Path $_snapshotDir | Out-Null
@@ -270,8 +272,23 @@ if (-not $SkipPipeline) {
 
     Write-Output ""
 } else {
-    Write-Output "[1/3] Z0 collection SKIPPED (-SkipPipeline mode; using existing data/raw/z0 files)"
+    Write-Output "[1/3] Z0 收集已略過（-SkipPipeline 模式；使用現有的 data/raw/z0 檔案）"
     Write-Output ""
+}
+
+# TIME_BUDGET check after Z0 collection (online path only)
+if (-not $SkipPipeline -and $_voStopwatch.Elapsed.TotalSeconds -gt $_voBudgetSec) {
+    $_bgtNrPath = Join-Path $repoRoot "outputs\NOT_READY.md"
+    New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "outputs") | Out-Null
+    @"
+# NOT_READY
+
+gate: TIME_BUDGET_EXCEEDED
+run_id: $_voRunId
+reason: TIME_BUDGET_EXCEEDED; stage=after_z0_collection; elapsed=$([int]$_voStopwatch.Elapsed.TotalSeconds)s > budget=${_voBudgetSec}s
+"@ | Out-File $_bgtNrPath -Encoding UTF8 -NoNewline
+    Write-Output "TIME_BUDGET_EXCEEDED: Z0 收集耗時 $([int]$_voStopwatch.Elapsed.TotalSeconds)s > ${_voBudgetSec}s — 管線中止"
+    exit 1
 }
 
 # Initialise degraded flag (updated inside the Z0 pool health gate block)
@@ -474,10 +491,10 @@ if (Test-Path $metaPath) {
 
 # ---- Step 2: Set Z0_ENABLED so pipeline reads local JSONL ----
 if (-not $SkipPipeline) {
-    Write-Output "[2/3] Setting Z0_ENABLED=1 (pipeline will read local JSONL)..."
+    Write-Output "[2/3] 設定 Z0_ENABLED=1（Pipeline 將讀取本機 JSONL）..."
     $env:Z0_ENABLED = "1"
 } else {
-    Write-Output "[2/3] Z0_ENABLED setup SKIPPED (-SkipPipeline mode)"
+    Write-Output "[2/3] Z0_ENABLED 設定已略過（-SkipPipeline 模式）"
 }
 
 # (C) Set EXEC KPI gates — enabled by default; override with env vars before calling this script
@@ -509,7 +526,7 @@ $env:BRIEF_ONLY              = "1"
 $env:SKIP_DEEP_ANALYSIS      = "1"
 $env:SKIP_EDUCATION_RENDERER = "1"
 
-Write-Output "[3/3] Running verify_run.ps1 (offline, reads Z0 JSONL)..."
+Write-Output "[3/3] 執行 verify_run.ps1（離線，讀取 Z0 JSONL）..."
 Write-Output ""
 $_verifyRunLogPath = Join-Path $repoRoot "outputs\verify_run.latest.log"
 $_prevVerifyRunEap = $ErrorActionPreference

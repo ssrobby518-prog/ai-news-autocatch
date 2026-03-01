@@ -44,7 +44,7 @@ $StartISO   = $StartObj.ToString("o")
 ========================================
 "@ | Out-File $LogFile -Encoding UTF8
 
-Write-Host "=== AI Intel Scraper ??run_id=$RunId ===" -ForegroundColor Cyan
+Write-Host "=== AI 情資摘要系統  run_id=$RunId ===" -ForegroundColor Cyan
 
 # Snapshot canonical executive artifacts before run so FAIL can never overwrite delivery files.
 $ExecSnapshot = @{}
@@ -81,7 +81,7 @@ $env:PIPELINE_REPORT_MODE  = $ReportMode
 
 # ?? Run pipeline ??tee stdout+stderr to log AND console ??????????????????????
 Set-Location $RepoRoot
-Write-Host "[1/3] Running pipeline via verify_online.ps1 (GPU preflight + Z0 collect + gates)..." -ForegroundColor Yellow
+Write-Host "[1/3] 透過 verify_online.ps1 執行 Pipeline（GPU 前置檢查 + Z0 收集 + 所有關卡）..." -ForegroundColor Yellow
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\verify_online.ps1" -Mode $Mode 2>&1 | Tee-Object -FilePath $LogFile -Append
 $ExitCode = $LASTEXITCODE
 
@@ -148,34 +148,46 @@ if (-not $IsSuccess) {
 
 # ?? Determine fail reason (human-readable one-liner) ?????????????????????????
 $FailReason = ""
+$_canonicalGates = @("SERVER_NOT_READY","GPU_NOT_ACTIVE","TRANSLATION_ENGINE_DOWN","TIME_BUDGET_EXCEEDED")
 if (-not $IsSuccess) {
     if ($NotReadyExists) {
         try {
             $nrRaw = Get-Content $NotReadyPath -Encoding UTF8 -Raw -ErrorAction SilentlyContinue
-            # Collapse whitespace, take first 300 chars
-            $FailReason = ($nrRaw -replace '[\r\n\s]+', ' ').Trim()
-            if ($FailReason.Length -gt 300) { $FailReason = $FailReason.Substring(0,300) }
-        } catch { $FailReason = "NOT_READY.md exists (read error)" }
+            # Extract gate: XYZ line and map to canonical fail_reason
+            if ($nrRaw -match '(?m)^gate:\s*(\S+)') {
+                $_gateVal = $Matches[1].Trim()
+                if ($_gateVal -eq "TRANSLATION_DELIVERY_HARD") { $_gateVal = "TRANSLATION_ENGINE_DOWN" }
+                if ($_canonicalGates -contains $_gateVal) {
+                    $FailReason = $_gateVal
+                } else {
+                    $FailReason = "PIPELINE_GATE_FAIL: $_gateVal"
+                }
+            } else {
+                $FailReason = ($nrRaw -replace '[
+\s]+', ' ').Trim()
+                if ($FailReason.Length -gt 200) { $FailReason = $FailReason.Substring(0,200) }
+            }
+        } catch { $FailReason = "PIPELINE_GATE_FAIL: NOT_READY.md exists (read error)" }
     }
     if (-not $FailReason -and -not $ShowcaseReady) {
-        $FailReason = "SHOWCASE_READY_HARD FAIL -- ai_selected_events=$AiSelectedEvents < $ShowcaseThreshold (deck has no presentable content)"
+        $FailReason = "PIPELINE_GATE_FAIL: EXEC_NEWS_QUALITY ai_selected_events=$AiSelectedEvents < $ShowcaseThreshold"
     }
     if (-not $FailReason) {
         if ($ExitCode -ne 0) {
-            $FailReason = "Pipeline FAIL (exit code $ExitCode) -- see outputs\desktop_button.last_run.log"
+            $FailReason = "PIPELINE_GATE_FAIL: exit_code=$ExitCode"
         } elseif (-not $PptxUpdated -and -not $DocxUpdated) {
-            $FailReason = "executive_report.docx / .pptx not updated this run (gate blocked output)"
+            $FailReason = "PIPELINE_GATE_FAIL: executive_report not updated"
         } elseif (-not $PptxUpdated) {
-            $FailReason = "executive_report.pptx not updated this run (gate blocked output)"
+            $FailReason = "PIPELINE_GATE_FAIL: executive_report.pptx not updated"
         } else {
-            $FailReason = "executive_report.docx not updated this run (gate blocked output)"
+            $FailReason = "PIPELINE_GATE_FAIL: executive_report.docx not updated"
         }
     }
 }
 
 # ?? Generate NOT_READY_report if failure ?????????????????????????????????????
 if (-not $IsSuccess) {
-    Write-Host "[2/3] Failure detected ??generating NOT_READY_report..." -ForegroundColor Red
+    Write-Host "[2/3] 偵測到失敗 — 產生 NOT_READY 報告中..." -ForegroundColor Red
     "generating NOT_READY_report..." | Add-Content $LogFile -Encoding UTF8
     $nrOut = & $py "$RepoRoot\scripts\run_once.py" --not-ready-report 2>&1
     $nrOut | ForEach-Object {
@@ -183,7 +195,7 @@ if (-not $IsSuccess) {
         Write-Host "  [report] $_" -ForegroundColor DarkYellow
     }
 } else {
-    Write-Host "[2/3] Success ??outputs updated." -ForegroundColor Green
+    Write-Host "[2/3] 成功 — 輸出已更新。" -ForegroundColor Green
 }
 
 # ?? Collect produced files for summary ???????????????????????????????????????
@@ -210,7 +222,7 @@ foreach ($Name in @("executive_report.docx", "executive_report.pptx")) {
 }
 
 # ?? Write LAST_RUN_SUMMARY.txt (always, human-readable) ??????????????????????
-Write-Host "[3/3] Writing LAST_RUN_SUMMARY.txt..." -ForegroundColor Yellow
+Write-Host "[3/3] 寫入 LAST_RUN_SUMMARY.txt..." -ForegroundColor Yellow
 $StatusStr   = if ($IsSuccess) { "OK" } else { "FAIL" }
 $FailLine    = if (-not $IsSuccess) { "`nfail_reason         = $FailReason" } else { "" }
 $SummaryTxt  = @"
@@ -281,5 +293,5 @@ if ($AutoOpen -ne "false") {
     "autoopen: suppressed (AutoOpen=false)" | Add-Content $LogFile -Encoding UTF8
 }
 
-Write-Host "=== Done: run_id=$RunId  status=$StatusStr ===" -ForegroundColor $(if ($IsSuccess) { "Green" } else { "Red" })
+Write-Host "=== 完成：run_id=$RunId  status=$StatusStr ===" -ForegroundColor $(if ($IsSuccess) { "Green" } else { "Red" })
 exit $ExitCode
