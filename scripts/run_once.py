@@ -5445,7 +5445,7 @@ def run_pipeline() -> None:
     log.info("PIPELINE START")
     log.info("=" * 60)
     t_start = time.time()
-    _pipeline_budget_sec = int(os.environ.get("PIPELINE_TIME_BUDGET_SEC", "600"))
+    _pipeline_budget_sec = int(os.environ.get("PIPELINE_TIME_BUDGET_SEC", "1800"))
     _pipeline_run_id_bgt = os.environ.get("PIPELINE_RUN_ID", "unknown")
 
     def _check_time_budget(stage: str) -> None:
@@ -5999,7 +5999,13 @@ def run_pipeline() -> None:
     # (hydrate_items_batch ok=N), so pre-hydrated items are available regardless of Z0 flag.
     # Demo mode caps PH_SUPP at 2 so the deck isn't padded out with supplemental
     # bulk content.  Normal runs keep the existing cap of 50.
-    _ph_supp_limit_default = 2 if os.environ.get("PIPELINE_MODE", "manual") == "demo" else 50
+    # brief mode caps at 8: each card needs ~20s Qwen translation; 50 cards = 1000s alone.
+    if os.environ.get("PIPELINE_MODE", "manual") == "demo":
+        _ph_supp_limit_default = 2
+    elif _is_brief_mode:
+        _ph_supp_limit_default = 8
+    else:
+        _ph_supp_limit_default = 50
     _ph_supp_limit = _ph_supp_limit_default
     _ph_supp_limit_raw = str(os.environ.get("PH_SUPP_LIMIT", "") or "").strip()
     if _ph_supp_limit_raw:
