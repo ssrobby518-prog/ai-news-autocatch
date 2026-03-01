@@ -163,8 +163,7 @@ if (-not $IsSuccess) {
                     $FailReason = "PIPELINE_GATE_FAIL: $_gateVal"
                 }
             } else {
-                $FailReason = ($nrRaw -replace '[
-\s]+', ' ').Trim()
+                $FailReason = ($nrRaw -replace '[\r\n\s]+', ' ').Trim()
                 if ($FailReason.Length -gt 200) { $FailReason = $FailReason.Substring(0,200) }
             }
         } catch { $FailReason = "PIPELINE_GATE_FAIL: NOT_READY.md exists (read error)" }

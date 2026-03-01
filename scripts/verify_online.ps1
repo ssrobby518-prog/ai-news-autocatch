@@ -601,12 +601,27 @@ if ($exitCode -ne 0) {
             ForEach-Object { Write-Output "  [not-ready-report] $_" }
         $env:PIPELINE_RUN_ID = $null
         # Write LAST_RUN_SUMMARY.txt with FAIL status for direct invocation
+        # fail_reason is canonical: SERVER_NOT_READY / GPU_NOT_ACTIVE / TRANSLATION_ENGINE_DOWN / TIME_BUDGET_EXCEEDED
         $_voLrsFailPath = Join-Path $repoRoot "outputs\LAST_RUN_SUMMARY.txt"
-        $_voFailReason  = "PIPELINE_FAIL (verify_run exit $exitCode)"
+        $_voCanonGates = @("SERVER_NOT_READY","GPU_NOT_ACTIVE","TRANSLATION_ENGINE_DOWN","TIME_BUDGET_EXCEEDED")
+        $_voFailReason  = "PIPELINE_GATE_FAIL: verify_run exit $exitCode"
         $_voNrMd = Join-Path $repoRoot "outputs\NOT_READY.md"
         if (Test-Path $_voNrMd) {
-            try { $_voFailReason = ((Get-Content $_voNrMd -Raw -Encoding UTF8).Trim() -replace '[\r\n\s]+',' ') } catch {}
-            if ($_voFailReason.Length -gt 300) { $_voFailReason = $_voFailReason.Substring(0, 300) }
+            try {
+                $_voNrRaw = Get-Content $_voNrMd -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                if ($_voNrRaw -match '(?m)^gate:\s*(\S+)') {
+                    $_voGateVal = $Matches[1].Trim()
+                    if ($_voGateVal -eq "TRANSLATION_DELIVERY_HARD") { $_voGateVal = "TRANSLATION_ENGINE_DOWN" }
+                    if ($_voCanonGates -contains $_voGateVal) {
+                        $_voFailReason = $_voGateVal
+                    } else {
+                        $_voFailReason = "PIPELINE_GATE_FAIL: $_voGateVal"
+                    }
+                } else {
+                    $_voFailReason = (($_voNrRaw -replace '[\r\n\s]+',' ').Trim())
+                    if ($_voFailReason.Length -gt 200) { $_voFailReason = $_voFailReason.Substring(0,200) }
+                }
+            } catch {}
         }
         # Build produced_files list from NOT_READY_report three-piece
         $_voNrProdList = @()
