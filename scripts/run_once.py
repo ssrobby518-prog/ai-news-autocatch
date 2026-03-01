@@ -5529,21 +5529,22 @@ def run_pipeline() -> None:
             log.warning("Z0 load failed (%s); falling back to online fetch", _z0_exc)
             raw_items = fetch_all_feeds()
         # BRIEF_FAST_PRESELECT: In brief mode, truncate to top candidates before expensive hydration.
-        # Uses frontier_score (recency+quality signal) as primary sort; falls back to published_at_ts.
-        # Reduces hydration load from 2000+ items to ~300, enabling 5-10 min pipeline.
-        if _is_brief_mode and len(raw_items) > 300:
+        # Sort: published_at (ISO string, lexicographically sortable) as PRIMARY key for recency,
+        # frontier_score as secondary quality tiebreaker.  Limit default=600 to keep filtering
+        # headroom while still reducing hydration from 2000+ to ~600 items.
+        if _is_brief_mode and len(raw_items) > 600:
             _bfp_before = len(raw_items)
-            _bfp_limit = int(os.environ.get("BRIEF_PRESELECT_LIMIT", "300"))
+            _bfp_limit = int(os.environ.get("BRIEF_PRESELECT_LIMIT", "600"))
             def _bfp_score(it):
+                try:
+                    pub = str(getattr(it, "published_at", "") or "")
+                except Exception:
+                    pub = ""
                 try:
                     fs = float(getattr(it, "frontier_score", 0) or 0)
                 except Exception:
                     fs = 0.0
-                try:
-                    pub = float(getattr(it, "published_at_ts", 0) or 0)
-                except Exception:
-                    pub = 0.0
-                return (fs, pub)
+                return (pub, fs)
             raw_items = sorted(raw_items, key=_bfp_score, reverse=True)[:_bfp_limit]
             log.info(
                 "BRIEF_FAST_PRESELECT: %d → %d (limit=%d, budget=%ds)",
