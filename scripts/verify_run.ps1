@@ -70,10 +70,8 @@ if (-not $SkipPipeline) {
     & $py scripts/run_once.py
     $exitCode = $LASTEXITCODE
     $env:RUN_PROFILE             = $null
-    $env:PIPELINE_REPORT_MODE    = $null
-    $env:BRIEF_ONLY              = $null
-    $env:SKIP_DEEP_ANALYSIS      = $null
-    $env:SKIP_EDUCATION_RENDERER = $null
+    # BRIEF_ONLY / PIPELINE_REPORT_MODE / SKIP_* kept set so [4/9],[5/9],[7/9] gate
+    # checks can detect brief mode and skip education-report assertions correctly.
 
     if ($exitCode -ne 0) {
         Write-Host "  Pipeline failed (exit code: $exitCode)" -ForegroundColor Red

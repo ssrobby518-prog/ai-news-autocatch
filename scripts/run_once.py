@@ -6779,6 +6779,15 @@ def run_pipeline() -> None:
                 log.info("Notion page generated: %s", notion_path)
                 log.info("XMind mindmap generated: %s", xmind_path)
 
+                # Requirement D: brief demo path must NOT produce notion/xmind artifacts.
+                if _is_brief_mode:
+                    for _skip_art in [notion_path, xmind_path]:
+                        if _skip_art:
+                            try:
+                                Path(str(_skip_art)).unlink(missing_ok=True)
+                            except Exception:
+                                pass
+
                 _pptx_canon_path = _outputs_dir / "executive_report.pptx"
                 _docx_canon_path = _outputs_dir / "executive_report.docx"
                 _pptx_generated_path = Path(str(pptx_path)) if pptx_path else _pptx_canon_path
