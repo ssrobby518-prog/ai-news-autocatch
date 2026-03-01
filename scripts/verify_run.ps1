@@ -154,7 +154,9 @@ if ($filterLog) {
 # 4) Verify education report exists on disk (NOT required to be git-tracked)
 Write-Host "`n[4/9] Checking education report file..." -ForegroundColor Yellow
 $eduFile = "docs\reports\deep_analysis_education_version.md"
-if (Test-Path $eduFile) {
+if ($env:BRIEF_ONLY -eq "1") {
+    Write-Host "  SKIP: education report check (BRIEF_ONLY=1 — not produced in brief-only mode)" -ForegroundColor Yellow
+} elseif (Test-Path $eduFile) {
     Get-Item $eduFile | Format-List FullName, LastWriteTime, Length
 } else {
     Write-Host "  Report not found: $eduFile" -ForegroundColor Red
@@ -163,20 +165,24 @@ if (Test-Path $eduFile) {
 
 # 5) Verify education report contains key sections
 Write-Host "`n[5/9] Verifying education report content..." -ForegroundColor Yellow
-$patterns = @("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Metrics", "mermaid")
-$hits = Select-String -Path $eduFile -Pattern $patterns -SimpleMatch
-if ($hits.Count -ge 3) {
-    Write-Host "  Content check passed ($($hits.Count) section hits)" -ForegroundColor Green
+if ($env:BRIEF_ONLY -eq "1") {
+    Write-Host "  SKIP: education report content check (BRIEF_ONLY=1)" -ForegroundColor Yellow
 } else {
-    Write-Host "  Content check failed (only $($hits.Count) hits)" -ForegroundColor Red
-}
+    $patterns = @("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Metrics", "mermaid")
+    $hits = Select-String -Path $eduFile -Pattern $patterns -SimpleMatch
+    if ($hits.Count -ge 3) {
+        Write-Host "  Content check passed ($($hits.Count) section hits)" -ForegroundColor Green
+    } else {
+        Write-Host "  Content check failed (only $($hits.Count) hits)" -ForegroundColor Red
+    }
 
-# Optional: check empty-report markers
-$emptyHit = Select-String -Path $eduFile -Pattern "No items|empty|filters" -SimpleMatch
-if ($emptyHit) {
-    Write-Host "  Empty/non-empty section check:" -ForegroundColor Green
-    foreach ($h in $emptyHit) {
-        Write-Host "    $($h.Line.Trim().Substring(0, [Math]::Min(80, $h.Line.Trim().Length)))"
+    # Optional: check empty-report markers
+    $emptyHit = Select-String -Path $eduFile -Pattern "No items|empty|filters" -SimpleMatch
+    if ($emptyHit) {
+        Write-Host "  Empty/non-empty section check:" -ForegroundColor Green
+        foreach ($h in $emptyHit) {
+            Write-Host "    $($h.Line.Trim().Substring(0, [Math]::Min(80, $h.Line.Trim().Length)))"
+        }
     }
 }
 
@@ -200,12 +206,16 @@ Write-Host "  Artifact policy check passed." -ForegroundColor Green
 
 # 7) Education report quality gate
 Write-Host "`n[7/9] Education report quality gate..." -ForegroundColor Yellow
-& $py -m pytest tests/test_education_report_quality.py -q 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  Education quality gate FAILED" -ForegroundColor Red
-    exit 1
+if ($env:BRIEF_ONLY -eq "1") {
+    Write-Host "  SKIP: education quality gate (BRIEF_ONLY=1 — education reports not produced)" -ForegroundColor Yellow
+} else {
+    & $py -m pytest tests/test_education_report_quality.py -q 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  Education quality gate FAILED" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  Education quality gate passed." -ForegroundColor Green
 }
-Write-Host "  Education quality gate passed." -ForegroundColor Green
 
 # 8) Executive output files check (DOCX/PPTX/Notion/XMind)
 Write-Host "`n[8/9] Checking executive output files..." -ForegroundColor Yellow
