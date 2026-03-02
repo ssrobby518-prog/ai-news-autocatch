@@ -1836,6 +1836,7 @@ if ($_voGitOriginRef -and $_voGitOriginExists) {
     Write-Output "  GIT_UP_TO_DATE: WARN-OK (cannot verify; run: git fetch origin --prune)"
 }
 
+if ($reportMode -ne "brief") {
 # ---------------------------------------------------------------------------
 # LONGFORM EVIDENCE — reads exec_longform.meta.json written by ppt_generator
 # ---------------------------------------------------------------------------
@@ -2925,6 +2926,11 @@ if (Test-Path $_sfbMetaPath) {
 }
 
 Write-Output ""
+} else {
+    Write-Output ""
+    Write-Output "BRIEF_MODE: legacy full-report gates skipped (longform / newsroom / anchor)"
+    Write-Output ""
+}
 
 # ---------------------------------------------------------------------------
 # TRANSLATION_DELIVERY_HARD gate (Iteration 20)
