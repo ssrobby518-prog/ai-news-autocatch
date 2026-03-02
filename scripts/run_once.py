@@ -7234,7 +7234,7 @@ def run_pipeline() -> None:
             if _is_brief_mode and raw_items:
                 _batch_size = max(20, int(os.environ.get("BRIEF_HYDRATE_BATCH_SIZE", "80") or 80))
                 _probe_target = max(1, _brief_min_events)
-                _early_stop_target_default = min(10, max(_probe_target + 2, 7))
+                _early_stop_target_default = _probe_target  # stop as soon as min viable events found
                 try:
                     _early_stop_target = max(
                         _probe_target,
@@ -7343,7 +7343,7 @@ def run_pipeline() -> None:
                             _stop_value = int(_last_probe.get("signal_pool", 0) or 0)
                         elif (
                             _ready_now >= _early_stop_target
-                            and len(_hydrated_accum) >= max(_batch_size * 2, 160)
+                            and len(_hydrated_accum) >= max(_batch_size, 80)
                         ):
                             _stop_reason = "heuristic_ready"
                             _stop_value = _ready_now
@@ -7832,11 +7832,12 @@ def run_pipeline() -> None:
     # (hydrate_items_batch ok=N), so pre-hydrated items are available regardless of Z0 flag.
     # Demo mode caps PH_SUPP at 2 so the deck isn't padded out with supplemental
     # bulk content.  Normal runs keep the existing cap of 50.
-    # brief mode caps at 8: each card needs ~20s Qwen translation; 50 cards = 1000s alone.
+    # brief mode caps at 4: each card triggers get_canonical_payload (llama call ~30-60s);
+    # 4 cards × 50s = 200s, leaving headroom within the 600s TIME_BUDGET.
     if os.environ.get("PIPELINE_MODE", "manual") == "demo":
         _ph_supp_limit_default = 2
     elif _is_brief_mode:
-        _ph_supp_limit_default = 8
+        _ph_supp_limit_default = 4
     else:
         _ph_supp_limit_default = 50
     _ph_supp_limit = _ph_supp_limit_default
@@ -7846,6 +7847,7 @@ def run_pipeline() -> None:
             _ph_supp_limit = max(0, int(_ph_supp_limit_raw))
         except Exception:
             _ph_supp_limit = _ph_supp_limit_default
+    _check_time_budget("before_ph_supp")
     try:
         _ph_supp_items = sorted(
             [it for it in raw_items if int(getattr(it, "fulltext_len", 0) or 0) >= 800],
@@ -7999,6 +8001,7 @@ def run_pipeline() -> None:
 
             # Build final_cards before binary generation; this is the only event-content
             # source consumed by DOCX/PPTX event sections.
+            _check_time_budget("before_exec_build")
             _final_cards: list[dict] = []
             _watchlist_cards: list[dict] = []  # initialised here to prevent UnboundLocalError in AI_PURITY_HARD gate when inner try raises before line 1937
             try:

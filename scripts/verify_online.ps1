@@ -124,6 +124,27 @@ Write-Output "=== verify_online.ps1 開始 ==="
 Write-Output ""
 
 # ---------------------------------------------------------------------------
+# PRE-CLEAN: 清除前次殘留的 brief-demo 禁止產物（notion/xmind/deep_analysis）
+#   硬鎖：brief demo 路徑不得有這些檔案。即使前次失敗中斷也要清乾淨。
+# ---------------------------------------------------------------------------
+Write-Output "[PRE-CLEAN] 清除舊的 notion/xmind/deep_analysis 殘留產物..."
+foreach ($_voPreClean in @(
+    "outputs\notion_page.md",
+    "outputs\mindmap.xmind",
+    "outputs\deep_analysis.md",
+    "outputs\deep_analysis_education.md",
+    "docs\reports\deep_analysis_education_version.md",
+    "docs\reports\deep_analysis_education_version_ppt.md",
+    "docs\reports\deep_analysis_education_version_xmind.md"
+)) {
+    $_voPreCleanPath = Join-Path $repoRoot $_voPreClean
+    if (Test-Path $_voPreCleanPath) {
+        Remove-Item -LiteralPath $_voPreCleanPath -Force -ErrorAction SilentlyContinue
+        Write-Output ("  [PRE-CLEAN] 已刪除: {0}" -f $_voPreClean)
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Step 0: Translation engine (Qwen) preflight — Iteration 19
 #   Non-blocking: if Qwen not up, try to start llama_server.ps1 and wait <=20s.
 #   Sets $env:BRIEF_TRANSLATION_READY = "1" (ready) or "0" (down).
