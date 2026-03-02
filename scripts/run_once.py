@@ -4231,7 +4231,7 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
                 f"TIME_BUDGET_EXCEEDED: stage=translation chunk={i} "
                 f"remaining={max(_remaining, 0.0):.1f}s"
             )
-        _chunk_timeout = max(12, min(75, int(_remaining) - 5))
+        _chunk_timeout = max(12, min(120, int(_remaining) - 5))
 
         ok, resp = _qw(
             messages=[
