@@ -5768,6 +5768,8 @@ def run_pipeline() -> None:
 
     # Ensure DB exists
     init_db(settings.DB_PATH)
+    existing_ids = get_existing_item_ids(settings.DB_PATH)
+    log.info("Existing items in DB: %d", len(existing_ids))
 
     # Z1: Ingestion & Preprocessing
     log.info("--- Z1: Ingestion & Preprocessing ---")
@@ -5790,9 +5792,65 @@ def run_pipeline() -> None:
         # reducing hydration from 2000+ to ~600.  Recency-first sort was tried (58a04a8) but caused
         # quality regression: only 4 viable events vs 8 with frontier_score-first → reverted.
         try:
-            _bfp_limit = max(200, int(os.environ.get("BRIEF_PRESELECT_LIMIT", "320") or 320))
+            _bfp_limit = max(200, int(os.environ.get("BRIEF_PRESELECT_LIMIT", "600") or 600))
         except Exception:
-            _bfp_limit = 320
+            _bfp_limit = 600
+        def _build_bfp_tiers(total_items: int, max_limit: int) -> list[int]:
+            if total_items <= 0:
+                return []
+            _cap = min(max(1, int(max_limit)), total_items)
+            _tiers: list[int] = []
+            for _candidate in (200, 400, _cap):
+                _tier = min(max(1, int(_candidate)), total_items)
+                if _tier > _cap:
+                    _tier = _cap
+                if not _tiers or _tier > _tiers[-1]:
+                    _tiers.append(_tier)
+            if not _tiers:
+                _tiers = [_cap]
+            elif _tiers[-1] < _cap:
+                _tiers.append(_cap)
+            return _tiers
+
+        _ranked_brief_items = list(raw_items)
+        _bfp_tiers: list[int] = []
+        def _bfp_score(it):
+            try:
+                fs = float(getattr(it, "frontier_score", 0) or 0)
+            except Exception:
+                fs = 0.0
+            try:
+                pub_ts = float(getattr(it, "published_at_ts", 0) or 0)
+            except Exception:
+                pub_ts = 0.0
+            _title = str(getattr(it, "title", "") or "")
+            _body = str(getattr(it, "body", "") or "")
+            _src = " ".join(
+                [
+                    str(getattr(it, "source_name", "") or ""),
+                    str(getattr(it, "platform", "") or ""),
+                    str(getattr(it, "source_category", "") or ""),
+                ]
+            ).lower()
+            _txt = f"{_title} {_body}".lower()
+            _kw_boost = 0
+            if any(
+                _kw in _txt
+                for _kw in (
+                    "launch", "release", "model", "agent", "chip", "gpu", "dataset",
+                    "agreement", "policy", "detector", "hallucination", "evaluation",
+                )
+            ):
+                _kw_boost += 12
+            if any(
+                _src_kw in _src
+                for _src_kw in (
+                    "openai", "anthropic", "google", "microsoft", "meta",
+                    "nvidia", "huggingface", "hugging face", "github",
+                )
+            ):
+                _kw_boost += 6
+            return (fs, _kw_boost, pub_ts)
         if _is_brief_mode and len(raw_items) > _bfp_limit:
             _bfp_before = len(raw_items)
             def _bfp_score(it):
@@ -5832,7 +5890,10 @@ def run_pipeline() -> None:
                 ):
                     _kw_boost += 6
                 return (fs, _kw_boost, pub_ts)
-            raw_items = sorted(raw_items, key=_bfp_score, reverse=True)[:_bfp_limit]
+            _ranked_brief_items = sorted(raw_items, key=_bfp_score, reverse=True)
+            _bfp_tiers = _build_bfp_tiers(len(_ranked_brief_items), _bfp_limit)
+            if _bfp_tiers:
+                raw_items = _ranked_brief_items[:_bfp_tiers[0]]
             log.info(
                 "BRIEF_FAST_PRESELECT: %d → %d (limit=%d, budget=%ds)",
                 _bfp_before, len(raw_items), _bfp_limit, _pipeline_budget_sec,
@@ -5842,10 +5903,11 @@ def run_pipeline() -> None:
             from utils.fulltext_hydrator import hydrate_items_batch
             if _is_brief_mode and raw_items:
                 _batch_size = max(20, int(os.environ.get("BRIEF_HYDRATE_BATCH_SIZE", "80") or 80))
-                _early_stop_target_default = min(10, max(_brief_min_events + 2, 7))
+                _probe_target = max(1, _brief_min_events)
+                _early_stop_target_default = min(10, max(_probe_target + 2, 7))
                 try:
                     _early_stop_target = max(
-                        _brief_min_events,
+                        _probe_target,
                         int(
                             os.environ.get(
                                 "BRIEF_EARLY_STOP_TARGET",
@@ -5855,10 +5917,13 @@ def run_pipeline() -> None:
                     )
                 except Exception:
                     _early_stop_target = _early_stop_target_default
+                if not _bfp_tiers:
+                    _ranked_brief_items = sorted(raw_items, key=_bfp_score, reverse=True)
+                    _bfp_tiers = _build_bfp_tiers(len(_ranked_brief_items), _bfp_limit)
                 _hydrated_accum: list = []
-                _hydration_total = len(raw_items)
-                _min_hydrated_before_stop = min(_hydration_total, max(_batch_size * 3, 240))
+                _hydration_total = _bfp_tiers[-1] if _bfp_tiers else len(raw_items)
                 _early_stop_hit = False
+                _last_probe = {"deduped": 0, "kept": 0, "signal_pool": 0}
 
                 def _brief_ready_candidates(items: list) -> int:
                     _ready = 0
@@ -5889,36 +5954,103 @@ def run_pipeline() -> None:
                             _ready += 1
                     return _ready
 
-                for _offset in range(0, len(raw_items), _batch_size):
-                    _batch = raw_items[_offset:_offset + _batch_size]
-                    _hydrated_batch = hydrate_items_batch(_batch) or _batch
-                    _hydrated_accum.extend(_hydrated_batch)
-                    _ready_now = _brief_ready_candidates(_hydrated_accum)
-                    log.info(
-                        "BRIEF_HYDRATE_BATCH: hydrated=%d/%d ready_candidates=%d target=%d batch_size=%d",
-                        len(_hydrated_accum),
-                        _hydration_total,
-                        _ready_now,
-                        _early_stop_target,
-                        _batch_size,
-                    )
-                    if (
-                        len(_hydrated_accum) >= _min_hydrated_before_stop
-                        and _ready_now >= _early_stop_target
-                    ):
-                        raw_items = _hydrated_accum
-                        _early_stop_hit = True
+                def _brief_probe_filtered(items: list) -> dict[str, int]:
+                    _probe_deduped = dedup_items(list(items), existing_ids)
+                    _probe_filtered, _probe_summary = filter_items(_probe_deduped)
+                    return {
+                        "deduped": len(_probe_deduped),
+                        "kept": len(_probe_filtered),
+                        "signal_pool": len(_probe_summary.signal_pool or []),
+                    }
+
+                _prev_limit = 0
+                for _tier_idx, _tier_limit in enumerate(_bfp_tiers, start=1):
+                    if _tier_idx > 1:
                         log.info(
-                            "BRIEF_FAST_EARLY_STOP: hydrated=%d/%d ready_candidates=%d target=%d min_hydrated=%d",
-                            len(raw_items),
-                            _hydration_total,
-                            _ready_now,
-                            _early_stop_target,
-                            _min_hydrated_before_stop,
+                            "BRIEF_FAST_PRESELECT_EXPAND: %d -> %d (tier=%d/%d max_limit=%d)",
+                            _prev_limit,
+                            _tier_limit,
+                            _tier_idx,
+                            len(_bfp_tiers),
+                            _bfp_limit,
                         )
+
+                    _tier_items = _ranked_brief_items[_prev_limit:_tier_limit]
+                    for _offset in range(0, len(_tier_items), _batch_size):
+                        _batch = _tier_items[_offset:_offset + _batch_size]
+                        _hydrated_batch = hydrate_items_batch(_batch) or _batch
+                        _hydrated_accum.extend(_hydrated_batch)
+                        _ready_now = _brief_ready_candidates(_hydrated_accum)
+                        try:
+                            _last_probe = _brief_probe_filtered(_hydrated_accum)
+                        except Exception as _probe_exc:
+                            log.warning("BRIEF_FILTER_PROBE failed (non-fatal): %s", _probe_exc)
+                        log.info(
+                            "BRIEF_HYDRATE_BATCH: tier=%d/%d hydrated=%d/%d probe_deduped=%d "
+                            "probe_kept=%d probe_signal=%d heuristic_ready=%d target=%d batch_size=%d",
+                            _tier_idx,
+                            len(_bfp_tiers),
+                            len(_hydrated_accum),
+                            _hydration_total,
+                            int(_last_probe.get("deduped", 0) or 0),
+                            int(_last_probe.get("kept", 0) or 0),
+                            int(_last_probe.get("signal_pool", 0) or 0),
+                            _ready_now,
+                            _probe_target,
+                            _batch_size,
+                        )
+
+                        _stop_reason = ""
+                        _stop_value = 0
+                        if int(_last_probe.get("kept", 0) or 0) >= _probe_target:
+                            _stop_reason = "probe_kept"
+                            _stop_value = int(_last_probe.get("kept", 0) or 0)
+                        elif (
+                            int(_last_probe.get("signal_pool", 0) or 0) >= _probe_target
+                            and len(_hydrated_accum) >= max(_batch_size, 120)
+                        ):
+                            _stop_reason = "signal_pool"
+                            _stop_value = int(_last_probe.get("signal_pool", 0) or 0)
+                        elif (
+                            _ready_now >= _early_stop_target
+                            and len(_hydrated_accum) >= max(_batch_size * 2, 160)
+                        ):
+                            _stop_reason = "heuristic_ready"
+                            _stop_value = _ready_now
+
+                        if _stop_reason:
+                            raw_items = _hydrated_accum
+                            _early_stop_hit = True
+                            log.info(
+                                "BRIEF_FAST_EARLY_STOP: tier=%d/%d hydrated=%d/%d stop_reason=%s "
+                                "value=%d target=%d probe_kept=%d probe_signal=%d heuristic_ready=%d",
+                                _tier_idx,
+                                len(_bfp_tiers),
+                                len(raw_items),
+                                _hydration_total,
+                                _stop_reason,
+                                _stop_value,
+                                _probe_target,
+                                int(_last_probe.get("kept", 0) or 0),
+                                int(_last_probe.get("signal_pool", 0) or 0),
+                                _ready_now,
+                            )
+                            break
+
+                        _check_time_budget(f"brief_hydrate_tier{_tier_idx}")
+
+                    _prev_limit = _tier_limit
+                    if _early_stop_hit:
                         break
                 if not _early_stop_hit:
                     raw_items = _hydrated_accum
+                    log.info(
+                        "BRIEF_FAST_PRESELECT_EXHAUSTED: hydrated=%d/%d probe_kept=%d probe_signal=%d",
+                        len(raw_items),
+                        _hydration_total,
+                        int(_last_probe.get("kept", 0) or 0),
+                        int(_last_probe.get("signal_pool", 0) or 0),
+                    )
                 log.info(
                     "Z0 fulltext hydration complete (%d items%s)",
                     len(raw_items),
@@ -6018,8 +6150,6 @@ def run_pipeline() -> None:
         return
 
     # Dedup against DB + within batch
-    existing_ids = get_existing_item_ids(settings.DB_PATH)
-    log.info("Existing items in DB: %d", len(existing_ids))
     deduped = dedup_items(raw_items, existing_ids)
     collector.deduped_total = len(deduped)
     log.info("INGEST_COUNTS deduped_total=%d", collector.deduped_total)
@@ -9161,6 +9291,32 @@ if __name__ == "__main__":
         _proj_root = Path(__file__).resolve().parent.parent
         _outputs   = _proj_root / "outputs"
         _outputs.mkdir(parents=True, exist_ok=True)
+        _nr_is_brief = (
+            os.environ.get("PIPELINE_REPORT_MODE", "brief") == "brief"
+            or os.environ.get("BRIEF_ONLY", "") == "1"
+        )
+        if _nr_is_brief:
+            _nr_cleanup_patterns = (
+                "docs/reports/deep_analysis_education*",
+                "outputs/deep_analysis*",
+                "outputs/notion_page.md",
+                "outputs/mindmap.xmind",
+            )
+            _nr_removed: list[str] = []
+            for _pattern in _nr_cleanup_patterns:
+                for _target in _proj_root.glob(_pattern):
+                    if not _target.exists():
+                        continue
+                    try:
+                        if _target.is_dir():
+                            shutil.rmtree(_target, ignore_errors=True)
+                        else:
+                            _target.unlink(missing_ok=True)
+                        _nr_removed.append(str(_target.relative_to(_proj_root)).replace("\\", "/"))
+                    except Exception:
+                        pass
+            if _nr_removed:
+                print(f"BRIEF_ONLY_CLEANUP(not-ready): removed={_nr_removed}")
 
         # 1. Parse NOT_READY.md ??gate_name + fail_reason (one-liner, human-readable)
         _nr_md_path  = _outputs / "NOT_READY.md"
