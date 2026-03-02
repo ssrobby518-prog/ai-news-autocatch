@@ -87,6 +87,22 @@ if (-not $SkipPipeline) {
 #   final_selected_events < 6  OR  strict_fulltext_ok < 4
 # Both verify_run and verify_online must FAIL (exit non-zero) when this file exists.
 $notReadyPath = "outputs\NOT_READY.md"
+if ((Test-Path $notReadyPath) -and $env:PIPELINE_RUN_ID) {
+    try {
+        $nrRawPre = Get-Content $notReadyPath -Raw -Encoding UTF8
+        $nrRunIdPre = ""
+        if ($nrRawPre -match '(?m)^run_id:\s*(\S+)') {
+            $nrRunIdPre = $Matches[1].Trim()
+        }
+        if ($nrRunIdPre -and ($nrRunIdPre -ne [string]$env:PIPELINE_RUN_ID)) {
+            Write-Host ""
+            Write-Host ("NOT_READY GATE: SKIP (STALE_META meta.run_id={0} != PIPELINE_RUN_ID={1})" -f $nrRunIdPre, $env:PIPELINE_RUN_ID) -ForegroundColor Yellow
+            Remove-Item $notReadyPath -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-Host ("NOT_READY GATE: STALE_META check skipped (parse error: {0})" -f $_) -ForegroundColor DarkYellow
+    }
+}
 if (Test-Path $notReadyPath) {
     Write-Host "" -ForegroundColor Red
     Write-Host "NOT_READY GATE: FAIL" -ForegroundColor Red
