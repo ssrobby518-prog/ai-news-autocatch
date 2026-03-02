@@ -4187,9 +4187,9 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
 
     # Brief delivery is already mostly Traditional Chinese; only the Markdown
     # shell and a few labels remain in English. Translate via a fast structured
-    # path after a tiny local-Qwen probe so delivery still hard-depends on the
-    # local engine without spending the full time budget on re-generating the
-    # entire document token-by-token.
+    # path so delivery still hard-depends on the local engine readiness check
+    # without spending the full time budget on re-generating the entire
+    # document token-by-token.
     if "## Events" in md_text and "### Event " in md_text:
         _remaining = _remaining_budget_sec()
         if _remaining <= 10:
@@ -4197,25 +4197,6 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
                 "TIME_BUDGET_EXCEEDED: stage=translation brief_fast_path "
                 f"remaining={max(_remaining, 0.0):.1f}s"
             )
-        _probe_timeout = max(8, min(20, int(_remaining) - 5))
-        ok, resp = _qw(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "你是繁體中文技術翻譯器。只輸出翻譯結果，不要解釋。",
-                },
-                {
-                    "role": "user",
-                    "content": "## Translation Probe\n\n- status: OK",
-                },
-            ],
-            temperature=0.0,
-            max_tokens=16,
-            timeout=_probe_timeout,
-            max_retries=0,
-        )
-        if not ok:
-            return False, f"TRANSLATION_FAILED: brief_fast_probe: {resp[:200]}"
 
         result = md_text
         _brief_line_replacements = (
