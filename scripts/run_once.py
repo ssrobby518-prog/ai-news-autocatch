@@ -4795,6 +4795,152 @@ def _sync_faithful_zh_news_meta(final_cards: list[dict]) -> None:
         pass
 
 
+def _sync_newsroom_zh_meta(final_cards: list[dict]) -> None:
+    """Sync newsroom_zh.meta.json from final_cards so verify_online reads current output."""
+    try:
+        import json as _nzm_json
+
+        _out_path = Path(settings.PROJECT_ROOT) / "outputs" / "newsroom_zh.meta.json"
+        _cards = list(final_cards or [])
+        _total = len(_cards)
+        if _total <= 0:
+            return
+
+        _zh_re = re.compile(r"[\u4e00-\u9fff]")
+        _ratios: list[float] = []
+        _samples: list[dict] = []
+
+        for _fc in _cards:
+            _q1 = _normalize_ws(str(_fc.get("q1_zh", "") or _fc.get("q1", "") or ""))
+            _q2 = _normalize_ws(str(_fc.get("q2_zh", "") or _fc.get("q2", "") or ""))
+            _q3 = [
+                _normalize_ws(str(_b or ""))
+                for _b in (_fc.get("why_it_matters_bullets", []) or [])
+                if _normalize_ws(str(_b or ""))
+            ][:3]
+            _combined = " ".join([_q1, _q2] + _q3).strip()
+            _ratio = (len(_zh_re.findall(_combined)) / max(1, len(_combined))) if _combined else 0.0
+            _ratios.append(_ratio)
+
+            if len(_samples) < 3:
+                _samples.append(
+                    {
+                        "item_id": str(_fc.get("item_id", "") or "")[:20],
+                        "title": str(_fc.get("title", "") or "")[:60],
+                        "q1": _q1[:200],
+                        "q2": _q2[:200],
+                        "q3": _q3[:3],
+                        "proof": str(_fc.get("final_url", "") or _fc.get("source_url", "") or "")[:220],
+                        "zh_ratio": round(_ratio, 3),
+                        "newsroom": True,
+                    }
+                )
+
+        _meta = {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "applied_count": _total,
+            "avg_zh_ratio": round(sum(_ratios) / max(1, len(_ratios)), 3),
+            "min_zh_ratio": round(min(_ratios), 3) if _ratios else 0.0,
+            "samples": _samples,
+        }
+        _out_path.write_text(_nzm_json.dumps(_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _sync_news_anchor_meta(final_cards: list[dict]) -> None:
+    """Sync news_anchor.meta.json from final_cards so verify_online anchor gate is current."""
+    try:
+        import json as _nam_json
+
+        _out_path = Path(settings.PROJECT_ROOT) / "outputs" / "news_anchor.meta.json"
+        _cards = list(final_cards or [])
+        _total = len(_cards)
+        if _total <= 0:
+            return
+
+        _zh_re = re.compile(r"[\u4e00-\u9fff]")
+        _anchor_present = 0
+        _missing_ids: list[str] = []
+        _anchor_type_counts: dict[str, int] = {}
+        _samples: list[dict] = []
+
+        for _fc in _cards:
+            _item_id = str(_fc.get("item_id", "") or "")[:30]
+            _anchors = [
+                _normalize_ws(str(_a or ""))
+                for _a in (_fc.get("anchors", []) or [])
+                if _normalize_ws(str(_a or ""))
+            ]
+            _primary = _normalize_ws(
+                str(
+                    _fc.get("actor_primary", "")
+                    or _fc.get("actor", "")
+                    or _fc.get("impact_target", "")
+                    or (_anchors[0] if _anchors else "")
+                )
+            )
+            if _primary and all(_primary.lower() != _a.lower() for _a in _anchors):
+                _anchors.insert(0, _primary)
+
+            _has_anchor = bool(_anchors) or bool(_primary and not _is_actor_numeric(_primary))
+            if _has_anchor:
+                _anchor_present += 1
+                _anchor_key = _primary or (_anchors[0] if _anchors else "")
+                if re.fullmatch(r"[$€¥£]?[0-9][0-9,.\-%:]*", _anchor_key):
+                    _anchor_type = "number"
+                elif re.search(r"[A-Za-z\u4e00-\u9fff]", _anchor_key):
+                    _anchor_type = "company"
+                else:
+                    _anchor_type = "entity"
+                _anchor_type_counts[_anchor_type] = _anchor_type_counts.get(_anchor_type, 0) + 1
+            else:
+                if len(_missing_ids) < 5:
+                    _missing_ids.append(_item_id)
+
+            if len(_samples) < 3 and _has_anchor:
+                _q1 = _normalize_ws(str(_fc.get("q1_zh", "") or _fc.get("q1", "") or ""))
+                _q2 = _normalize_ws(str(_fc.get("q2_zh", "") or _fc.get("q2", "") or ""))
+                _combined = f"{_q1} {_q2}".strip()
+                _ratio = (len(_zh_re.findall(_combined)) / max(1, len(_combined))) if _combined else 0.0
+                _sample_anchor = _primary or (_anchors[0] if _anchors else "")
+                _sample_type = {}
+                if _sample_anchor:
+                    if re.fullmatch(r"[$€¥£]?[0-9][0-9,.\-%:]*", _sample_anchor):
+                        _sample_type = {"number": 1}
+                    elif re.search(r"[A-Za-z\u4e00-\u9fff]", _sample_anchor):
+                        _sample_type = {"company": 1}
+                    else:
+                        _sample_type = {"entity": 1}
+                _samples.append(
+                    {
+                        "item_id": _item_id,
+                        "title": str(_fc.get("title", "") or "")[:60],
+                        "primary_anchor": _sample_anchor[:60],
+                        "anchors_top3": _anchors[:3],
+                        "anchor_types": _sample_type,
+                        "q1": _q1[:220],
+                        "q2": _q2[:220],
+                        "proof": str(_fc.get("final_url", "") or _fc.get("source_url", "") or "")[:220],
+                        "zh_ratio": round(_ratio, 3),
+                    }
+                )
+
+        _meta = {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "events_total": _total,
+            "anchor_present_count": _anchor_present,
+            "anchor_missing_count": max(0, _total - _anchor_present),
+            "anchor_coverage_ratio": round(_anchor_present / max(1, _total), 3),
+            "missing_event_ids_top5": _missing_ids[:5],
+            "top_anchor_types_count": _anchor_type_counts,
+            "samples": _samples,
+        }
+        _out_path.write_text(_nam_json.dumps(_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _contains_quote_window(target_text: str, quote_text: str, min_window: int = 10) -> bool:
     target = _normalize_ws(target_text)
     quote = _normalize_ws(quote_text)
@@ -6809,13 +6955,13 @@ def run_pipeline() -> None:
                         sys.exit(1)
                     _brief_diag = {"quote_stoplist_hits_count": 0}
                     _brief_pool = list(_final_cards or [])
-                    if len(_brief_pool) < 6:
+                    if len(_brief_pool) < _brief_min_events:
                         _existing_brief_ids = {
                             _normalize_ws(str(_fc_i.get("item_id", "") or ""))
                             for _fc_i in _brief_pool
                             if _normalize_ws(str(_fc_i.get("item_id", "") or ""))
                         }
-                        _needed_brief = max(0, 6 - len(_brief_pool))
+                        _needed_brief = max(0, _brief_min_events - len(_brief_pool))
                         _ext_cards, _ext_stats = _build_brief_extended_pool_candidates(
                             existing_item_ids=_existing_brief_ids,
                             needed=max(2, _needed_brief),
@@ -6923,6 +7069,8 @@ def run_pipeline() -> None:
 
                 metrics_dict["final_cards"] = _final_cards
                 _sync_exec_selection_meta(_final_cards)
+                _sync_newsroom_zh_meta(_final_cards)
+                _sync_news_anchor_meta(_final_cards)
                 _sync_faithful_zh_news_meta(_final_cards)
 
                 _final_cards_meta_path = Path(settings.PROJECT_ROOT) / "outputs" / "final_cards.meta.json"
@@ -7296,16 +7444,31 @@ def run_pipeline() -> None:
                                 if os.environ.get("PIPELINE_MODE", "manual") == "demo" and _final_cards:
                                     _final_cards = _apply_demo_bucket_cycle(_final_cards)
                                 if _is_brief_mode:
-                                    _final_cards, _dbe_brief_diag = _prepare_brief_final_cards_fast(
-                                        _final_cards,
-                                        max_events=min(
-                                            10,
-                                            max(
-                                                _brief_min_events,
-                                                int(os.environ.get("BRIEF_MAX_EVENTS", str(_brief_min_events)) or _brief_min_events),
-                                            ),
+                                    _dbe_brief_max = min(
+                                        10,
+                                        max(
+                                            _brief_min_events,
+                                            int(os.environ.get("BRIEF_MAX_EVENTS", str(_brief_min_events)) or _brief_min_events),
                                         ),
                                     )
+                                    if _pipeline_mode_runtime == "demo":
+                                        _final_cards, _dbe_brief_diag = _prepare_brief_final_cards_fast(
+                                            _final_cards,
+                                            max_events=_dbe_brief_max,
+                                        )
+                                        log.info(
+                                            "BRIEF_DBE_REBUILD_PATH: fast (demo mode) max_events=%d",
+                                            _dbe_brief_max,
+                                        )
+                                    else:
+                                        _final_cards, _dbe_brief_diag = _prepare_brief_final_cards(
+                                            _final_cards,
+                                            max_events=_dbe_brief_max,
+                                        )
+                                        log.info(
+                                            "BRIEF_DBE_REBUILD_PATH: full (manual/daily brief) max_events=%d",
+                                            _dbe_brief_max,
+                                        )
                                     _write_brief_content_miner_meta(
                                         diag=_dbe_brief_diag,
                                         report_mode=_report_mode,
@@ -7331,6 +7494,8 @@ def run_pipeline() -> None:
                                         )
                                 metrics_dict["final_cards"] = _final_cards
                                 _sync_exec_selection_meta(_final_cards)
+                                _sync_newsroom_zh_meta(_final_cards)
+                                _sync_news_anchor_meta(_final_cards)
                                 _sync_faithful_zh_news_meta(_final_cards)
 
                                 _final_cards_meta_path = Path(settings.PROJECT_ROOT) / "outputs" / "final_cards.meta.json"
