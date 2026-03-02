@@ -7485,7 +7485,7 @@ def run_pipeline() -> None:
                         _dod_q2bind = bool(_bq2_d_n) and (_bq2_d_n[:50] in _q2_d_n)
                         _generic_actor_tokens = {
                             "show", "hn", "news", "update", "release", "report", "article", "post", "today",
-                            "latest", "breaking", "thread",
+                            "latest", "breaking", "thread", "article url", "comments url", "url",
                         }
                         _actor_anchor_d = _primary_anchor_d.strip()
                         _actor_anchor_l = _actor_anchor_d.lower()
@@ -7495,7 +7495,12 @@ def run_pipeline() -> None:
                             or _actor_anchor_l.isdigit()
                             or (_actor_anchor_l in _generic_actor_tokens)
                         ):
+                            _ai_chat_match_d = _re_dod.search(r"\bAI\s+chat\b", _title_d, _re_dod.IGNORECASE)
+                            if _ai_chat_match_d:
+                                _actor_anchor_d = _ai_chat_match_d.group(0)
                             for _tok in _re_dod.findall(r"[A-Za-z][A-Za-z0-9+._-]{2,}", _title_d):
+                                if _actor_anchor_d and _actor_anchor_d.lower() == "ai chat":
+                                    break
                                 _tok_l = _tok.lower()
                                 if _tok_l in _generic_actor_tokens:
                                     continue
@@ -7552,7 +7557,7 @@ def run_pipeline() -> None:
                             "item_id":    _iid_d,
                             "title":      _title_d,
                             "final_url":  _furl_d,
-                            "actor":      _primary_anchor_d,
+                            "actor":      _actor_anchor_d,
                             "quote_1":    _bq1_d[:200],
                             "quote_2":    _bq2_d[:200],
                             "q1_snippet": _q1_d[:300],
