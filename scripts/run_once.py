@@ -4162,7 +4162,7 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
     # Bare "備受" is a legitimate translation for "widely/broadly received";
     # only compound template phrases are banned in translation output.
     _BANLIST = re.compile(r"近日|備受矚目|備受關注|可核對|原文提到|本文指出|總結來說")
-    _MAX_CHUNK = 1500
+    _MAX_CHUNK = 1800
 
     try:
         from utils.llama_openai_client import chat as _qw
@@ -4204,8 +4204,9 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
 
     for block in blocks:
         blen = len(block) + 2
-        # Force new chunk at H1/H2/H3 to keep sections together
-        _is_heading = bool(_tr_re.match(r"^#{1,3} ", block.lstrip()))
+        # Only hard-split on H1 so per-event H3 sections can be translated in
+        # larger batches and finish within the strict time budget.
+        _is_heading = bool(_tr_re.match(r"^# ", block.lstrip()))
         if (_is_heading or cur_len + blen > _MAX_CHUNK) and cur:
             chunks.append("\n\n".join(cur))
             cur = [block]
@@ -4232,6 +4233,7 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
                 f"remaining={max(_remaining, 0.0):.1f}s"
             )
         _chunk_timeout = max(12, min(120, int(_remaining) - 5))
+        _chunk_max_tokens = max(400, min(700, max(1, len(chunk) // 2)))
 
         ok, resp = _qw(
             messages=[
@@ -4239,7 +4241,7 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
                 {"role": "user", "content": chunk},
             ],
             temperature=0.1,
-            max_tokens=400,
+            max_tokens=_chunk_max_tokens,
             timeout=_chunk_timeout,
             max_retries=0,
         )
