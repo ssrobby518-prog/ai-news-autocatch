@@ -3974,14 +3974,15 @@ def _generate_brief_md(prepared: list[dict], run_id: str, mode: str, report_mode
                 _sfb_snap_age_s  = _sfb_d.get("snapshot_age_hours")
             except Exception:
                 pass
-        _lines += ["## Supply", ""]
-        _lines.append(f"- primary_fetched_total: {_sfb_primary_s}")
-        _lines.append(f"- fallback_used: {_sfb_used_s}")
-        _lines.append(f"- reason: {_sfb_reason_s}")
-        if _sfb_snap_path_s:
-            _lines.append(f"- snapshot_path: `{_sfb_snap_path_s}`")
-        _lines.append(f"- snapshot_age_hours: {_sfb_snap_age_s if _sfb_snap_age_s is not None else 'null'}")
-        _lines.append("")
+        if not _brief_md_compact:
+            _lines += ["## Supply", ""]
+            _lines.append(f"- primary_fetched_total: {_sfb_primary_s}")
+            _lines.append(f"- fallback_used: {_sfb_used_s}")
+            _lines.append(f"- reason: {_sfb_reason_s}")
+            if _sfb_snap_path_s:
+                _lines.append(f"- snapshot_path: `{_sfb_snap_path_s}`")
+            _lines.append(f"- snapshot_age_hours: {_sfb_snap_age_s if _sfb_snap_age_s is not None else 'null'}")
+            _lines.append("")
 
         # ???? Selection ??????????????????????????????????????????????????????????????????????????????????????????????????????????????
         _evt_count = len(prepared or [])
@@ -4012,8 +4013,8 @@ def _generate_brief_md(prepared: list[dict], run_id: str, mode: str, report_mode
                 _bb = [_normalize_ws(str(_b or "")) for _b in (_fc.get(_field) or []) if _normalize_ws(str(_b or ""))]
                 if _brief_md_compact:
                     _brief_md_limits = {
-                        "what_happened_bullets": 2,
-                        "key_details_bullets": 2,
+                        "what_happened_bullets": 1,
+                        "key_details_bullets": 1,
                         "why_it_matters_bullets": 1,
                     }
                     _bb = _bb[:_brief_md_limits.get(_field, len(_bb))]
@@ -4023,7 +4024,8 @@ def _generate_brief_md(prepared: list[dict], run_id: str, mode: str, report_mode
                     _lines.append("")
             if _brief_md_compact:
                 _q1 = _normalize_ws(str(_fc.get("quote_window_1", "") or _fc.get("quote_1", "") or ""))
-                _q2 = _normalize_ws(str(_fc.get("quote_window_2", "") or _fc.get("quote_2", "") or ""))
+                _q1 = _clip_text(_q1, 24)
+                _q2 = ""
             else:
                 _q1 = _normalize_ws(str(_fc.get("quote_1", "") or ""))
                 _q2 = _normalize_ws(str(_fc.get("quote_2", "") or ""))
@@ -4039,14 +4041,15 @@ def _generate_brief_md(prepared: list[dict], run_id: str, mode: str, report_mode
             _lines += ["", "---", ""]
 
         # ???? Produced files ??????????????????????????????????????????????????????????????????????????????????????????????????????
-        _lines += ["## Produced Files", ""]
-        for _fn in ("executive_report.docx", "executive_report.pptx", "latest_brief.md"):
-            _fp = _out_dir / _fn
-            if _fp.exists():
-                _lines.append(f"- `outputs/{_fn}` ({_fp.stat().st_size:,} bytes)")
-            else:
-                _lines.append(f"- `outputs/{_fn}` (pending)")
-        _lines.append("")
+        if not _brief_md_compact:
+            _lines += ["## Produced Files", ""]
+            for _fn in ("executive_report.docx", "executive_report.pptx", "latest_brief.md"):
+                _fp = _out_dir / _fn
+                if _fp.exists():
+                    _lines.append(f"- `outputs/{_fn}` ({_fp.stat().st_size:,} bytes)")
+                else:
+                    _lines.append(f"- `outputs/{_fn}` (pending)")
+            _lines.append("")
 
         _md_text = "\n".join(_lines)
         # Latest pointer (always overwritten)
@@ -4122,36 +4125,28 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
     # Bare "備受" is a legitimate translation for "widely/broadly received";
     # only compound template phrases are banned in translation output.
     _BANLIST = re.compile(r"近日|備受矚目|備受關注|可核對|原文提到|本文指出|總結來說")
-    _MAX_CHUNK = 1000
+    _MAX_CHUNK = 1500
 
     try:
         from utils.llama_openai_client import chat as _qw
     except ImportError:
         return False, "TRANSLATION_ENGINE_DOWN: llama_openai_client not importable"
 
-    _cjk_chars = sum(1 for ch in md_text if "\u4e00" <= ch <= "\u9fff")
-    if _cjk_chars >= 600:
-        ok, resp = _qw(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "如果使用者提供的 Markdown 已經是繁體中文且不需翻譯，請只回覆 OK。",
-                },
-                {"role": "user", "content": md_text[:240]},
-            ],
-            temperature=0.0,
-            max_tokens=8,
-            timeout=20,
-            max_retries=0,
-        )
-        if not ok:
-            return False, f"TRANSLATION_FAILED: zh_passthrough_probe: {resp[:200]}"
-        if not resp.strip().upper().startswith("OK"):
-            return False, "TRANSLATION_FAILED: zh_passthrough_probe_invalid"
-        hits = _BANLIST.findall(md_text)
-        if hits:
-            return False, f"TRANSLATION_FAILED_BANLIST: {hits[:5]}"
-        return True, md_text
+    # Always run the final Markdown through local Qwen so the MD/DOCX/PPTX
+    # deliverables are produced from the same translated payload.
+    try:
+        _budget_sec = max(1, int(os.environ.get("PIPELINE_TIME_BUDGET_SEC", "600") or 600))
+    except Exception:
+        _budget_sec = 600
+    try:
+        _started_epoch = float(os.environ.get("PIPELINE_T_START_EPOCH", "0") or 0.0)
+    except Exception:
+        _started_epoch = 0.0
+
+    def _remaining_budget_sec() -> float:
+        if _started_epoch <= 0:
+            return float(_budget_sec)
+        return float(_budget_sec) - max(0.0, time.time() - _started_epoch)
 
     # 1. Extract code fences → placeholders to prevent translation
     _code_store: list[str] = []
@@ -4193,6 +4188,14 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
             translated.append(chunk)
             continue
 
+        _remaining = _remaining_budget_sec()
+        if _remaining <= 10:
+            return False, (
+                f"TIME_BUDGET_EXCEEDED: stage=translation chunk={i} "
+                f"remaining={max(_remaining, 0.0):.1f}s"
+            )
+        _chunk_timeout = max(12, min(75, int(_remaining) - 5))
+
         ok, resp = _qw(
             messages=[
                 {"role": "system", "content": _SYS},
@@ -4200,7 +4203,7 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
             ],
             temperature=0.1,
             max_tokens=400,
-            timeout=240,
+            timeout=_chunk_timeout,
             max_retries=0,
         )
         if not ok:
@@ -5612,6 +5615,7 @@ def run_pipeline() -> None:
     t_start = time.time()
     _pipeline_budget_sec = int(os.environ.get("PIPELINE_TIME_BUDGET_SEC", "600"))
     _pipeline_run_id_bgt = os.environ.get("PIPELINE_RUN_ID", "unknown")
+    os.environ["PIPELINE_T_START_EPOCH"] = f"{t_start:.6f}"
 
     def _cleanup_brief_only_artifacts(stage: str) -> None:
         """Delete artifacts that must never survive in brief mode."""
@@ -7062,7 +7066,10 @@ def run_pipeline() -> None:
                                 if os.environ.get("PIPELINE_MODE", "manual") == "demo" and _final_cards:
                                     _final_cards = _apply_demo_bucket_cycle(_final_cards)
                                 if _is_brief_mode:
-                                    _final_cards, _dbe_brief_diag = _prepare_brief_final_cards_fast(_final_cards, max_events=10)
+                                    _final_cards, _dbe_brief_diag = _prepare_brief_final_cards_fast(
+                                        _final_cards,
+                                        max_events=max(_brief_min_events, 6),
+                                    )
                                     _write_brief_content_miner_meta(
                                         diag=_dbe_brief_diag,
                                         report_mode=_report_mode,
@@ -8914,11 +8921,7 @@ def run_pipeline() -> None:
         # TIME_BUDGET checkpoint 2: before Translation-First ZH Delivery
         # Brief-mode bypass: if PPTX already exists, Fix-2 will skip TFD entirely.
         # No need to enforce the budget for a step we won't run — skip the check.
-        _pre_tfd_pptx_exists = (
-            Path(settings.PROJECT_ROOT) / "outputs" / "executive_report.pptx"
-        ).exists()
-        if not (_is_brief_mode and _pre_tfd_pptx_exists):
-            _check_time_budget("before_translation")
+        _check_time_budget("before_translation")
 
         # ---------------------------------------------------------------
         # Iteration 20: Translation-First ZH Delivery
@@ -8929,7 +8932,7 @@ def run_pipeline() -> None:
         _tfd_outputs = Path(settings.PROJECT_ROOT) / "outputs"
         # Brief mode bypass: canonical payloads already have ZH from faithful_zh_news.
         # Skip full TFD translation (17-50 min/run) when PPTX is present; override meta.
-        _tfd_skip = _is_brief_mode and (_tfd_outputs / "executive_report.pptx").exists()
+        _tfd_skip = False
         if _tfd_skip:
             try:
                 import json as _tfd_sk_j
@@ -8961,7 +8964,7 @@ def run_pipeline() -> None:
                 "Translation-First: SKIPPED (brief mode, PPTX present from canonical payloads)"
             )
         _tfd_en_path = _tfd_outputs / "latest_brief.md"
-        if not _tfd_skip and _tfd_en_path.exists():
+        if _tfd_en_path.exists():
             try:
                 _tfd_en_md = _tfd_en_path.read_text(encoding="utf-8")
             except Exception as _tfd_read_exc:
@@ -8972,9 +8975,14 @@ def run_pipeline() -> None:
                 _tfd_ok, _tfd_result = _translate_md_to_zh(_tfd_en_md)
                 if not _tfd_ok:
                     # Translation failed → write NOT_READY.md, delete artifacts
+                    _tfd_gate = (
+                        "TIME_BUDGET_EXCEEDED"
+                        if str(_tfd_result or "").startswith("TIME_BUDGET_EXCEEDED")
+                        else "TRANSLATION_DELIVERY_HARD"
+                    )
                     _tfd_nr = _tfd_outputs / "NOT_READY.md"
                     _tfd_nr.write_text(
-                        f"# NOT_READY\n\ngate: TRANSLATION_DELIVERY_HARD\n"
+                        f"# NOT_READY\n\ngate: {_tfd_gate}\n"
                         f"run_id: {_tfd_run_id}\n"
                         f"reason: {_tfd_result}\n",
                         encoding="utf-8",
@@ -8994,6 +9002,7 @@ def run_pipeline() -> None:
                         "Translation-First FAIL-fast: %s — NOT_READY.md written; artifacts removed",
                         _tfd_result,
                     )
+                    sys.exit(1)
                 else:
                     # Translation succeeded → overwrite deliverables with ZH
                     _tfd_zh = _tfd_result
@@ -9086,7 +9095,7 @@ def run_pipeline() -> None:
                     success=False,
                     fail_reason="TRANSLATION_FAILED: source latest_brief.md is empty",
                 )
-        elif not _tfd_skip:
+        else:
             # latest_brief.md not produced → write meta indicating skip
             _write_translation_meta(
                 run_id=_tfd_run_id,
