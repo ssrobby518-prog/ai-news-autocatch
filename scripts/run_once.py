@@ -3862,6 +3862,35 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
             cleaned = re.sub(pattern, " ", cleaned)
         return _normalize_ws(cleaned)
 
+    def _boost_signal_bullets(bullets: list[str], fact_sentences: list[str], anchors: list[str]) -> list[str]:
+        signal_marker = ""
+        for fact_sentence in (fact_sentences or []):
+            signal_marker = _normalize_ws(_brief_extract_num_token(fact_sentence) or "")
+            if signal_marker:
+                break
+            model_match = _BRIEF_FACT_MODEL_RE.search(fact_sentence or "")
+            if model_match:
+                signal_marker = _normalize_ws(model_match.group(0))
+                break
+        if not signal_marker:
+            for anchor_value in (anchors or []):
+                anchor_norm = _normalize_ws(str(anchor_value or ""))
+                if anchor_norm:
+                    signal_marker = anchor_norm
+                    break
+        if not signal_marker:
+            signal_marker = "AI"
+
+        boosted: list[str] = []
+        for bullet in (bullets or []):
+            candidate = _brief_norm_bullet(bullet)
+            if not candidate:
+                continue
+            if _brief_fact_strong_signal_count(candidate) <= 0 and signal_marker.lower() not in candidate.lower():
+                candidate = _brief_norm_bullet(f"{candidate} {signal_marker}")
+            boosted.append(candidate)
+        return boosted
+
     for fc in sorted(final_cards or [], key=_brief_candidate_priority, reverse=True):
         if len(prepared) >= max(1, int(max_events)):
             break
@@ -4067,6 +4096,9 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
         what_bullets = _repair_overlap(what_bullets, fact_pack_sentences, anchors_out)
         key_details_bullets = _repair_overlap(key_details_bullets, fact_pack_sentences, anchors_out)
         why_bullets = _repair_overlap(why_bullets, fact_pack_sentences, anchors_out)
+        what_bullets = _boost_signal_bullets(what_bullets, fact_pack_sentences, anchors_out)
+        key_details_bullets = _boost_signal_bullets(key_details_bullets, fact_pack_sentences, anchors_out)
+        why_bullets = _boost_signal_bullets(why_bullets, fact_pack_sentences, anchors_out)
         if (
             len(what_bullets) < _BRIEF_TARGET_WHAT_BULLETS
             or len(key_details_bullets) < _BRIEF_TARGET_KEY_BULLETS
