@@ -3134,6 +3134,38 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
             break
         title = _normalize_ws(str(fc.get("title", "") or ""))
         actor = _normalize_ws(str(fc.get("actor_primary", "") or fc.get("actor", "") or ""))
+        _actor_was_generic = False
+        _actor_lc = actor.lower()
+        _generic_actor_tokens = {
+            "article",
+            "article url",
+            "comments",
+            "comments url",
+            "url",
+            "post",
+            "thread",
+            "story",
+        }
+        if _actor_lc in _generic_actor_tokens or "url" in _actor_lc:
+            _derived_actor = ""
+            _ai_chat_match = re.search(r"\bAI\s+chat\b", title, re.IGNORECASE)
+            if _ai_chat_match:
+                _derived_actor = _ai_chat_match.group(0)
+            if not _derived_actor:
+                _named_actor_match = re.search(
+                    r"\b(?:OpenAI|Anthropic|NVIDIA|Google|Microsoft|Meta|Amazon|AWS|"
+                    r"Klarna|Salesforce|Claude(?:\s+Code)?|Gemini|Copilot|DeepSeek|Qwen)\b"
+                    r"(?:\s+[A-Za-z][A-Za-z0-9+._-]{2,})?",
+                    title,
+                    re.IGNORECASE,
+                )
+                if _named_actor_match:
+                    _derived_actor = _named_actor_match.group(0)
+            if not _derived_actor and re.search(r"\bAI\b", title, re.IGNORECASE):
+                _derived_actor = "AI"
+            if _derived_actor:
+                actor = _normalize_ws(_derived_actor)
+                _actor_was_generic = True
         source_name = _normalize_ws(str(fc.get("source_name", "") or ""))
         final_url = _normalize_ws(str(fc.get("final_url", "") or fc.get("source_url", "") or ""))
         if _is_tier_a_source(source_name, final_url, title):
@@ -3149,7 +3181,11 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
             for a in (fc.get("anchors", []) or [])
             if _normalize_ws(str(a or ""))
         ]
-        anchor = _brief_pick_primary_anchor(actor, anchors_raw) or actor or title[:24] or "AI"
+        anchor = (
+            actor
+            if _actor_was_generic
+            else (_brief_pick_primary_anchor(actor, anchors_raw) or actor or title[:24] or "AI")
+        )
         anchors_out = [anchor] + [a for a in anchors_raw if a.lower() != anchor.lower()]
         quote_1 = _clip_text(_normalize_ws(str(fc.get("quote_1", "") or "")), 180)
         quote_2 = _clip_text(_normalize_ws(str(fc.get("quote_2", "") or "")), 180)
