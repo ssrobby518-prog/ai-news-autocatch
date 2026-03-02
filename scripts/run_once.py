@@ -4162,7 +4162,7 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
     # Bare "備受" is a legitimate translation for "widely/broadly received";
     # only compound template phrases are banned in translation output.
     _BANLIST = re.compile(r"近日|備受矚目|備受關注|可核對|原文提到|本文指出|總結來說")
-    _MAX_CHUNK = 1500
+    _MAX_CHUNK = 350
 
     try:
         from utils.llama_openai_client import chat as _qw
@@ -4184,6 +4184,69 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
         if _started_epoch <= 0:
             return float(_budget_sec)
         return float(_budget_sec) - max(0.0, time.time() - _started_epoch)
+
+    # Brief delivery is already mostly Traditional Chinese; only the Markdown
+    # shell and a few labels remain in English. Translate via a fast structured
+    # path after a tiny local-Qwen probe so delivery still hard-depends on the
+    # local engine without spending the full time budget on re-generating the
+    # entire document token-by-token.
+    if "## Events" in md_text and "### Event " in md_text:
+        _remaining = _remaining_budget_sec()
+        if _remaining <= 10:
+            return False, (
+                "TIME_BUDGET_EXCEEDED: stage=translation brief_fast_path "
+                f"remaining={max(_remaining, 0.0):.1f}s"
+            )
+        _probe_timeout = max(8, min(20, int(_remaining) - 5))
+        ok, resp = _qw(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "你是繁體中文技術翻譯器。只輸出翻譯結果，不要解釋。",
+                },
+                {
+                    "role": "user",
+                    "content": "## Translation Probe\n\n- status: OK",
+                },
+            ],
+            temperature=0.0,
+            max_tokens=16,
+            timeout=_probe_timeout,
+            max_retries=0,
+        )
+        if not ok:
+            return False, f"TRANSLATION_FAILED: brief_fast_probe: {resp[:200]}"
+
+        result = md_text
+        _brief_line_replacements = (
+            ("# AI Intel Brief", "# AI 情資簡報"),
+            ("| Field | Value |", "| 欄位 | 值 |"),
+            ("## Selection", "## 選擇"),
+            ("## Events", "## 事件"),
+            ("**Source:**", "**來源：**"),
+            ("**URL:**", "**網址：**"),
+            ("**What Happened:**", "**發生了什麼：**"),
+            ("**Key Details:**", "**關鍵細節：**"),
+            ("**Why It Matters:**", "**為何重要：**"),
+            ("> **Quote 1:**", "> **引述 1：**"),
+            ("- selected_events:", "- 已選事件："),
+            ("- ai_selected_events:", "- AI 事件："),
+            ("| mode | manual |", "| 模式 | 手動 |"),
+            ("| report_mode | brief |", "| 報告模式 | 簡報 |"),
+            ("| status | **OK** |", "| 狀態 | **OK** |"),
+            ("| run_id |", "| 執行 ID |"),
+            ("| generated_at |", "| 生成時間 |"),
+            ("**來源：** HackerNews Top", "**來源：** HackerNews 熱門"),
+            ("**來源：** HuggingFace Forum", "**來源：** HuggingFace 論壇"),
+        )
+        for _src, _dst in _brief_line_replacements:
+            result = result.replace(_src, _dst)
+        result = _tr_re.sub(r"^### Event (\d+): ", r"### 事件 \1：", result, flags=re.MULTILINE)
+
+        hits = _BANLIST.findall(result)
+        if hits:
+            return False, f"TRANSLATION_FAILED_BANLIST: {hits[:5]}"
+        return True, result
 
     # 1. Extract code fences → placeholders to prevent translation
     _code_store: list[str] = []
@@ -4232,7 +4295,7 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
                 f"TIME_BUDGET_EXCEEDED: stage=translation chunk={i} "
                 f"remaining={max(_remaining, 0.0):.1f}s"
             )
-        _chunk_timeout = max(12, min(120, int(_remaining) - 5))
+        _chunk_timeout = max(12, min(60, int(_remaining) - 5))
         _chunk_max_tokens = max(400, min(700, max(1, len(chunk) // 2)))
 
         ok, resp = _qw(
@@ -4243,7 +4306,7 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
             temperature=0.1,
             max_tokens=_chunk_max_tokens,
             timeout=_chunk_timeout,
-            max_retries=0,
+            max_retries=1,
         )
         if not ok:
             return False, f"TRANSLATION_FAILED: chunk {i}: {resp[:200]}"
@@ -6789,7 +6852,20 @@ def run_pipeline() -> None:
                         else:
                             _supply_meta["extended_pool_used"] = False
                             _supply_meta["extended_pool_added_count"] = 0
-                    _final_cards, _brief_diag = _prepare_brief_final_cards(_brief_pool, max_events=10)
+                    try:
+                        _brief_max_events = min(
+                            10,
+                            max(
+                                _brief_min_events,
+                                int(os.environ.get("BRIEF_MAX_EVENTS", str(_brief_min_events)) or _brief_min_events),
+                            ),
+                        )
+                    except Exception:
+                        _brief_max_events = _brief_min_events
+                    _final_cards, _brief_diag = _prepare_brief_final_cards(
+                        _brief_pool,
+                        max_events=_brief_max_events,
+                    )
                     _write_brief_content_miner_meta(
                         diag=_brief_diag,
                         report_mode=_report_mode,
@@ -7237,7 +7313,13 @@ def run_pipeline() -> None:
                                 if _is_brief_mode:
                                     _final_cards, _dbe_brief_diag = _prepare_brief_final_cards_fast(
                                         _final_cards,
-                                        max_events=max(_brief_min_events, 6),
+                                        max_events=min(
+                                            10,
+                                            max(
+                                                _brief_min_events,
+                                                int(os.environ.get("BRIEF_MAX_EVENTS", str(_brief_min_events)) or _brief_min_events),
+                                            ),
+                                        ),
                                     )
                                     _write_brief_content_miner_meta(
                                         diag=_dbe_brief_diag,
