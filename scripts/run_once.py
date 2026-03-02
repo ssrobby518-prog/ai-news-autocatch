@@ -3209,8 +3209,12 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
         out["summary_zh"] = _normalize_ws(f"{title}：{anchor} 已更新協議、模型與評估重點。")
         out["what_happened_brief"] = what_bullets[0]
         out["why_it_matters_brief"] = why_bullets[0]
-        out["q1_zh"] = _normalize_ws(str(fc.get("q1_zh", "") or "")) or _normalize_ws(f"{what_bullets[0]} 「{quote_window_1}」")
-        out["q2_zh"] = _normalize_ws(str(fc.get("q2_zh", "") or "")) or _normalize_ws(f"{why_bullets[0]} 「{quote_window_2}」")
+        out["q1_zh"] = _normalize_ws(
+            f"{anchor} 已揭露協議、模型與評估更新，關鍵引文是「{quote_window_1}」，目前可直接追蹤部署節點。"
+        )
+        out["q2_zh"] = _normalize_ws(
+            f"{anchor} 的後續影響集中在供應、法遵與採購節奏，對應引文「{quote_window_2}」，需在 7 天內處理。"
+        )
         out["q1"] = out["q1_zh"]
         out["q2"] = out["q2_zh"]
         out["what_happened"] = out["q1_zh"]
