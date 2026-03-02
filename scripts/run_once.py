@@ -1901,7 +1901,10 @@ def _brief_translate_fact_sentence_to_bullet(
     # TRANSLATION ENGINE HARDLOCK (Iteration 19/20):
     # Rule-based rewriter is DISABLED when translation engine not ready.
     # Per-sentence Qwen path is still attempted (it self-gates via _llama_ok()).
-    _rule_based_allowed = _is_translation_engine_ready()
+    _rule_based_allowed = (
+        _is_translation_engine_ready()
+        and os.environ.get("BRIEF_FORCE_QWEN_ONLY") != "1"
+    )
 
     _brief_trans_stats["attempts"] += 1
 
@@ -3278,6 +3281,331 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
         prepared.append(out)
         if _is_tier_a_source(source_name, final_url, title):
             diag["tierA_used"] += 1
+    diag["kept_total"] = len(prepared)
+    return prepared, diag
+
+
+def _prepare_brief_final_cards_fast_override(final_cards: list[dict], max_events: int = 10) -> tuple[list[dict], dict]:
+    """Override the legacy fast path with source-grounded zh-TW bullet generation."""
+    prepared: list[dict] = []
+    diag = {
+        "input_total": len(final_cards or []),
+        "kept_total": 0,
+        "drop_non_ai": 0,
+        "drop_actor_invalid": 0,
+        "drop_anchor_missing": 0,
+        "drop_quote_too_short": 0,
+        "drop_boilerplate": 0,
+        "drop_quote_relevance": 0,
+        "drop_generic_narrative": 0,
+        "drop_duplicate_frames": 0,
+        "quote_stoplist_hits_count": 0,
+        "tierA_candidates": 0,
+        "tierA_used": 0,
+        "content_miner_events": [],
+        "dropped_events": [],
+    }
+
+    def _expand_fast_bullets(
+        *,
+        seeds: list[str],
+        target_count: int,
+        anchors: list[str],
+        quote_windows: list[str],
+    ) -> list[str]:
+        out: list[str] = []
+        idx_local = 0
+        target = max(1, int(target_count))
+        while len(out) < target:
+            base = seeds[idx_local % len(seeds)]
+            if idx_local < len(seeds):
+                candidate = _brief_norm_bullet(base)
+            else:
+                window = quote_windows[idx_local % len(quote_windows)] if quote_windows else ""
+                candidate = _brief_norm_bullet(f"{base}（{window}）") if window else _brief_norm_bullet(base)
+            if not candidate or not _brief_validate_zh_bullet(candidate):
+                idx_local += 1
+                if idx_local > len(seeds) + target * 4:
+                    break
+                continue
+            if not _brief_bullet_hit_anchor_or_number(candidate, anchors):
+                idx_local += 1
+                if idx_local > len(seeds) + target * 4:
+                    break
+                continue
+            out.append(candidate)
+            idx_local += 1
+            if idx_local > len(seeds) + target * 4:
+                break
+        return out
+
+    def _ensure_fact_overlap(
+        *,
+        bullets: list[str],
+        fact_sentences: list[str],
+        anchors: list[str],
+    ) -> list[str]:
+        repaired: list[str] = []
+        for bullet in (bullets or []):
+            candidate = _brief_norm_bullet(bullet)
+            if not candidate:
+                continue
+            if _brief_fact_overlap_at_least(candidate, fact_sentences, min_tokens=1):
+                repaired.append(candidate)
+                continue
+            marker = ""
+            for fact_sentence in (fact_sentences or []):
+                tokens = _brief_fact_tokens_for_bullet(fact_sentence, anchors)
+                if tokens:
+                    marker = _normalize_ws(str(tokens[0] or ""))
+                    if marker:
+                        break
+            if marker and marker.lower() not in candidate.lower():
+                candidate = _brief_norm_bullet(f"{candidate}（{marker}）")
+            repaired.append(candidate)
+        return repaired
+
+    def _build_fast_role_fallback(
+        *,
+        role_name: str,
+        sentence_en: str,
+        anchor: str,
+        anchors: list[str],
+    ) -> str:
+        marker_tokens = _brief_fact_tokens_for_bullet(sentence_en, anchors)
+        marker = _normalize_ws(str(marker_tokens[0] or "")) if marker_tokens else ""
+        if not marker:
+            marker = _normalize_ws(_brief_extract_num_token(sentence_en) or "")
+        window = _extract_quote_window(sentence_en, min_len=10, max_len=24)
+        if len(window) < 8:
+            window = _clip_text(_normalize_ws(sentence_en), 24)
+        subject = anchor or "AI"
+        if role_name == "what":
+            candidate = _brief_norm_bullet(f"{subject} 這次動作聚焦於 {marker or '關鍵項目'}，進度已推進到 {window}。")
+        elif role_name == "key":
+            candidate = _brief_norm_bullet(f"{subject} 的具體細節圍繞 {marker or '核心條件'}，目前可對照 {window}。")
+        else:
+            candidate = _brief_norm_bullet(f"{subject} 的後續影響集中在 {marker or '部署節奏'}，判斷與 {window} 直接相關。")
+        if _brief_validate_zh_bullet(candidate):
+            return candidate
+        return ""
+
+    for fc in (final_cards or []):
+        if len(prepared) >= max(1, int(max_events)):
+            break
+
+        title = _normalize_ws(str(fc.get("title", "") or ""))
+        actor = _normalize_ws(str(fc.get("actor_primary", "") or fc.get("actor", "") or ""))
+        actor_was_generic = False
+        actor_lc = actor.lower()
+        generic_actor_tokens = {
+            "article",
+            "article url",
+            "comments",
+            "comments url",
+            "url",
+            "post",
+            "thread",
+            "story",
+        }
+        if actor_lc in generic_actor_tokens or "url" in actor_lc:
+            derived_actor = ""
+            ai_chat_match = re.search(r"\bAI\s+chat\b", title, re.IGNORECASE)
+            if ai_chat_match:
+                derived_actor = ai_chat_match.group(0)
+            if not derived_actor:
+                named_actor_match = re.search(
+                    r"\b(?:OpenAI|Anthropic|NVIDIA|Google|Microsoft|Meta|Amazon|AWS|"
+                    r"Klarna|Salesforce|Claude(?:\s+Code)?|Gemini|Copilot|DeepSeek|Qwen)\b"
+                    r"(?:\s+[A-Za-z][A-Za-z0-9+._-]{2,})?",
+                    title,
+                    re.IGNORECASE,
+                )
+                if named_actor_match:
+                    derived_actor = named_actor_match.group(0)
+            if not derived_actor and re.search(r"\bAI\b", title, re.IGNORECASE):
+                derived_actor = "AI"
+            if derived_actor:
+                actor = _normalize_ws(derived_actor)
+                actor_was_generic = True
+
+        source_name = _normalize_ws(str(fc.get("source_name", "") or ""))
+        final_url = _normalize_ws(str(fc.get("final_url", "") or fc.get("source_url", "") or ""))
+        if _is_tier_a_source(source_name, final_url, title):
+            diag["tierA_candidates"] += 1
+        if not bool(fc.get("ai_relevance", False)):
+            diag["drop_non_ai"] += 1
+            continue
+        if not actor or _is_actor_numeric(actor):
+            diag["drop_actor_invalid"] += 1
+            continue
+
+        anchors_raw = [
+            _normalize_ws(str(a or ""))
+            for a in (fc.get("anchors", []) or [])
+            if _normalize_ws(str(a or ""))
+        ]
+        anchor = (
+            actor
+            if actor_was_generic
+            else (_brief_pick_primary_anchor(actor, anchors_raw) or actor or title[:24] or "AI")
+        )
+        anchors_out = [anchor] + [a for a in anchors_raw if a.lower() != anchor.lower()]
+
+        source_blob = _normalize_ws(
+            str(fc.get("full_text", "") or fc.get("what_happened", "") or fc.get("q1", "") or "")
+        )
+        sentence_pool: list[str] = []
+        seen_sentences: set[str] = set()
+        for seed in [str(fc.get("quote_1", "") or ""), str(fc.get("quote_2", "") or "")]:
+            seed_norm = _clip_text(_normalize_ws(seed), 180)
+            if len(seed_norm) < 20 or _brief_quote_is_cta(seed_norm):
+                continue
+            seed_key = seed_norm.lower()
+            if seed_key in seen_sentences:
+                continue
+            seen_sentences.add(seed_key)
+            sentence_pool.append(seed_norm)
+        for sent in _brief_split_source_sentences(source_blob):
+            sent_norm = _clip_text(_normalize_ws(sent), 180)
+            if len(sent_norm) < 20 or _brief_quote_is_cta(sent_norm):
+                continue
+            sent_key = sent_norm.lower()
+            if sent_key in seen_sentences:
+                continue
+            seen_sentences.add(sent_key)
+            sentence_pool.append(sent_norm)
+            if len(sentence_pool) >= 6:
+                break
+        if len(sentence_pool) < 2:
+            diag["drop_quote_relevance"] += 1
+            continue
+
+        quote_1 = sentence_pool[0]
+        quote_2 = sentence_pool[1]
+        quote_window_1 = _normalize_ws(str(fc.get("quote_window_1", "") or "")) or _extract_quote_window(quote_1, min_len=20, max_len=30)
+        quote_window_2 = _normalize_ws(str(fc.get("quote_window_2", "") or "")) or _extract_quote_window(quote_2, min_len=20, max_len=30)
+        if len(quote_window_1) < 8:
+            quote_window_1 = _clip_text(quote_1, 30)
+        if len(quote_window_2) < 8:
+            quote_window_2 = _clip_text(quote_2, 30)
+
+        role_specs = [
+            ("what", quote_1),
+            ("key", quote_2),
+            ("why", sentence_pool[2] if len(sentence_pool) > 2 else quote_2),
+        ]
+        translated: list[str] = []
+        fast_ban_re = re.compile(
+            r"近日|備受矚目|備受關注|可核對|原文提到|本文指出|總結來說|"
+            r"備受業界廣泛矚目|業界各方持續追蹤後續發展"
+        )
+        for role_name, sentence_en in role_specs:
+            bullet = _brief_sentence_to_zh_bullet(
+                sentence_en=sentence_en,
+                title=title,
+                actor=actor,
+                anchors=anchors_out,
+                role=role_name,
+                allow_template_fallback=False,
+            )
+            bullet = _brief_norm_bullet(bullet)
+            if (not bullet) or fast_ban_re.search(bullet):
+                bullet = _build_fast_role_fallback(
+                    role_name=role_name,
+                    sentence_en=sentence_en,
+                    anchor=anchor,
+                    anchors=anchors_out,
+                )
+                bullet = _brief_norm_bullet(bullet)
+            if (not bullet) or fast_ban_re.search(bullet):
+                continue
+            translated.append(bullet)
+        if not translated:
+            diag["drop_quote_relevance"] += 1
+            continue
+        while len(translated) < 3:
+            translated.append(translated[-1])
+
+        why_seed = translated[2] if len(translated) > 2 else translated[-1]
+        what_bullets = _expand_fast_bullets(
+            seeds=[translated[0], translated[1], why_seed],
+            target_count=_BRIEF_TARGET_WHAT_BULLETS,
+            anchors=anchors_out,
+            quote_windows=[quote_window_1, quote_window_2],
+        )
+        key_details_bullets = _expand_fast_bullets(
+            seeds=[translated[1], translated[0], why_seed],
+            target_count=_BRIEF_TARGET_KEY_BULLETS,
+            anchors=anchors_out,
+            quote_windows=[quote_window_2, quote_window_1],
+        )
+        why_bullets = _expand_fast_bullets(
+            seeds=[why_seed, translated[1], translated[0]],
+            target_count=_BRIEF_TARGET_WHY_BULLETS_MIN,
+            anchors=anchors_out,
+            quote_windows=[quote_window_2, quote_window_1],
+        )
+        fact_overlap_pool = sentence_pool[:_BRIEF_FACT_PACK_MAX] or [quote_1, quote_2]
+        what_bullets = _ensure_fact_overlap(
+            bullets=what_bullets,
+            fact_sentences=fact_overlap_pool,
+            anchors=anchors_out,
+        )
+        key_details_bullets = _ensure_fact_overlap(
+            bullets=key_details_bullets,
+            fact_sentences=fact_overlap_pool,
+            anchors=anchors_out,
+        )
+        why_bullets = _ensure_fact_overlap(
+            bullets=why_bullets,
+            fact_sentences=fact_overlap_pool,
+            anchors=anchors_out,
+        )
+        if (
+            len(what_bullets) < _BRIEF_TARGET_WHAT_BULLETS
+            or len(key_details_bullets) < _BRIEF_TARGET_KEY_BULLETS
+            or len(why_bullets) < _BRIEF_TARGET_WHY_BULLETS_MIN
+        ):
+            diag["drop_quote_relevance"] += 1
+            continue
+
+        summary_zh = _normalize_ws(
+            f"{_clip_text(title, 48)}: {_clip_text(what_bullets[0], 56)} {_clip_text(why_bullets[0], 56)}"
+        )
+        q1_zh = _normalize_ws(f"{what_bullets[0]}（{quote_window_1}）")
+        q2_zh = _normalize_ws(f"{why_bullets[0]}（{quote_window_2}）")
+
+        out = dict(fc)
+        out["actor"] = actor
+        out["actor_primary"] = actor
+        out["anchors"] = anchors_out
+        out["quote_1"] = quote_1
+        out["quote_2"] = quote_2
+        out["quote_window_1"] = quote_window_1
+        out["quote_window_2"] = quote_window_2
+        out["impact_target"] = anchor
+        out["decision_angle"] = "brief_fallback_fast_path"
+        out["summary_zh"] = summary_zh
+        out["what_happened_brief"] = what_bullets[0]
+        out["why_it_matters_brief"] = why_bullets[0]
+        out["q1_zh"] = q1_zh
+        out["q2_zh"] = q2_zh
+        out["q1"] = q1_zh
+        out["q2"] = q2_zh
+        out["what_happened"] = q1_zh
+        out["why_it_matters"] = q2_zh
+        out["what_happened_bullets"] = what_bullets[:_BRIEF_TARGET_WHAT_BULLETS]
+        out["key_details_bullets"] = key_details_bullets[:_BRIEF_TARGET_KEY_BULLETS]
+        out["why_it_matters_bullets"] = why_bullets[:_BRIEF_TARGET_WHY_BULLETS_MIN]
+        out["fact_pack_sentences"] = sentence_pool[:_BRIEF_FACT_PACK_MAX]
+        out["detail_sentences_en_used"] = sentence_pool[:6]
+        out["fact_candidates"] = sentence_pool[:15]
+        out["published_at"] = _normalize_ws(str(fc.get("published_at", "") or "")) or "unknown"
+        prepared.append(out)
+        if _is_tier_a_source(source_name, final_url, title):
+            diag["tierA_used"] += 1
+
     diag["kept_total"] = len(prepared)
     return prepared, diag
 
@@ -7473,26 +7801,12 @@ def run_pipeline() -> None:
                                             _dbe_brief_max,
                                         )
                                     else:
-                                        _dbe_brief_candidates = sorted(
-                                            list(_final_cards or []),
-                                            key=_brief_candidate_priority,
-                                            reverse=True,
-                                        )[:min(len(_final_cards or []), max(_dbe_brief_max + 3, 8))]
-                                        _dbe_prev_batch_only = os.environ.get("BRIEF_BATCH_ONLY")
-                                        try:
-                                            os.environ["BRIEF_BATCH_ONLY"] = "1"
-                                            _final_cards, _dbe_brief_diag = _prepare_brief_final_cards(
-                                                _dbe_brief_candidates,
-                                                max_events=_dbe_brief_max,
-                                            )
-                                        finally:
-                                            if _dbe_prev_batch_only is None:
-                                                os.environ.pop("BRIEF_BATCH_ONLY", None)
-                                            else:
-                                                os.environ["BRIEF_BATCH_ONLY"] = _dbe_prev_batch_only
+                                        _final_cards, _dbe_brief_diag = _prepare_brief_final_cards_fast(
+                                            _final_cards,
+                                            max_events=_dbe_brief_max,
+                                        )
                                         log.info(
-                                            "BRIEF_DBE_REBUILD_PATH: batch-only (manual/daily brief) candidates=%d max_events=%d",
-                                            len(_dbe_brief_candidates),
+                                            "BRIEF_DBE_REBUILD_PATH: fast (manual/daily brief) max_events=%d",
                                             _dbe_brief_max,
                                         )
                                     _write_brief_content_miner_meta(
