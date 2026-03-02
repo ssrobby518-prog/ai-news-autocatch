@@ -200,13 +200,13 @@ if (-not $IsSuccess) {
 # ?? Collect produced files for summary ???????????????????????????????????????
 $ProducedList = @()
 if ($IsSuccess) {
-    foreach ($Name in @("executive_report.docx", "executive_report.pptx", "latest_brief.md")) {
+    foreach ($Name in @("latest_brief.md", "executive_report.docx", "executive_report.pptx")) {
         if (Test-Path (Join-Path $OutputsDir $Name)) {
             $ProducedList += "outputs\$Name"
         }
     }
 } else {
-    foreach ($Name in @("NOT_READY_report.docx", "NOT_READY_report.pptx", "NOT_READY_report.md")) {
+    foreach ($Name in @("NOT_READY_report.md", "NOT_READY_report.docx", "NOT_READY_report.pptx")) {
         if (Test-Path (Join-Path $OutputsDir $Name)) {
             $ProducedList += "outputs\$Name"
         }

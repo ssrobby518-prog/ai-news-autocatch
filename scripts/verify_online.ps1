@@ -24,6 +24,10 @@ $_voRunId = (Get-Date -Format "yyyyMMdd_HHmmss")
 $_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 600 }
 $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
+$env:PIPELINE_REPORT_MODE    = "brief"
+$env:BRIEF_ONLY              = "1"
+$env:SKIP_DEEP_ANALYSIS      = "1"
+$env:SKIP_EDUCATION_RENDERER = "1"
 
 function Invoke-VerifyOnlineFailFast {
     param(
@@ -610,7 +614,8 @@ $env:SKIP_EDUCATION_RENDERER = "1"
 
 Write-Output "[3/3] 執行 verify_run.ps1（離線，讀取 Z0 JSONL）..."
 Write-Output ""
-$_verifyRunLogPath = Join-Path $repoRoot "outputs\verify_run.latest.log"
+$_verifyRunLatestPath = Join-Path $repoRoot "outputs\verify_run.latest.log"
+$_verifyRunLogPath = Join-Path $repoRoot ("outputs\verify_run.{0}.log" -f $_voRunId)
 $_prevVerifyRunEap = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 try {
@@ -621,6 +626,11 @@ try {
     $exitCode = $LASTEXITCODE
 } finally {
     $ErrorActionPreference = $_prevVerifyRunEap
+}
+try {
+    Copy-Item -LiteralPath $_verifyRunLogPath -Destination $_verifyRunLatestPath -Force
+} catch {
+    Write-Output ("[verify_online] WARN: 無法更新 verify_run.latest.log（使用本次執行記錄）: {0}" -f $_.Exception.Message)
 }
 
 $env:Z0_ENABLED            = $null

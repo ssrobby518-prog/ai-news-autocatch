@@ -314,7 +314,9 @@ $docxBannedHits = 0
 $pptxBannedHits = 0
 
 # Check banned words in Notion page (plain text) — skip on sparse day if file absent
-if ((Test-Path "outputs\notion_page.md") -or -not $vrSparseDay) {
+if ($env:BRIEF_ONLY -eq "1") {
+    Write-Host "  SKIP: notion_page.md 掃描 (BRIEF_ONLY=1；brief 路徑不產生 Notion 檔)" -ForegroundColor Yellow
+} elseif ((Test-Path "outputs\notion_page.md") -or -not $vrSparseDay) {
     $notionContent = Get-Content "outputs\notion_page.md" -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
     if ($notionContent) {
         foreach ($bw in $bannedWords) {
