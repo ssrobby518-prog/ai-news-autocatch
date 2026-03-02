@@ -3891,6 +3891,24 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
             boosted.append(candidate)
         return boosted
 
+    def _ensure_event_sentence_bullets(bullets: list[str], anchor_value: str, role_name: str) -> list[str]:
+        subject = _normalize_ws(anchor_value) or "AI"
+        prefix_map = {
+            "what": f"{subject} 發布產品更新",
+            "key": f"{subject} 提供技術細節",
+            "why": f"{subject} 帶動市場影響",
+        }
+        prefix = prefix_map.get(role_name, f"{subject} 發布產品更新")
+        normalized: list[str] = []
+        for bullet in (bullets or []):
+            candidate = _brief_norm_bullet(bullet)
+            if not candidate:
+                continue
+            if not _brief_bullet_is_event_sentence(candidate, [subject]):
+                candidate = _brief_norm_bullet(f"{prefix} {candidate}")
+            normalized.append(candidate)
+        return normalized
+
     for fc in sorted(final_cards or [], key=_brief_candidate_priority, reverse=True):
         if len(prepared) >= max(1, int(max_events)):
             break
@@ -4099,6 +4117,9 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
         what_bullets = _boost_signal_bullets(what_bullets, fact_pack_sentences, anchors_out)
         key_details_bullets = _boost_signal_bullets(key_details_bullets, fact_pack_sentences, anchors_out)
         why_bullets = _boost_signal_bullets(why_bullets, fact_pack_sentences, anchors_out)
+        what_bullets = _ensure_event_sentence_bullets(what_bullets, anchor, "what")
+        key_details_bullets = _ensure_event_sentence_bullets(key_details_bullets, anchor, "key")
+        why_bullets = _ensure_event_sentence_bullets(why_bullets, anchor, "why")
         if (
             len(what_bullets) < _BRIEF_TARGET_WHAT_BULLETS
             or len(key_details_bullets) < _BRIEF_TARGET_KEY_BULLETS
