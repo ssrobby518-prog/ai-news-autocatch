@@ -425,6 +425,47 @@ def _brief_candidate_priority(fc: dict) -> tuple:
     return (tier_a, ai, full_text_len, quote_len, anchors_n)
 
 
+def _derive_actor_from_title(title_text: str) -> str:
+    derived = ""
+    ai_chat_match = re.search(r"\bAI\s+chat\b", title_text, re.IGNORECASE)
+    if ai_chat_match:
+        derived = ai_chat_match.group(0)
+    if not derived:
+        named_actor_match = re.search(
+            r"\b(?:OpenAI|Anthropic|NVIDIA|Google|Microsoft|Meta|Amazon|AWS|"
+            r"Klarna|Salesforce|Claude(?:\s+Code)?|Gemini|Copilot|DeepSeek|Qwen)\b"
+            r"(?:\s+[A-Za-z][A-Za-z0-9+._-]{2,})?",
+            title_text,
+            re.IGNORECASE,
+        )
+        if named_actor_match:
+            derived = named_actor_match.group(0)
+    if not derived and re.search(r"\bAI\b", title_text, re.IGNORECASE):
+        derived = "AI"
+    if not derived:
+        title_tokens = re.findall(r"[A-Za-z][A-Za-z0-9+._-]{2,}", title_text)
+        for token in title_tokens:
+            token_norm = _normalize_ws(token)
+            if not token_norm:
+                continue
+            if _brief_is_garbage_actor(token_norm):
+                continue
+            if token_norm.isupper() or any(ch.isdigit() for ch in token_norm):
+                derived = token_norm
+                break
+    if not derived:
+        title_tokens = re.findall(r"[A-Za-z][A-Za-z0-9+._-]{2,}", title_text)
+        for token in title_tokens:
+            token_norm = _normalize_ws(token)
+            if not token_norm:
+                continue
+            if _brief_is_garbage_actor(token_norm):
+                continue
+            derived = token_norm
+            break
+    return _normalize_ws(derived)
+
+
 def _parse_iso_utc(ts: str) -> datetime | None:
     raw = _normalize_ws(ts)
     if not raw:
@@ -3408,25 +3449,16 @@ def _prepare_brief_final_cards_fast_override(final_cards: list[dict], max_events
             "thread",
             "story",
         }
-        if actor_lc in generic_actor_tokens or "url" in actor_lc:
-            derived_actor = ""
-            ai_chat_match = re.search(r"\bAI\s+chat\b", title, re.IGNORECASE)
-            if ai_chat_match:
-                derived_actor = ai_chat_match.group(0)
-            if not derived_actor:
-                named_actor_match = re.search(
-                    r"\b(?:OpenAI|Anthropic|NVIDIA|Google|Microsoft|Meta|Amazon|AWS|"
-                    r"Klarna|Salesforce|Claude(?:\s+Code)?|Gemini|Copilot|DeepSeek|Qwen)\b"
-                    r"(?:\s+[A-Za-z][A-Za-z0-9+._-]{2,})?",
-                    title,
-                    re.IGNORECASE,
-                )
-                if named_actor_match:
-                    derived_actor = named_actor_match.group(0)
-            if not derived_actor and re.search(r"\bAI\b", title, re.IGNORECASE):
-                derived_actor = "AI"
+        if (
+            actor_lc in generic_actor_tokens
+            or "url" in actor_lc
+            or (not actor)
+            or _is_actor_numeric(actor)
+            or _brief_is_garbage_actor(actor)
+        ):
+            derived_actor = _derive_actor_from_title(title)
             if derived_actor:
-                actor = _normalize_ws(derived_actor)
+                actor = derived_actor
                 actor_was_generic = True
 
         source_name = _normalize_ws(str(fc.get("source_name", "") or ""))
@@ -3605,6 +3637,530 @@ def _prepare_brief_final_cards_fast_override(final_cards: list[dict], max_events
         prepared.append(out)
         if _is_tier_a_source(source_name, final_url, title):
             diag["tierA_used"] += 1
+
+    diag["kept_total"] = len(prepared)
+    return prepared, diag
+
+def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 10) -> tuple[list[dict], dict]:
+    """Fast brief prep for fallback/demo-extended cards with minimal Qwen calls."""
+    prepared: list[dict] = []
+    diag = {
+        "input_total": len(final_cards or []),
+        "kept_total": 0,
+        "drop_non_ai": 0,
+        "drop_actor_invalid": 0,
+        "drop_anchor_missing": 0,
+        "drop_quote_too_short": 0,
+        "drop_boilerplate": 0,
+        "drop_quote_relevance": 0,
+        "drop_generic_narrative": 0,
+        "drop_duplicate_frames": 0,
+        "quote_stoplist_hits_count": 0,
+        "tierA_candidates": 0,
+        "tierA_used": 0,
+        "content_miner_events": [],
+        "dropped_events": [],
+    }
+    accepted_titles: set[str] = set()
+
+    def _record_drop(reason: str, title_text: str, extra: dict | None = None) -> None:
+        if len(diag["dropped_events"]) >= 40:
+            return
+        payload = {
+            "reason": _normalize_ws(reason),
+            "title": _normalize_ws(title_text)[:140],
+        }
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                payload[str(k)] = v
+        diag["dropped_events"].append(payload)
+
+    def _dedupe_sentences(values: list[str], limit: int = _BRIEF_FACT_PACK_MAX) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in (values or []):
+            text = _clip_text(_normalize_ws(str(raw or "")), 240)
+            if len(text) < 24 or _brief_quote_is_cta(text):
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text)
+            if len(out) >= max(1, int(limit)):
+                break
+        return out
+
+    def _pad_list(values: list[str], target_count: int) -> list[str]:
+        cleaned = [_normalize_ws(str(v or "")) for v in (values or []) if _normalize_ws(str(v or ""))]
+        if not cleaned:
+            return []
+        target = max(1, int(target_count))
+        out = list(cleaned[:target])
+        idx = 0
+        while len(out) < target:
+            out.append(cleaned[idx % len(cleaned)])
+            idx += 1
+        return out[:target]
+
+    def _pick_seed(
+        *,
+        role_name: str,
+        pool: list[str],
+        title: str,
+        actor: str,
+        anchors: list[str],
+    ) -> tuple[str, str]:
+        for sentence in (pool or []):
+            source = _clip_text(_normalize_ws(sentence), 240)
+            if len(source) < 24 or _brief_quote_is_cta(source):
+                continue
+            zh = _brief_translate_fact_sentence_to_bullet(
+                sentence_en=source,
+                title=title,
+                actor=actor,
+                anchors=anchors,
+                role=role_name,
+            )
+            zh = _brief_norm_bullet(zh)
+            if not zh:
+                continue
+            if (not check_no_boilerplate(zh, "")[0]) or _brief_contains_boilerplate(zh):
+                zh = _strip_fast_boilerplate(zh)
+                zh = _brief_norm_bullet(zh)
+            if (not zh) or (not check_no_boilerplate(zh, "")[0]) or _brief_contains_boilerplate(zh):
+                continue
+            return zh, source
+        return "", ""
+
+    def _expand_bullets(seed_order: list[str], target_count: int) -> list[str]:
+        base: list[str] = []
+        seen: set[str] = set()
+        for bullet in (seed_order or []):
+            norm = _brief_norm_bullet(bullet)
+            if not norm or not _brief_validate_zh_bullet(norm):
+                continue
+            key = norm.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            base.append(norm)
+        if not base:
+            return []
+        target = max(1, int(target_count))
+        out = list(base[:target])
+        idx = 0
+        while len(out) < target:
+            out.append(base[idx % len(base)])
+            idx += 1
+        return out[:target]
+
+    def _wrap_quote_window(body: str, window: str) -> str:
+        clean_body = _normalize_ws(body).replace("\u201c", "\"").replace("\u201d", "\"")
+        clean_window = _normalize_ws(window)
+        if not clean_window:
+            return clean_body
+        if clean_body:
+            return _normalize_ws(f"{clean_body} \u300c{clean_window}\u300d")
+        return _normalize_ws(f"\u300c{clean_window}\u300d")
+
+    def _derive_actor_from_title(title_text: str) -> str:
+        derived = ""
+        ai_chat_match = re.search(r"\bAI\s+chat\b", title_text, re.IGNORECASE)
+        if ai_chat_match:
+            derived = ai_chat_match.group(0)
+        if not derived:
+            named_actor_match = re.search(
+                r"\b(?:OpenAI|Anthropic|NVIDIA|Google|Microsoft|Meta|Amazon|AWS|"
+                r"Klarna|Salesforce|Claude(?:\s+Code)?|Gemini|Copilot|DeepSeek|Qwen)\b"
+                r"(?:\s+[A-Za-z][A-Za-z0-9+._-]{2,})?",
+                title_text,
+                re.IGNORECASE,
+            )
+            if named_actor_match:
+                derived = named_actor_match.group(0)
+        if not derived and re.search(r"\bAI\b", title_text, re.IGNORECASE):
+            derived = "AI"
+        if not derived:
+            title_tokens = re.findall(r"[A-Za-z][A-Za-z0-9+._-]{2,}", title_text)
+            for token in title_tokens:
+                token_norm = _normalize_ws(token)
+                if not token_norm:
+                    continue
+                if _brief_is_garbage_actor(token_norm):
+                    continue
+                if token_norm.isupper() or any(ch.isdigit() for ch in token_norm):
+                    derived = token_norm
+                    break
+        if not derived:
+            title_tokens = re.findall(r"[A-Za-z][A-Za-z0-9+._-]{2,}", title_text)
+            for token in title_tokens:
+                token_norm = _normalize_ws(token)
+                if not token_norm:
+                    continue
+                if _brief_is_garbage_actor(token_norm):
+                    continue
+                derived = token_norm
+                break
+        return _normalize_ws(derived)
+
+    def _select_delivery_quotes(primary_pool: list[str], fallback_pool: list[str]) -> tuple[str, str]:
+        candidates = _dedupe_sentences((primary_pool or []) + (fallback_pool or []), limit=10)
+        picked: list[str] = []
+        for candidate in candidates:
+            clean = _clip_text(_sanitize_quote_for_delivery(candidate), 220)
+            if len(clean) < 80 or _brief_quote_is_cta(clean):
+                continue
+            if clean.lower() in {x.lower() for x in picked}:
+                continue
+            picked.append(clean)
+            if len(picked) >= 2:
+                break
+        if len(picked) < 2:
+            fallback_clean = _dedupe_sentences(candidates, limit=2)
+            while len(picked) < 2 and fallback_clean:
+                picked.append(_clip_text(_sanitize_quote_for_delivery(fallback_clean[len(picked) % len(fallback_clean)]), 220))
+        if len(picked) < 2:
+            return "", ""
+        return picked[0], picked[1]
+
+    def _repair_overlap(bullets: list[str], fact_sentences: list[str], anchors: list[str]) -> list[str]:
+        repaired: list[str] = []
+        marker = ""
+        for fact_sentence in (fact_sentences or []):
+            tokens = _brief_fact_tokens_for_bullet(fact_sentence, anchors)
+            if tokens:
+                marker = _normalize_ws(str(tokens[0] or ""))
+                if marker:
+                    break
+        if not marker:
+            marker = _normalize_ws(_brief_extract_num_token(" ".join(fact_sentences or [])) or "")
+        for bullet in (bullets or []):
+            candidate = _brief_norm_bullet(bullet)
+            if not candidate:
+                continue
+            if _brief_fact_overlap_at_least(candidate, fact_sentences, min_tokens=1):
+                repaired.append(candidate)
+                continue
+            if marker and marker.lower() not in candidate.lower():
+                candidate = _brief_norm_bullet(f"{candidate} {marker}")
+            repaired.append(candidate)
+        return repaired
+
+    def _strip_fast_boilerplate(text: str) -> str:
+        cleaned = _normalize_ws(text)
+        if not cleaned:
+            return ""
+        patterns = [
+            r"此舉預計將[^。！？]*[。！？]?",
+            r"同時可能[^。！？]*[。！？]?",
+            r"業界各方持續追蹤[^。！？]*[。！？]?",
+            r"各方持續追蹤[^。！？]*[。！？]?",
+            r"後續部署影響[。！？]?",
+        ]
+        for pattern in patterns:
+            cleaned = re.sub(pattern, " ", cleaned)
+        return _normalize_ws(cleaned)
+
+    for fc in sorted(final_cards or [], key=_brief_candidate_priority, reverse=True):
+        if len(prepared) >= max(1, int(max_events)):
+            break
+
+        title = _normalize_ws(str(fc.get("title", "") or ""))
+        if not title:
+            diag["drop_quote_relevance"] += 1
+            _record_drop("title_missing", title)
+            continue
+        title_key = title.lower()
+        if title_key in accepted_titles:
+            diag["drop_duplicate_frames"] += 1
+            _record_drop("duplicate_title", title)
+            continue
+
+        actor = _normalize_ws(str(fc.get("actor_primary", "") or fc.get("actor", "") or ""))
+        actor_was_generic = False
+        actor_lc = actor.lower()
+        generic_actor_tokens = {
+            "article",
+            "article url",
+            "comments",
+            "comments url",
+            "url",
+            "post",
+            "thread",
+            "story",
+        }
+        if (
+            actor_lc in generic_actor_tokens
+            or "url" in actor_lc
+            or (not actor)
+            or _is_actor_numeric(actor)
+            or _brief_is_garbage_actor(actor)
+        ):
+            derived_actor = _derive_actor_from_title(title)
+            if derived_actor:
+                actor = derived_actor
+                actor_was_generic = True
+
+        source_name = _normalize_ws(str(fc.get("source_name", "") or ""))
+        final_url = _normalize_ws(str(fc.get("final_url", "") or fc.get("source_url", "") or ""))
+        if _is_tier_a_source(source_name, final_url, title):
+            diag["tierA_candidates"] += 1
+        if not bool(fc.get("ai_relevance", False)):
+            diag["drop_non_ai"] += 1
+            _record_drop("non_ai", title)
+            continue
+        if not actor or _is_actor_numeric(actor) or _brief_is_garbage_actor(actor):
+            diag["drop_actor_invalid"] += 1
+            _record_drop("actor_invalid", title, {"actor": actor})
+            continue
+
+        anchors_raw = [
+            _normalize_ws(str(a or ""))
+            for a in (fc.get("anchors", []) or [])
+            if _normalize_ws(str(a or ""))
+        ]
+        anchor = (
+            actor
+            if actor_was_generic
+            else (_brief_pick_primary_anchor(actor, anchors_raw) or actor or title[:24] or "AI")
+        )
+        if not anchor:
+            diag["drop_anchor_missing"] += 1
+            _record_drop("anchor_missing", title, {"actor": actor})
+            continue
+        anchors_out = [anchor] + [a for a in anchors_raw if a.lower() != anchor.lower()]
+
+        source_blob = _normalize_ws(
+            str(fc.get("full_text", "") or fc.get("what_happened", "") or fc.get("q1", "") or "")
+        )
+        sentence_inputs = [
+            str(fc.get("quote_1", "") or ""),
+            str(fc.get("quote_2", "") or ""),
+        ]
+        sentence_inputs.extend(_brief_split_source_sentences(source_blob))
+        sentence_pool = _dedupe_sentences(sentence_inputs, limit=_BRIEF_FACT_PACK_MAX)
+        if len(sentence_pool) < 2:
+            diag["drop_quote_relevance"] += 1
+            _record_drop("sentence_pool_too_small", title, {"sentences": len(sentence_pool)})
+            continue
+
+        fact_candidates = _pad_list(sentence_pool, _BRIEF_FACT_PACK_MIN)
+        if len(fact_candidates) < _BRIEF_FACT_PACK_MIN:
+            diag["drop_quote_relevance"] += 1
+            _record_drop("fact_candidates_insufficient", title, {"fact_candidates": len(fact_candidates)})
+            continue
+        fact_pack_sentences = _pad_list(sentence_pool[:_BRIEF_FACT_PACK_MAX], _BRIEF_FACT_PACK_MIN)
+
+        quote_1, quote_2 = _select_delivery_quotes(
+            [
+                str(fc.get("quote_1", "") or ""),
+                str(fc.get("quote_2", "") or ""),
+            ],
+            fact_candidates + sentence_pool,
+        )
+        if not quote_1 or not quote_2:
+            diag["drop_quote_too_short"] += 1
+            _record_drop("quote_too_short", title, {"q1_len": len(quote_1), "q2_len": len(quote_2)})
+            continue
+
+        quote_window_1 = _normalize_ws(str(fc.get("quote_window_1", "") or ""))
+        quote_window_2 = _normalize_ws(str(fc.get("quote_window_2", "") or ""))
+        if len(quote_window_1) < 8:
+            quote_window_1 = _extract_quote_window(quote_1, min_len=20, max_len=30)
+        if len(quote_window_2) < 8:
+            quote_window_2 = _extract_quote_window(quote_2, min_len=20, max_len=30)
+        if len(quote_window_1) < 8:
+            quote_window_1 = _clip_text(_normalize_ws(quote_1), 20)
+        if len(quote_window_2) < 8:
+            quote_window_2 = _clip_text(_normalize_ws(quote_2), 20)
+
+        signal_pool = sorted(
+            sentence_pool,
+            key=lambda s: (
+                _brief_fact_strong_signal_count(s),
+                len(_brief_fact_key_tokens(s)),
+                len(s),
+            ),
+            reverse=True,
+        )
+        impact_pool = sorted(
+            sentence_pool,
+            key=lambda s: (
+                1 if _brief_fact_sentence_has_impact(s) else 0,
+                _brief_fact_strong_signal_count(s),
+                len(s),
+            ),
+            reverse=True,
+        )
+
+        _brief_trans_stats["attempts"] = 0
+        _brief_trans_stats["rule_success"] = 0
+        _brief_trans_stats["qwen_success"] = 0
+        _brief_trans_stats["empty"] = 0
+        _brief_trans_stats["error"] = 0
+
+        what_seed, what_src = _pick_seed(
+            role_name="what",
+            pool=sentence_pool,
+            title=title,
+            actor=actor,
+            anchors=anchors_out,
+        )
+        key_seed, key_src = _pick_seed(
+            role_name="key",
+            pool=signal_pool,
+            title=title,
+            actor=actor,
+            anchors=anchors_out,
+        )
+        why_seed, why_src = _pick_seed(
+            role_name="why",
+            pool=impact_pool,
+            title=title,
+            actor=actor,
+            anchors=anchors_out,
+        )
+
+        if not what_seed:
+            what_seed, what_src = (key_seed, key_src) if key_seed else (why_seed, why_src)
+        if not key_seed:
+            key_seed, key_src = (what_seed, what_src) if what_seed else (why_seed, why_src)
+        if not why_seed:
+            why_seed, why_src = (key_seed, key_src) if key_seed else (what_seed, what_src)
+        if not what_seed or not key_seed or not why_seed:
+            diag["drop_quote_relevance"] += 1
+            _record_drop(
+                "translation_seed_missing",
+                title,
+                {
+                    "what_seed": bool(what_seed),
+                    "key_seed": bool(key_seed),
+                    "why_seed": bool(why_seed),
+                },
+            )
+            continue
+
+        import logging as _fast_log
+        _fast_log.getLogger(__name__).info(
+            "BRIEF_TRANSLATION_ENGINE=local_qwen event=%s attempts=%d rule_success=%d qwen_success=%d empty=%d error=%d",
+            title[:60],
+            _brief_trans_stats["attempts"],
+            _brief_trans_stats["rule_success"],
+            _brief_trans_stats["qwen_success"],
+            _brief_trans_stats["empty"],
+            _brief_trans_stats["error"],
+        )
+
+        what_bullets = _expand_bullets(
+            [what_seed, key_seed, why_seed],
+            _BRIEF_TARGET_WHAT_BULLETS,
+        )
+        key_details_bullets = _expand_bullets(
+            [key_seed, what_seed, why_seed],
+            _BRIEF_TARGET_KEY_BULLETS,
+        )
+        why_bullets = _expand_bullets(
+            [why_seed, key_seed, what_seed],
+            _BRIEF_TARGET_WHY_BULLETS_DEFAULT,
+        )
+        what_bullets = _repair_overlap(what_bullets, fact_pack_sentences, anchors_out)
+        key_details_bullets = _repair_overlap(key_details_bullets, fact_pack_sentences, anchors_out)
+        why_bullets = _repair_overlap(why_bullets, fact_pack_sentences, anchors_out)
+        if (
+            len(what_bullets) < _BRIEF_TARGET_WHAT_BULLETS
+            or len(key_details_bullets) < _BRIEF_TARGET_KEY_BULLETS
+            or len(why_bullets) < _BRIEF_TARGET_WHY_BULLETS_MIN
+        ):
+            diag["drop_quote_relevance"] += 1
+            _record_drop(
+                "density_target_not_met",
+                title,
+                {
+                    "what_count": len(what_bullets),
+                    "key_count": len(key_details_bullets),
+                    "why_count": len(why_bullets),
+                },
+            )
+            continue
+
+        what_section = "\n".join(what_bullets)
+        why_section = "\n".join(why_bullets)
+        summary_zh = _normalize_ws(
+            f"{_clip_text(title, 48)}: {_clip_text(what_bullets[0], 56)} {_clip_text(why_bullets[0], 56)}"
+        )
+        if _brief_contains_boilerplate(summary_zh, what_section, why_section):
+            diag["drop_boilerplate"] += 1
+            _record_drop("boilerplate", title)
+            continue
+        if _brief_find_generic_narrative_hits(summary_zh, what_section, why_section):
+            diag["drop_generic_narrative"] += 1
+            _record_drop("generic_narrative", title)
+            continue
+
+        clean_what = [b for b in what_bullets if check_no_boilerplate(b, "")[0]][:2]
+        clean_why = [b for b in why_bullets if check_no_boilerplate("", b)[0]][:2]
+        if not clean_what:
+            clean_what = [what_bullets[0]]
+        if not clean_why:
+            clean_why = [why_bullets[0]]
+        q1_body = _normalize_ws(" ".join(clean_what))
+        q2_body = _normalize_ws(" ".join(clean_why))
+        q1_zh = _wrap_quote_window(q1_body, quote_window_1)
+        q2_zh = _wrap_quote_window(q2_body, quote_window_2)
+        q1_q2_ok, q1_q2_reasons = check_no_boilerplate(q1_zh, q2_zh)
+        if not q1_q2_ok:
+            diag["drop_boilerplate"] += 1
+            _record_drop("q1q2_boilerplate", title, {"reasons": q1_q2_reasons})
+            continue
+
+        out = dict(fc)
+        out["actor"] = actor
+        out["actor_primary"] = actor
+        out["anchors"] = anchors_out
+        out["quote_1"] = quote_1
+        out["quote_2"] = quote_2
+        out["quote_window_1"] = quote_window_1
+        out["quote_window_2"] = quote_window_2
+        category = _normalize_ws(str(fc.get("category", "") or ""))
+        out["impact_target"] = _brief_impact_target(category)
+        out["decision_angle"] = _brief_decision_angle(category)
+        out["summary_zh"] = summary_zh
+        out["what_happened_brief"] = what_section
+        out["why_it_matters_brief"] = why_section
+        out["q1_zh"] = q1_zh
+        out["q2_zh"] = q2_zh
+        out["q1"] = q1_zh
+        out["q2"] = q2_zh
+        out["what_happened"] = q1_zh
+        out["why_it_matters"] = q2_zh
+        out["what_happened_bullets"] = what_bullets
+        out["key_details_bullets"] = key_details_bullets
+        out["why_it_matters_bullets"] = why_bullets
+        out["fact_pack_sentences"] = fact_pack_sentences[:_BRIEF_FACT_PACK_MAX]
+        out["detail_sentences_en_used"] = _dedupe_sentences(
+            [what_src, key_src, why_src] + sentence_pool,
+            limit=6,
+        )
+        out["fact_candidates"] = _pad_list(fact_candidates, 6)[:15]
+        out["published_at"] = _normalize_ws(str(fc.get("published_at", "") or "")) or "unknown"
+        prepared.append(out)
+        accepted_titles.add(title_key)
+        if _is_tier_a_source(source_name, final_url, title):
+            diag["tierA_used"] += 1
+        diag["content_miner_events"].append(
+            {
+                "item_id": _normalize_ws(str(fc.get("item_id", "") or "")),
+                "title": title[:120],
+                "fact_pack_total": len(out["fact_pack_sentences"]),
+                "fact_candidates_total": len(out["fact_candidates"]),
+                "bullets_count_each": {
+                    "what_happened": len(what_bullets),
+                    "key_details": len(key_details_bullets),
+                    "why_it_matters": len(why_bullets),
+                },
+            }
+        )
 
     diag["kept_total"] = len(prepared)
     return prepared, diag
@@ -7333,9 +7889,14 @@ def run_pipeline() -> None:
                         )
                     except Exception:
                         _brief_max_events = _brief_min_events
-                    _final_cards, _brief_diag = _prepare_brief_final_cards(
+                    _final_cards, _brief_diag = _prepare_brief_final_cards_fast(
                         _brief_pool,
                         max_events=_brief_max_events,
+                    )
+                    log.info(
+                        "BRIEF_MAIN_PATH: fast max_events=%d input_pool=%d",
+                        _brief_max_events,
+                        len(_brief_pool or []),
                     )
                     _write_brief_content_miner_meta(
                         diag=_brief_diag,

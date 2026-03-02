@@ -26,9 +26,10 @@ $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUD
 $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
 $env:PIPELINE_REPORT_MODE    = "brief"
 $env:BRIEF_ONLY              = "1"
-$env:BRIEF_MIN_EVENTS_HARD   = "6"
+$env:BRIEF_MIN_EVENTS_HARD   = "5"
 $env:BRIEF_MAX_EVENTS        = "6"
-$env:EXEC_MIN_EVENTS         = "6"
+$env:EXEC_MIN_EVENTS         = "5"
+$env:BRIEF_FORCE_QWEN_ONLY   = "1"
 $env:SKIP_DEEP_ANALYSIS      = "1"
 $env:SKIP_EDUCATION_RENDERER = "1"
 
@@ -79,6 +80,7 @@ reason: $Reason
     $env:PIPELINE_RUN_ID            = $_voRunId
     $env:PIPELINE_REPORT_MODE       = "brief"
     $env:BRIEF_ONLY                 = "1"
+    $env:BRIEF_FORCE_QWEN_ONLY      = "1"
     $env:SKIP_DEEP_ANALYSIS         = "1"
     $env:SKIP_EDUCATION_RENDERER    = "1"
     try {
@@ -90,6 +92,7 @@ reason: $Reason
         $env:PIPELINE_RUN_ID         = $null
         $env:PIPELINE_REPORT_MODE    = $null
         $env:BRIEF_ONLY              = $null
+        $env:BRIEF_FORCE_QWEN_ONLY   = $null
         $env:SKIP_DEEP_ANALYSIS      = $null
         $env:SKIP_EDUCATION_RENDERER = $null
     }
