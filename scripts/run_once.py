@@ -2768,6 +2768,18 @@ def _prepare_brief_final_cards(final_cards: list[dict], max_events: int = 10) ->
             key_details_bullets = _batch_key
             why_bullets = _batch_why
         else:
+            if os.environ.get("BRIEF_BATCH_ONLY") == "1":
+                diag["drop_quote_relevance"] += 1
+                _record_drop(
+                    "batch_translation_insufficient",
+                    title,
+                    {
+                        "batch_what": len(_batch_what),
+                        "batch_key": len(_batch_key),
+                        "batch_why": len(_batch_why),
+                    },
+                )
+                continue
             # Fall back to per-sentence rule-based + per-sentence Qwen
             what_bullets = list(_batch_what)  # keep batch results as seed
             key_details_bullets = list(_batch_key)
@@ -7461,12 +7473,26 @@ def run_pipeline() -> None:
                                             _dbe_brief_max,
                                         )
                                     else:
-                                        _final_cards, _dbe_brief_diag = _prepare_brief_final_cards(
-                                            _final_cards,
-                                            max_events=_dbe_brief_max,
-                                        )
+                                        _dbe_brief_candidates = sorted(
+                                            list(_final_cards or []),
+                                            key=_brief_candidate_priority,
+                                            reverse=True,
+                                        )[:min(len(_final_cards or []), max(_dbe_brief_max + 3, 8))]
+                                        _dbe_prev_batch_only = os.environ.get("BRIEF_BATCH_ONLY")
+                                        try:
+                                            os.environ["BRIEF_BATCH_ONLY"] = "1"
+                                            _final_cards, _dbe_brief_diag = _prepare_brief_final_cards(
+                                                _dbe_brief_candidates,
+                                                max_events=_dbe_brief_max,
+                                            )
+                                        finally:
+                                            if _dbe_prev_batch_only is None:
+                                                os.environ.pop("BRIEF_BATCH_ONLY", None)
+                                            else:
+                                                os.environ["BRIEF_BATCH_ONLY"] = _dbe_prev_batch_only
                                         log.info(
-                                            "BRIEF_DBE_REBUILD_PATH: full (manual/daily brief) max_events=%d",
+                                            "BRIEF_DBE_REBUILD_PATH: batch-only (manual/daily brief) candidates=%d max_events=%d",
+                                            len(_dbe_brief_candidates),
                                             _dbe_brief_max,
                                         )
                                     _write_brief_content_miner_meta(
