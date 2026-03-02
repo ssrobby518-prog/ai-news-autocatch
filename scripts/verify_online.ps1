@@ -3028,3 +3028,4 @@ if ($pool85Degraded) {
 } else {
     Write-Output "=== verify_online.ps1 COMPLETE: all gates passed ==="
 }
+exit 0
