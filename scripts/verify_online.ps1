@@ -22,8 +22,93 @@ $env:PYTHONIOENCODING = "utf-8"
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $_voRunId = (Get-Date -Format "yyyyMMdd_HHmmss")
 $_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 1800 }
+$_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 600 }
 $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
+
+function Invoke-VerifyOnlineFailFast {
+    param(
+        [string]$Gate,
+        [string]$Reason,
+        [int]$ExitCode = 1
+    )
+
+    $outputsDir = Join-Path $repoRoot "outputs"
+    New-Item -ItemType Directory -Force -Path $outputsDir -ErrorAction SilentlyContinue | Out-Null
+
+    foreach ($staleRel in @(
+        "outputs\latest_brief.md",
+        "outputs\executive_report.docx",
+        "outputs\executive_report.pptx",
+        "outputs\NOT_READY_report.md",
+        "outputs\NOT_READY_report.docx",
+        "outputs\NOT_READY_report.pptx",
+        "outputs\deep_analysis.md",
+        "outputs\deep_analysis_education.md",
+        "outputs\notion_page.md",
+        "outputs\mindmap.xmind",
+        "docs\reports\deep_analysis_education_version.md",
+        "docs\reports\deep_analysis_education_version_ppt.md",
+        "docs\reports\deep_analysis_education_version_xmind.md"
+    )) {
+        $stalePath = Join-Path $repoRoot $staleRel
+        if (Test-Path $stalePath) {
+            Remove-Item -LiteralPath $stalePath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    @"
+# NOT_READY
+
+gate: $Gate
+run_id: $_voRunId
+reason: $Reason
+"@ | Out-File (Join-Path $outputsDir "NOT_READY.md") -Encoding UTF8 -NoNewline
+
+    Write-Output ("[verify_online] FAIL-FAST: {0}" -f $Reason)
+
+    $venvPython = Join-Path $repoRoot "venv\Scripts\python.exe"
+    if (Test-Path $venvPython) { $_voPy = $venvPython } else { $_voPy = "python" }
+
+    $env:PIPELINE_RUN_ID            = $_voRunId
+    $env:PIPELINE_REPORT_MODE       = "brief"
+    $env:BRIEF_ONLY                 = "1"
+    $env:SKIP_DEEP_ANALYSIS         = "1"
+    $env:SKIP_EDUCATION_RENDERER    = "1"
+    try {
+        & $_voPy (Join-Path $repoRoot "scripts\run_once.py") "--not-ready-report" 2>&1 |
+            ForEach-Object { Write-Output "  [not-ready-report] $_" }
+    } catch {
+        Write-Output ("  [not-ready-report] 生成失敗: {0}" -f $_)
+    } finally {
+        $env:PIPELINE_RUN_ID         = $null
+        $env:PIPELINE_REPORT_MODE    = $null
+        $env:BRIEF_ONLY              = $null
+        $env:SKIP_DEEP_ANALYSIS      = $null
+        $env:SKIP_EDUCATION_RENDERER = $null
+    }
+
+    $_voNrProdList = @()
+    foreach ($__nrf in @("NOT_READY_report.md","NOT_READY_report.docx","NOT_READY_report.pptx")) {
+        if (Test-Path (Join-Path $outputsDir $__nrf)) { $_voNrProdList += "outputs\$__nrf" }
+    }
+    $_voNrProdStr = if ($_voNrProdList) { $_voNrProdList -join ", " } else { "(none)" }
+    $_voNowFail = (Get-Date -Format "o")
+    @"
+run_id              = $_voRunId
+started_at          = $_voNowFail
+finished_at         = $_voNowFail
+mode                = $(if ($Mode) { $Mode } else { 'manual' })
+report_mode         = brief
+status              = FAIL
+selected_events     = 0
+ai_selected_events  = 0
+canonical_output_dir = outputs
+produced_files      = $_voNrProdStr
+fail_reason         = $Gate
+"@ | Out-File (Join-Path $outputsDir "LAST_RUN_SUMMARY.txt") -Encoding UTF8 -NoNewline
+    Write-Output ("LAST_RUN_SUMMARY.txt written: status=FAIL  fail_reason={0}" -f $Gate)
+    exit $ExitCode
+}
 
 Write-Output "=== verify_online.ps1 開始 ==="
 Write-Output ""
@@ -32,8 +117,7 @@ Write-Output ""
 # Step 0: Translation engine (Qwen) preflight — Iteration 19
 #   Non-blocking: if Qwen not up, try to start llama_server.ps1 and wait <=20s.
 #   Sets $env:BRIEF_TRANSLATION_READY = "1" (ready) or "0" (down).
-#   When -SkipPipeline: assume the previous run had Qwen running (READY=1),
-#   and resolve PIPELINE_RUN_ID from the existing brief_template_leak meta.
+#   即使 -SkipPipeline 也照常做 Qwen + GPU 實際檢查；只略過 Step 1 的 Z0 收集。
 # ---------------------------------------------------------------------------
 Write-Output "[0/4] 翻譯引擎（Qwen）+ GPU 前置檢查..."
 $_qwenUrl   = "http://127.0.0.1:8080/v1/models"
@@ -41,7 +125,7 @@ $_qwenReady = $false
 $_btlMetaP  = Join-Path $repoRoot "outputs\brief_template_leak.meta.json"
 $env:BRIEF_TRANSLATION_FAIL_REASON = ""   # set to SERVER_NOT_READY or GPU_NOT_ACTIVE on failure
 
-if ($SkipPipeline) {
+if ($false -and $SkipPipeline) {
     # -SkipPipeline: We are verifying an already-completed run.
     # Set PIPELINE_RUN_ID from the meta that run wrote, so STALE_META checks pass.
     Write-Output "  Qwen preflight: SKIPPED (-SkipPipeline)"
@@ -182,6 +266,11 @@ if ($SkipPipeline) {
 }
 Write-Output ""
 
+if ($env:BRIEF_TRANSLATION_READY -ne "1") {
+    $_voPreflightGate = if ($env:BRIEF_TRANSLATION_FAIL_REASON) { $env:BRIEF_TRANSLATION_FAIL_REASON } else { "TRANSLATION_ENGINE_DOWN" }
+    Invoke-VerifyOnlineFailFast -Gate $_voPreflightGate -Reason $_voPreflightGate
+}
+
 # ---- Step 1: Z0 online collection + supply fallback ----
 $_z0Dir          = Join-Path $repoRoot "data\raw\z0"
 $_z0Latest       = Join-Path $_z0Dir   "latest.jsonl"
@@ -279,17 +368,8 @@ if (-not $SkipPipeline) {
 
 # TIME_BUDGET check after Z0 collection (online path only)
 if (-not $SkipPipeline -and $_voStopwatch.Elapsed.TotalSeconds -gt $_voBudgetSec) {
-    $_bgtNrPath = Join-Path $repoRoot "outputs\NOT_READY.md"
-    New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "outputs") | Out-Null
-    @"
-# NOT_READY
-
-gate: TIME_BUDGET_EXCEEDED
-run_id: $_voRunId
-reason: TIME_BUDGET_EXCEEDED; stage=after_z0_collection; elapsed=$([int]$_voStopwatch.Elapsed.TotalSeconds)s > budget=${_voBudgetSec}s
-"@ | Out-File $_bgtNrPath -Encoding UTF8 -NoNewline
-    Write-Output "TIME_BUDGET_EXCEEDED: Z0 收集耗時 $([int]$_voStopwatch.Elapsed.TotalSeconds)s > ${_voBudgetSec}s — 管線中止"
-    exit 1
+    $_voBgtReason = "TIME_BUDGET_EXCEEDED; stage=after_z0_collection; elapsed=$([int]$_voStopwatch.Elapsed.TotalSeconds)s > budget=${_voBudgetSec}s"
+    Invoke-VerifyOnlineFailFast -Gate "TIME_BUDGET_EXCEEDED" -Reason $_voBgtReason
 }
 
 # Initialise degraded flag (updated inside the Z0 pool health gate block)

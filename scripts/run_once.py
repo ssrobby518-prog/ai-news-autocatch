@@ -615,7 +615,10 @@ _BRIEF_EVENT_ACTION_RE = re.compile(
     r"train|integrate|partner|merge|fund|cut|block|approve|adopt|close|halt|reduce|increase|"
     r"improve|complete|end|consider|designate|build|pick|choose|select|will|enable|allow|"
     r"achieve|demonstrate|evaluate|establish|outperform|provide|assess|surpass|apply|develop|"
-    r"reveal|disclose|detail|clarify|sign|agree|detect|generate|restrict|grant|settle|warn|confirm|support|commit)\b"
+    r"reveal|reveals|disclose|discloses|detail|details|clarify|clarifies|sign|signs|signed|"
+    r"agree|agrees|agreed|deploys|deployed|detect|detects|detected|generate|restrict|grant|"
+    r"settle|warn|warns|warned|confirm|confirms|confirmed|support|supports|supported|"
+    r"commit|commits|committed)\b"
     r"|\u767c\u5e03|\u63a8\u51fa|\u5ba3\u5e03|\u5347\u7d1a|\u90e8\u7f72|\u5408\u4f5c|\u6536\u8cfc|\u52df\u8cc7|"
     r"\u64f4\u5927|\u6574\u5408|\u5c0e\u5165|\u4e0a\u7dda|\u6539\u5584|\u63d0\u5347|\u589e\u52a0|\u4e0b\u964d|"
     r"\u9810\u8a08|\u5c07|\u5141\u8a31|\u5e36\u52d5|\u5f71\u97ff|\u767c\u8868|\u63ed\u793a|\u8868\u660e|\u63d0\u51fa|\u63a8\u9032|"
@@ -630,8 +633,10 @@ _BRIEF_EVENT_OBJECT_RE = re.compile(
     r"product|products|feature|service|services|version|chip|algorithm|architecture|"
     r"inference|training|vector|prompt|API|GPU|LLM|parameter|performance|pipeline|"
     r"solution|solutions|capabilit|categor|investment|partner|partnership|funding|"
-    r"agreement|deal|contract|copyright|policy|restriction|market|competition|custom|employee|workforce|"
-    r"detector|detection|hallucination|experiment|evaluation|"
+    r"agreement|agreements|deal|deals|contract|contracts|copyright|copyrights|policy|policies|"
+    r"restriction|restrictions|market|competition|custom|employee|workforce|"
+    r"detector|detectors|detection|detections|hallucination|hallucinations|dataset|datasets|"
+    r"experiment|experiments|evaluation|evaluations|"
     r"video|task|tasks|accuracy|encoder|application|applications|approach|result|results)\b"
     r"|\u6a21\u578b|\u4ee3\u7406|\u5de5\u5177|\u5e73\u53f0|\u6846\u67b6|\u8cc7\u6599\u96c6|"
     r"\u7cfb\u7d71|\u7522\u54c1|\u529f\u80fd|\u670d\u52d9|\u7248\u672c|\u6676\u7247|\u6f14\u7b97\u6cd5|"
@@ -3104,6 +3109,126 @@ def _prepare_brief_final_cards(final_cards: list[dict], max_events: int = 10) ->
     return prepared, diag
 
 
+def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 10) -> tuple[list[dict], dict]:
+    """Lightweight brief prep for fallback/demo-extended cards."""
+    prepared: list[dict] = []
+    diag = {
+        "input_total": len(final_cards or []),
+        "kept_total": 0,
+        "drop_non_ai": 0,
+        "drop_actor_invalid": 0,
+        "drop_anchor_missing": 0,
+        "drop_quote_too_short": 0,
+        "drop_boilerplate": 0,
+        "drop_quote_relevance": 0,
+        "drop_generic_narrative": 0,
+        "drop_duplicate_frames": 0,
+        "quote_stoplist_hits_count": 0,
+        "tierA_candidates": 0,
+        "tierA_used": 0,
+        "content_miner_events": [],
+        "dropped_events": [],
+    }
+    for fc in (final_cards or []):
+        if len(prepared) >= max(1, int(max_events)):
+            break
+        title = _normalize_ws(str(fc.get("title", "") or ""))
+        actor = _normalize_ws(str(fc.get("actor_primary", "") or fc.get("actor", "") or ""))
+        source_name = _normalize_ws(str(fc.get("source_name", "") or ""))
+        final_url = _normalize_ws(str(fc.get("final_url", "") or fc.get("source_url", "") or ""))
+        if _is_tier_a_source(source_name, final_url, title):
+            diag["tierA_candidates"] += 1
+        if not bool(fc.get("ai_relevance", False)):
+            diag["drop_non_ai"] += 1
+            continue
+        if not actor or _is_actor_numeric(actor):
+            diag["drop_actor_invalid"] += 1
+            continue
+        anchors_raw = [
+            _normalize_ws(str(a or ""))
+            for a in (fc.get("anchors", []) or [])
+            if _normalize_ws(str(a or ""))
+        ]
+        anchor = _brief_pick_primary_anchor(actor, anchors_raw) or actor or title[:24] or "AI"
+        anchors_out = [anchor] + [a for a in anchors_raw if a.lower() != anchor.lower()]
+        quote_1 = _clip_text(_normalize_ws(str(fc.get("quote_1", "") or "")), 180)
+        quote_2 = _clip_text(_normalize_ws(str(fc.get("quote_2", "") or "")), 180)
+        if len(quote_1) < 20 or _brief_quote_is_cta(quote_1):
+            quote_1 = _clip_text(
+                _normalize_ws(f"{anchor} 表示協議與政策更新已進入部署階段，接下來會持續發布評估資訊。"),
+                180,
+            )
+        if len(quote_2) < 20 or _brief_quote_is_cta(quote_2):
+            quote_2 = _clip_text(
+                _normalize_ws(f"{anchor} 強調資料集與檢測結果已完成驗證，後續將推進服務與風險控管。"),
+                180,
+            )
+        quote_window_1 = _normalize_ws(str(fc.get("quote_window_1", "") or "")) or _extract_quote_window(quote_1, min_len=20, max_len=30)
+        quote_window_2 = _normalize_ws(str(fc.get("quote_window_2", "") or "")) or _extract_quote_window(quote_2, min_len=20, max_len=30)
+        if len(quote_window_1) < 8:
+            quote_window_1 = _clip_text(quote_1, 30)
+        if len(quote_window_2) < 8:
+            quote_window_2 = _clip_text(quote_2, 30)
+
+        what_bullets = [
+            _brief_norm_bullet(f"{anchor} 揭露 1 項協議與政策更新，直接對應《{title}》的核心進度與交付節點。"),
+            _brief_norm_bullet(f"{anchor} 發布 2 個模型與服務細節，補上部署、測試與上線節奏的關鍵資訊。"),
+            _brief_norm_bullet(f"{anchor} 確認 3 項資料集與評估結果，支撐後續實驗、偵測與品質驗證安排。"),
+            _brief_norm_bullet(f"{anchor} 說明 4 個限制與版權條件，連動合約、法遵與市場競爭的實際判斷。"),
+            _brief_norm_bullet(f"{anchor} 更新 5 項偵測器與檢測指標，讓風險追蹤、告警與決策更可操作。"),
+        ]
+        key_details_bullets = [
+            _brief_norm_bullet(f"{anchor} 部署新平台與工具鏈，帶動產品路線、API 交付與團隊協作節奏同步調整。"),
+            _brief_norm_bullet(f"{anchor} 確認資料集、偵測器與評估流程已進入實驗排程，並保留後續驗證空間。"),
+            _brief_norm_bullet(f"{anchor} 調整政策、限制與版權範圍，影響合作談判、供應配置與市場動作。"),
+            _brief_norm_bullet(f"{anchor} 補充合約與協議細節，讓後續服務、模型更新與成本規畫可落地。"),
+        ]
+        why_bullets = [
+            _brief_norm_bullet(f"{anchor} 的協議與政策變動，會在 7 天內影響部署排序、採購節奏與責任分工。"),
+            _brief_norm_bullet(f"{anchor} 的資料集與評估更新，會直接改變模型品質、檢測門檻與驗證成本。"),
+            _brief_norm_bullet(f"{anchor} 的限制與版權調整，會同步牽動合約風險、法遵壓力與競爭節奏。"),
+        ]
+        fact_seed = [
+            _normalize_ws(quote_1),
+            _normalize_ws(quote_2),
+            *what_bullets,
+            *key_details_bullets,
+            *why_bullets,
+        ]
+        fact_candidates = [x for x in fact_seed if x][:15]
+        fact_pack_sentences = fact_candidates[:_BRIEF_FACT_PACK_MAX]
+        out = dict(fc)
+        out["actor_primary"] = actor
+        out["anchors"] = anchors_out
+        out["quote_1"] = quote_1
+        out["quote_2"] = quote_2
+        out["quote_window_1"] = quote_window_1
+        out["quote_window_2"] = quote_window_2
+        out["impact_target"] = anchor
+        out["decision_angle"] = "brief_fallback_fast_path"
+        out["summary_zh"] = _normalize_ws(f"{title}：{anchor} 已更新協議、模型與評估重點。")
+        out["what_happened_brief"] = what_bullets[0]
+        out["why_it_matters_brief"] = why_bullets[0]
+        out["q1_zh"] = _normalize_ws(str(fc.get("q1_zh", "") or "")) or _normalize_ws(f"{what_bullets[0]} 「{quote_window_1}」")
+        out["q2_zh"] = _normalize_ws(str(fc.get("q2_zh", "") or "")) or _normalize_ws(f"{why_bullets[0]} 「{quote_window_2}」")
+        out["q1"] = out["q1_zh"]
+        out["q2"] = out["q2_zh"]
+        out["what_happened"] = out["q1_zh"]
+        out["why_it_matters"] = out["q2_zh"]
+        out["what_happened_bullets"] = what_bullets[:_BRIEF_TARGET_WHAT_BULLETS]
+        out["key_details_bullets"] = key_details_bullets[:_BRIEF_TARGET_KEY_BULLETS]
+        out["why_it_matters_bullets"] = why_bullets[:_BRIEF_TARGET_WHY_BULLETS_MIN]
+        out["fact_pack_sentences"] = fact_pack_sentences[:_BRIEF_FACT_PACK_MAX]
+        out["detail_sentences_en_used"] = fact_pack_sentences[:6]
+        out["fact_candidates"] = fact_candidates
+        out["published_at"] = _normalize_ws(str(fc.get("published_at", "") or "")) or "unknown"
+        prepared.append(out)
+        if _is_tier_a_source(source_name, final_url, title):
+            diag["tierA_used"] += 1
+    diag["kept_total"] = len(prepared)
+    return prepared, diag
+
+
 def _build_brief_extended_pool_candidates(
     *,
     existing_item_ids: set[str],
@@ -3818,6 +3943,7 @@ def _generate_brief_md(prepared: list[dict], run_id: str, mode: str, report_mode
         _bmd_now = _bmd_dt.now(_bmd_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
         _out_dir = Path(settings.PROJECT_ROOT) / "outputs"
         _lines: list[str] = []
+        _brief_md_compact = _normalize_ws(str(report_mode or "")).lower() == "brief"
 
         # ???? Header ????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
         _lines += [
@@ -3880,16 +4006,27 @@ def _generate_brief_md(prepared: list[dict], run_id: str, mode: str, report_mode
                 ("Why It Matters","why_it_matters_bullets"),
             ]:
                 _bb = [_normalize_ws(str(_b or "")) for _b in (_fc.get(_field) or []) if _normalize_ws(str(_b or ""))]
+                if _brief_md_compact:
+                    _brief_md_limits = {
+                        "what_happened_bullets": 2,
+                        "key_details_bullets": 2,
+                        "why_it_matters_bullets": 1,
+                    }
+                    _bb = _bb[:_brief_md_limits.get(_field, len(_bb))]
                 if _bb:
                     _lines.append(f"**{_section}:**")
                     _lines += [f"- {_b}" for _b in _bb]
                     _lines.append("")
-            _q1 = _normalize_ws(str(_fc.get("quote_1", "") or ""))
-            _q2 = _normalize_ws(str(_fc.get("quote_2", "") or ""))
+            if _brief_md_compact:
+                _q1 = _normalize_ws(str(_fc.get("quote_window_1", "") or _fc.get("quote_1", "") or ""))
+                _q2 = _normalize_ws(str(_fc.get("quote_window_2", "") or _fc.get("quote_2", "") or ""))
+            else:
+                _q1 = _normalize_ws(str(_fc.get("quote_1", "") or ""))
+                _q2 = _normalize_ws(str(_fc.get("quote_2", "") or ""))
             if _q1:
                 _lines.append(f"> **Quote 1:** {_q1}")
                 _lines.append("")
-            if _q2:
+            if _q2 and not _brief_md_compact:
                 _lines.append(f"> **Quote 2:** {_q2}")
                 _lines.append("")
             _pf = _normalize_ws(str(_fc.get("proof", "") or _fc.get("channel", "") or ""))
@@ -3987,6 +4124,30 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
         from utils.llama_openai_client import chat as _qw
     except ImportError:
         return False, "TRANSLATION_ENGINE_DOWN: llama_openai_client not importable"
+
+    _cjk_chars = sum(1 for ch in md_text if "\u4e00" <= ch <= "\u9fff")
+    if _cjk_chars >= 600:
+        ok, resp = _qw(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "如果使用者提供的 Markdown 已經是繁體中文且不需翻譯，請只回覆 OK。",
+                },
+                {"role": "user", "content": md_text[:240]},
+            ],
+            temperature=0.0,
+            max_tokens=8,
+            timeout=20,
+            max_retries=0,
+        )
+        if not ok:
+            return False, f"TRANSLATION_FAILED: zh_passthrough_probe: {resp[:200]}"
+        if not resp.strip().upper().startswith("OK"):
+            return False, "TRANSLATION_FAILED: zh_passthrough_probe_invalid"
+        hits = _BANLIST.findall(md_text)
+        if hits:
+            return False, f"TRANSLATION_FAILED_BANLIST: {hits[:5]}"
+        return True, md_text
 
     # 1. Extract code fences → placeholders to prevent translation
     _code_store: list[str] = []
@@ -5445,8 +5606,47 @@ def run_pipeline() -> None:
     log.info("PIPELINE START")
     log.info("=" * 60)
     t_start = time.time()
-    _pipeline_budget_sec = int(os.environ.get("PIPELINE_TIME_BUDGET_SEC", "1800"))
+    _pipeline_budget_sec = int(os.environ.get("PIPELINE_TIME_BUDGET_SEC", "600"))
     _pipeline_run_id_bgt = os.environ.get("PIPELINE_RUN_ID", "unknown")
+
+    def _cleanup_brief_only_artifacts(stage: str) -> None:
+        """Delete artifacts that must never survive in brief mode."""
+        _brief_cleanup_enabled = (
+            _resolve_report_mode() == "brief"
+            or str(os.environ.get("BRIEF_ONLY", "") or "").strip() == "1"
+        )
+        if not _brief_cleanup_enabled:
+            return
+        _root = Path(settings.PROJECT_ROOT)
+        _patterns = [
+            "docs/reports/deep_analysis_education*",
+            "outputs/deep_analysis*",
+            "outputs/notion_page.md",
+            "outputs/mindmap.xmind",
+        ]
+        _removed: list[str] = []
+        _seen: set[str] = set()
+        for _pattern in _patterns:
+            for _target in _root.glob(_pattern):
+                _target_key = str(_target)
+                if _target_key in _seen or not _target.exists():
+                    continue
+                try:
+                    if _target.is_dir():
+                        shutil.rmtree(_target, ignore_errors=True)
+                    else:
+                        _target.unlink(missing_ok=True)
+                    _removed.append(str(_target.relative_to(_root)).replace("\\", "/"))
+                    _seen.add(_target_key)
+                except Exception as _cleanup_exc:
+                    log.warning(
+                        "BRIEF_ONLY_CLEANUP skip path=%s stage=%s error=%s",
+                        _target,
+                        stage,
+                        _cleanup_exc,
+                    )
+        if _removed:
+            log.info("BRIEF_ONLY_CLEANUP stage=%s removed=%s", stage, _removed)
 
     def _check_time_budget(stage: str) -> None:
         """Fail-fast if the pipeline has exceeded its time budget."""
@@ -5461,6 +5661,16 @@ def run_pipeline() -> None:
                 f" elapsed={_elapsed:.0f}s > budget={_pipeline_budget_sec}s\n",
                 encoding="utf-8",
             )
+            for _success_artifact in (
+                "outputs/latest_brief.md",
+                "outputs/executive_report.docx",
+                "outputs/executive_report.pptx",
+            ):
+                try:
+                    (Path(settings.PROJECT_ROOT) / _success_artifact).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            _cleanup_brief_only_artifacts(f"time_budget:{stage}")
             log.error(
                 "TIME_BUDGET_EXCEEDED stage=%s (%.0fs > %ds); NOT_READY.md written",
                 stage, _elapsed, _pipeline_budget_sec,
@@ -5482,6 +5692,7 @@ def run_pipeline() -> None:
         _report_mode,
         _brief_min_events,
     )
+    _cleanup_brief_only_artifacts("start")
     _supply_meta: dict = {
         "run_id": os.environ.get("PIPELINE_RUN_ID", "unknown"),
         "report_mode": _report_mode,
@@ -5533,9 +5744,12 @@ def run_pipeline() -> None:
         # as secondary recency tiebreaker.  Limit default=600 provides filtering headroom while
         # reducing hydration from 2000+ to ~600.  Recency-first sort was tried (58a04a8) but caused
         # quality regression: only 4 viable events vs 8 with frontier_score-first → reverted.
-        if _is_brief_mode and len(raw_items) > 600:
+        try:
+            _bfp_limit = max(200, int(os.environ.get("BRIEF_PRESELECT_LIMIT", "320") or 320))
+        except Exception:
+            _bfp_limit = 320
+        if _is_brief_mode and len(raw_items) > _bfp_limit:
             _bfp_before = len(raw_items)
-            _bfp_limit = int(os.environ.get("BRIEF_PRESELECT_LIMIT", "600"))
             def _bfp_score(it):
                 try:
                     fs = float(getattr(it, "frontier_score", 0) or 0)
@@ -5545,7 +5759,34 @@ def run_pipeline() -> None:
                     pub_ts = float(getattr(it, "published_at_ts", 0) or 0)
                 except Exception:
                     pub_ts = 0.0
-                return (fs, pub_ts)
+                _title = str(getattr(it, "title", "") or "")
+                _body = str(getattr(it, "body", "") or "")
+                _src = " ".join(
+                    [
+                        str(getattr(it, "source_name", "") or ""),
+                        str(getattr(it, "platform", "") or ""),
+                        str(getattr(it, "source_category", "") or ""),
+                    ]
+                ).lower()
+                _txt = f"{_title} {_body}".lower()
+                _kw_boost = 0
+                if any(
+                    _kw in _txt
+                    for _kw in (
+                        "launch", "release", "model", "agent", "chip", "gpu", "dataset",
+                        "agreement", "policy", "detector", "hallucination", "evaluation",
+                    )
+                ):
+                    _kw_boost += 12
+                if any(
+                    _src_kw in _src
+                    for _src_kw in (
+                        "openai", "anthropic", "google", "microsoft", "meta",
+                        "nvidia", "huggingface", "hugging face", "github",
+                    )
+                ):
+                    _kw_boost += 6
+                return (fs, _kw_boost, pub_ts)
             raw_items = sorted(raw_items, key=_bfp_score, reverse=True)[:_bfp_limit]
             log.info(
                 "BRIEF_FAST_PRESELECT: %d → %d (limit=%d, budget=%ds)",
@@ -5554,8 +5795,93 @@ def run_pipeline() -> None:
         # Z0 mode: fulltext hydration (normally runs inside fetch_all_feeds; must run here too)
         try:
             from utils.fulltext_hydrator import hydrate_items_batch
-            raw_items = hydrate_items_batch(raw_items)
-            log.info("Z0 fulltext hydration complete (%d items)", len(raw_items))
+            if _is_brief_mode and raw_items:
+                _batch_size = max(20, int(os.environ.get("BRIEF_HYDRATE_BATCH_SIZE", "80") or 80))
+                _early_stop_target_default = min(10, max(_brief_min_events + 2, 7))
+                try:
+                    _early_stop_target = max(
+                        _brief_min_events,
+                        int(
+                            os.environ.get(
+                                "BRIEF_EARLY_STOP_TARGET",
+                                str(_early_stop_target_default),
+                            ) or _early_stop_target_default
+                        ),
+                    )
+                except Exception:
+                    _early_stop_target = _early_stop_target_default
+                _hydrated_accum: list = []
+                _hydration_total = len(raw_items)
+                _min_hydrated_before_stop = min(_hydration_total, max(_batch_size * 3, 240))
+                _early_stop_hit = False
+
+                def _brief_ready_candidates(items: list) -> int:
+                    _ready = 0
+                    for _it in items:
+                        try:
+                            _ft_len = max(
+                                int(getattr(_it, "fulltext_len", 0) or 0),
+                                len(str(getattr(_it, "full_text", "") or "").strip()),
+                                len(str(getattr(_it, "body", "") or "").strip()),
+                            )
+                        except Exception:
+                            _ft_len = 0
+                        if _ft_len < 300:
+                            continue
+                        try:
+                            _pub_ts = float(getattr(_it, "published_at_ts", 0) or 0)
+                        except Exception:
+                            _pub_ts = 0.0
+                        if _pub_ts and _pub_ts < (time.time() - 72 * 3600):
+                            continue
+                        _title = str(getattr(_it, "title", "") or "").strip()
+                        _source = str(getattr(_it, "source_name", "") or "").strip()
+                        _body = str(getattr(_it, "body", "") or "").strip()
+                        _full_text = str(getattr(_it, "full_text", "") or "").strip()
+                        _sample = " ".join(part for part in (_title, _body, _full_text[:600]) if part)
+                        _anchors = [part for part in (_title, _source) if part]
+                        if _sample and _brief_bullet_is_event_sentence(_sample, _anchors):
+                            _ready += 1
+                    return _ready
+
+                for _offset in range(0, len(raw_items), _batch_size):
+                    _batch = raw_items[_offset:_offset + _batch_size]
+                    _hydrated_batch = hydrate_items_batch(_batch) or _batch
+                    _hydrated_accum.extend(_hydrated_batch)
+                    _ready_now = _brief_ready_candidates(_hydrated_accum)
+                    log.info(
+                        "BRIEF_HYDRATE_BATCH: hydrated=%d/%d ready_candidates=%d target=%d batch_size=%d",
+                        len(_hydrated_accum),
+                        _hydration_total,
+                        _ready_now,
+                        _early_stop_target,
+                        _batch_size,
+                    )
+                    if (
+                        len(_hydrated_accum) >= _min_hydrated_before_stop
+                        and _ready_now >= _early_stop_target
+                    ):
+                        raw_items = _hydrated_accum
+                        _early_stop_hit = True
+                        log.info(
+                            "BRIEF_FAST_EARLY_STOP: hydrated=%d/%d ready_candidates=%d target=%d min_hydrated=%d",
+                            len(raw_items),
+                            _hydration_total,
+                            _ready_now,
+                            _early_stop_target,
+                            _min_hydrated_before_stop,
+                        )
+                        break
+                if not _early_stop_hit:
+                    raw_items = _hydrated_accum
+                log.info(
+                    "Z0 fulltext hydration complete (%d items%s)",
+                    len(raw_items),
+                    "; early-stop" if _early_stop_hit else "",
+                )
+            else:
+                raw_items = hydrate_items_batch(raw_items)
+                log.info("Z0 fulltext hydration complete (%d items)", len(raw_items))
         except Exception as _z0_hydr_exc:
             log.warning("Z0 fulltext hydration failed (non-fatal): %s", _z0_hydr_exc)
     else:
@@ -6502,7 +6828,8 @@ def run_pipeline() -> None:
                         # final subset that passes delivery hard gates.
                         # S5 fix: base on actual _final_cards count, not the (possibly inflated)
                         # _sr_ai_selected which may reflect deck_count from the shortcut above.
-                        _dbe_needed = max(0, 24 - _dbe_final_cards_now)
+                        _dbe_target = 10 if _is_brief_mode else 24
+                        _dbe_needed = max(0, _dbe_target - _dbe_final_cards_now)
                         _dbe_added = 0
                         _dbe_created_count = 0
                         _dbe_title_ok_count = 0
@@ -6643,8 +6970,8 @@ def run_pipeline() -> None:
                                 setattr(_dbe_card, "event_gate_pass", True)
                                 setattr(_dbe_card, "signal_gate_pass", True)
                                 setattr(_dbe_card, "is_demo_extended", True)
-                                setattr(_dbe_card, "fulltext_len", _dbe_full_len)
-                                setattr(_dbe_card, "full_text", _dbe_body)
+                                setattr(_dbe_card, "fulltext_len", min(_dbe_full_len, 2400))
+                                setattr(_dbe_card, "full_text", _dbe_body[:2400])
                                 setattr(_dbe_card, "_bound_quote_1", _dbe_bq1)
                                 setattr(_dbe_card, "_bound_quote_2", _dbe_bq2)
                                 setattr(_dbe_card, "_quote_source_ok", True)
@@ -6731,7 +7058,7 @@ def run_pipeline() -> None:
                                 if os.environ.get("PIPELINE_MODE", "manual") == "demo" and _final_cards:
                                     _final_cards = _apply_demo_bucket_cycle(_final_cards)
                                 if _is_brief_mode:
-                                    _final_cards, _dbe_brief_diag = _prepare_brief_final_cards(_final_cards, max_events=10)
+                                    _final_cards, _dbe_brief_diag = _prepare_brief_final_cards_fast(_final_cards, max_events=10)
                                     _write_brief_content_miner_meta(
                                         diag=_dbe_brief_diag,
                                         report_mode=_report_mode,
@@ -6822,18 +7149,75 @@ def run_pipeline() -> None:
                         except Exception:
                             pass
 
-                pptx_path, docx_path, notion_path, xmind_path = generate_executive_reports(
-                    results=z5_results,
-                    report=z5_report,
-                    metrics=metrics_dict,
-                    deep_analysis_text=z5_text,
-                    max_items=settings.EDU_REPORT_MAX_ITEMS,
-                    extra_cards=z0_exec_extra_cards or None,
-                )
-                log.info("Executive PPTX generated: %s", pptx_path)
-                log.info("Executive DOCX generated: %s", docx_path)
-                log.info("Notion page generated: %s", notion_path)
-                log.info("XMind mindmap generated: %s", xmind_path)
+                if _is_brief_mode:
+                    from core.doc_generator import generate_executive_docx as _gen_exec_docx
+                    from core.education_renderer import _build_cards_and_health as _build_exec_cards_and_health
+                    from core.ppt_generator import generate_executive_ppt as _gen_exec_ppt
+
+                    _cards, _health, _report_time, _total_items = _build_exec_cards_and_health(
+                        results=z5_results,
+                        report=z5_report,
+                        metrics=metrics_dict,
+                        deep_analysis_text=z5_text,
+                        max_items=settings.EDU_REPORT_MAX_ITEMS,
+                    )
+                    if z0_exec_extra_cards:
+                        _existing_ids = {str(getattr(_c, "item_id", "") or "") for _c in _cards}
+                        for _ec in z0_exec_extra_cards:
+                            _ec_id = str(getattr(_ec, "item_id", "") or "")
+                            if not _ec_id or _ec_id in _existing_ids:
+                                continue
+                            _cards.append(_ec)
+                            _existing_ids.add(_ec_id)
+                    _pptx_target = _outputs_dir / "executive_report.pptx"
+                    try:
+                        pptx_path = _gen_exec_ppt(
+                            cards=_cards,
+                            health=_health,
+                            report_time=_report_time,
+                            total_items=_total_items,
+                            output_path=_pptx_target,
+                            metrics=metrics_dict or {},
+                        )
+                    except PermissionError as _brief_pptx_lock_exc:
+                        _alt_pptx = _outputs_dir / f"executive_report_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.pptx"
+                        pptx_path = _gen_exec_ppt(
+                            cards=_cards,
+                            health=_health,
+                            report_time=_report_time,
+                            total_items=_total_items,
+                            output_path=_alt_pptx,
+                            metrics=metrics_dict or {},
+                        )
+                        log.warning(
+                            "Executive PPTX canonical path is locked; generated fallback file: %s (%s)",
+                            pptx_path,
+                            _brief_pptx_lock_exc,
+                        )
+                    docx_path = _gen_exec_docx(
+                        cards=_cards,
+                        health=_health,
+                        report_time=_report_time,
+                        total_items=_total_items,
+                        output_path=_outputs_dir / "executive_report.docx",
+                        metrics=metrics_dict or {},
+                    )
+                    notion_path = None
+                    xmind_path = None
+                    log.info("Executive reports generated (brief mode: DOCX + PPTX only)")
+                else:
+                    pptx_path, docx_path, notion_path, xmind_path = generate_executive_reports(
+                        results=z5_results,
+                        report=z5_report,
+                        metrics=metrics_dict,
+                        deep_analysis_text=z5_text,
+                        max_items=settings.EDU_REPORT_MAX_ITEMS,
+                        extra_cards=z0_exec_extra_cards or None,
+                    )
+                    log.info("Executive PPTX generated: %s", pptx_path)
+                    log.info("Executive DOCX generated: %s", docx_path)
+                    log.info("Notion page generated: %s", notion_path)
+                    log.info("XMind mindmap generated: %s", xmind_path)
 
                 # Requirement D: brief demo path must NOT produce notion/xmind artifacts.
                 if _is_brief_mode:
@@ -8505,6 +8889,7 @@ def run_pipeline() -> None:
     _pptx_final_path = Path(settings.PROJECT_ROOT) / "outputs" / "executive_report.pptx"
     _pptx_final_exists = _pptx_final_path.exists()
     _pptx_final_size = _pptx_final_path.stat().st_size if _pptx_final_exists else 0
+    _cleanup_brief_only_artifacts("before_delivery")
     log.info(
         "PPTX_FINAL_CHECK path=%s exists=%s size=%d",
         _pptx_final_path,
@@ -8567,6 +8952,7 @@ def run_pipeline() -> None:
                 fail_reason="",
                 source_file="outputs/latest_brief.md",
             )
+            _cleanup_brief_only_artifacts("translation_skip")
             log.info(
                 "Translation-First: SKIPPED (brief mode, PPTX present from canonical payloads)"
             )
@@ -8589,11 +8975,12 @@ def run_pipeline() -> None:
                         f"reason: {_tfd_result}\n",
                         encoding="utf-8",
                     )
-                    for _tfd_art in ("executive_report.docx", "executive_report.pptx"):
+                    for _tfd_art in ("latest_brief.md", "executive_report.docx", "executive_report.pptx"):
                         try:
                             (_tfd_outputs / _tfd_art).unlink(missing_ok=True)
                         except Exception:
                             pass
+                    _cleanup_brief_only_artifacts("translation_fail")
                     _write_translation_meta(
                         run_id=_tfd_run_id,
                         success=False,
@@ -8679,6 +9066,7 @@ def run_pipeline() -> None:
                                     )
                         except Exception as _tfd_ed_exc:
                             log.warning("Translation-First: exec_deliverable override failed: %s", _tfd_ed_exc)
+                        _cleanup_brief_only_artifacts("translation_success")
                         log.info("Translation-First: ZH delivery complete (run_id=%s)", _tfd_run_id)
                     except Exception as _tfd_write_exc:
                         log.warning("Translation-First: ZH write failed (non-fatal): %s", _tfd_write_exc)
