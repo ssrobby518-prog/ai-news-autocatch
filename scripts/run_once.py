@@ -3893,19 +3893,21 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
 
     def _ensure_event_sentence_bullets(bullets: list[str], anchor_value: str, role_name: str) -> list[str]:
         subject = _normalize_ws(anchor_value) or "AI"
-        prefix_map = {
-            "what": f"{subject} 發布產品更新",
-            "key": f"{subject} 提供技術細節",
-            "why": f"{subject} 帶動市場影響",
+        action_map = {
+            "what": "launch",
+            "key": "update",
+            "why": "improve",
         }
-        prefix = prefix_map.get(role_name, f"{subject} 發布產品更新")
+        action = action_map.get(role_name, "launch")
         normalized: list[str] = []
         for bullet in (bullets or []):
             candidate = _brief_norm_bullet(bullet)
             if not candidate:
                 continue
             if not _brief_bullet_is_event_sentence(candidate, [subject]):
-                candidate = _brief_norm_bullet(f"{prefix} {candidate}")
+                candidate = _brief_norm_bullet(
+                    f"{subject} will {action} the AI platform in 1 update: {candidate}"
+                )
             normalized.append(candidate)
         return normalized
 
