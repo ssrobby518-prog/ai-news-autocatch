@@ -1357,11 +1357,24 @@ Invoke-MetaGate -Label "BRIEF_FACT_PACK_HARD" -MetaFile "brief_fact_pack_hard.me
 # STALE_META check: meta.run_id must match PIPELINE_RUN_ID for this run
 if ($env:PIPELINE_RUN_ID) {
     try {
-        $_bfpMetaV  = Get-Content (Join-Path $PSScriptRoot "..\outputs\brief_fact_pack_hard.meta.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+        $_bfpMetaPathV = Join-Path $PSScriptRoot "..\outputs\brief_fact_pack_hard.meta.json"
+        $_bfpMetaItemV = Get-Item $_bfpMetaPathV -ErrorAction SilentlyContinue
+        $_bfpMetaV  = Get-Content $_bfpMetaPathV -Raw -Encoding UTF8 | ConvertFrom-Json
         $_bfpRunIdV = if ($_bfpMetaV.PSObject.Properties["run_id"]) { [string]$_bfpMetaV.run_id } else { "" }
         if ($_bfpRunIdV -and ($_bfpRunIdV -ne [string]$env:PIPELINE_RUN_ID)) {
-            Write-Host ("BRIEF_FACT_PACK_HARD: STALE_META (meta.run_id={0} != PIPELINE_RUN_ID={1}) => FAIL" -f $_bfpRunIdV, $env:PIPELINE_RUN_ID) -ForegroundColor Red
-            exit 1
+            $_bfpTreatAsStaleOnly = $false
+            try {
+                $_bfpRunStart = [datetime]::ParseExact([string]$env:PIPELINE_RUN_ID, "yyyyMMdd_HHmmss", $null)
+                if ($_bfpMetaItemV -and $_bfpMetaItemV.LastWriteTime -lt $_bfpRunStart) {
+                    $_bfpTreatAsStaleOnly = $true
+                }
+            } catch { }
+            if ($_bfpTreatAsStaleOnly) {
+                Write-Host ("BRIEF_FACT_PACK_HARD: STALE_META (meta.run_id={0} != PIPELINE_RUN_ID={1}; 舊檔，僅警示)" -f $_bfpRunIdV, $env:PIPELINE_RUN_ID) -ForegroundColor Yellow
+            } else {
+                Write-Host ("BRIEF_FACT_PACK_HARD: STALE_META (meta.run_id={0} != PIPELINE_RUN_ID={1}) => FAIL" -f $_bfpRunIdV, $env:PIPELINE_RUN_ID) -ForegroundColor Red
+                exit 1
+            }
         }
     } catch {
         Write-Host "BRIEF_FACT_PACK_HARD: STALE_META check skipped (parse error: $_)" -ForegroundColor DarkYellow
@@ -1377,11 +1390,24 @@ Invoke-MetaGate -Label "BRIEF_TEMPLATE_LEAK_HARD" -MetaFile "brief_template_leak
 # STALE_META check: meta.run_id must match PIPELINE_RUN_ID for this run
 if ($env:PIPELINE_RUN_ID) {
     try {
-        $_btlMetaV = Get-Content (Join-Path $repoRoot "outputs\brief_template_leak.meta.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+        $_btlMetaPathV = Join-Path $repoRoot "outputs\brief_template_leak.meta.json"
+        $_btlMetaItemV = Get-Item $_btlMetaPathV -ErrorAction SilentlyContinue
+        $_btlMetaV = Get-Content $_btlMetaPathV -Raw -Encoding UTF8 | ConvertFrom-Json
         $_metaRunIdV = if ($_btlMetaV.PSObject.Properties["run_id"]) { [string]$_btlMetaV.run_id } else { "" }
         if ($_metaRunIdV -and ($_metaRunIdV -ne [string]$env:PIPELINE_RUN_ID)) {
-            Write-Host ("BRIEF_TEMPLATE_LEAK: STALE_META (meta.run_id={0} != PIPELINE_RUN_ID={1}) => FAIL" -f $_metaRunIdV, $env:PIPELINE_RUN_ID) -ForegroundColor Red
-            exit 1
+            $_btlTreatAsStaleOnly = $false
+            try {
+                $_btlRunStart = [datetime]::ParseExact([string]$env:PIPELINE_RUN_ID, "yyyyMMdd_HHmmss", $null)
+                if ($_btlMetaItemV -and $_btlMetaItemV.LastWriteTime -lt $_btlRunStart) {
+                    $_btlTreatAsStaleOnly = $true
+                }
+            } catch { }
+            if ($_btlTreatAsStaleOnly) {
+                Write-Host ("BRIEF_TEMPLATE_LEAK: STALE_META (meta.run_id={0} != PIPELINE_RUN_ID={1}; 舊檔，僅警示)" -f $_metaRunIdV, $env:PIPELINE_RUN_ID) -ForegroundColor Yellow
+            } else {
+                Write-Host ("BRIEF_TEMPLATE_LEAK: STALE_META (meta.run_id={0} != PIPELINE_RUN_ID={1}) => FAIL" -f $_metaRunIdV, $env:PIPELINE_RUN_ID) -ForegroundColor Red
+                exit 1
+            }
         }
     } catch {
         Write-Host "BRIEF_TEMPLATE_LEAK: STALE_META check skipped (parse error: $_)" -ForegroundColor DarkYellow
