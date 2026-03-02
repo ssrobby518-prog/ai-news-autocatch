@@ -3234,6 +3234,7 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
         fact_candidates = [x for x in fact_seed if x][:15]
         fact_pack_sentences = fact_candidates[:_BRIEF_FACT_PACK_MAX]
         out = dict(fc)
+        out["actor"] = actor
         out["actor_primary"] = actor
         out["anchors"] = anchors_out
         out["quote_1"] = quote_1
