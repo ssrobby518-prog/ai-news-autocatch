@@ -3161,6 +3161,189 @@ def _prepare_brief_final_cards(final_cards: list[dict], max_events: int = 10) ->
         if len(prepared) >= max(1, int(max_events)):
             break
 
+    if len(prepared) < max(1, int(max_events)):
+        for fc in sorted(final_cards or [], key=_brief_candidate_priority, reverse=True):
+            if len(prepared) >= max(1, int(max_events)):
+                break
+
+            title = _normalize_ws(str(fc.get("title", "") or ""))
+            if not title:
+                continue
+            title_key = title.lower()
+            if title_key in accepted_titles:
+                continue
+
+            actor = _normalize_ws(str(fc.get("actor_primary", "") or fc.get("actor", "") or ""))
+            if (
+                (not actor)
+                or _is_actor_numeric(actor)
+                or _brief_is_garbage_actor(actor)
+            ):
+                actor = _derive_actor_from_title(title) or "AI"
+
+            anchors_raw = [
+                _normalize_ws(str(a or ""))
+                for a in (fc.get("anchors", []) or [])
+                if _normalize_ws(str(a or ""))
+            ]
+            anchor = _brief_pick_primary_anchor(actor, anchors_raw) or actor or "AI"
+            anchors_out = [anchor] + [a for a in anchors_raw if a.lower() != anchor.lower()]
+
+            source_name = _normalize_ws(str(fc.get("source_name", "") or ""))
+            final_url = _normalize_ws(str(fc.get("final_url", "") or fc.get("source_url", "") or ""))
+            source_blob = _normalize_ws(
+                str(
+                    fc.get("full_text", "")
+                    or fc.get("what_happened_brief", "")
+                    or fc.get("what_happened", "")
+                    or fc.get("q1", "")
+                    or title
+                )
+            )
+            sentence_inputs = [
+                str(fc.get("quote_1", "") or ""),
+                str(fc.get("quote_2", "") or ""),
+                str(fc.get("what_happened", "") or ""),
+                str(fc.get("why_it_matters", "") or ""),
+                title,
+            ]
+            sentence_inputs.extend(_brief_split_source_sentences(source_blob))
+            sentence_pool = _dedupe_sentences(sentence_inputs, limit=_BRIEF_FACT_PACK_MAX)
+            if not sentence_pool:
+                sentence_pool = [title]
+
+            fact_candidates = _pad_list(sentence_pool, _BRIEF_FACT_PACK_MIN)
+            fact_pack_sentences = _pad_list(sentence_pool[:_BRIEF_FACT_PACK_MAX], _BRIEF_FACT_PACK_MIN)
+
+            quote_1, quote_2 = _select_delivery_quotes(
+                [
+                    str(fc.get("quote_1", "") or ""),
+                    str(fc.get("quote_2", "") or ""),
+                ],
+                fact_candidates + sentence_pool,
+            )
+            if not quote_1:
+                quote_1 = fact_candidates[0]
+            if not quote_2:
+                quote_2 = fact_candidates[1] if len(fact_candidates) > 1 else fact_candidates[0]
+
+            quote_window_1 = _normalize_ws(str(fc.get("quote_window_1", "") or ""))
+            quote_window_2 = _normalize_ws(str(fc.get("quote_window_2", "") or ""))
+            if len(quote_window_1) < 8:
+                quote_window_1 = _extract_quote_window(quote_1, min_len=20, max_len=30)
+            if len(quote_window_2) < 8:
+                quote_window_2 = _extract_quote_window(quote_2, min_len=20, max_len=30)
+            if len(quote_window_1) < 8:
+                quote_window_1 = _clip_text(_normalize_ws(quote_1), 20)
+            if len(quote_window_2) < 8:
+                quote_window_2 = _clip_text(_normalize_ws(quote_2), 20)
+
+            base_what = list(fc.get("what_happened_bullets", []) or [])
+            base_key = list(fc.get("key_details_bullets", []) or [])
+            base_why = list(fc.get("why_it_matters_bullets", []) or [])
+            if not base_what:
+                base_what = _brief_split_bullets(
+                    str(fc.get("what_happened_brief", "") or fc.get("what_happened", "") or quote_1 or title)
+                )
+            if not base_key:
+                base_key = _brief_split_bullets(
+                    str(fc.get("what_happened", "") or fc.get("q1", "") or quote_1 or title)
+                )
+            if not base_why:
+                base_why = _brief_split_bullets(
+                    str(fc.get("why_it_matters_brief", "") or fc.get("why_it_matters", "") or quote_2 or title)
+                )
+
+            what_bullets = _expand_bullets(base_what or [quote_1, title], _BRIEF_TARGET_WHAT_BULLETS)
+            key_details_bullets = _expand_bullets(
+                base_key or [quote_1, quote_2, title],
+                _BRIEF_TARGET_KEY_BULLETS,
+            )
+            why_bullets = _expand_bullets(base_why or [quote_2, title], _BRIEF_TARGET_WHY_BULLETS_DEFAULT)
+
+            what_bullets = _repair_overlap(what_bullets, fact_pack_sentences, anchors_out)
+            key_details_bullets = _repair_overlap(key_details_bullets, fact_pack_sentences, anchors_out)
+            why_bullets = _repair_overlap(why_bullets, fact_pack_sentences, anchors_out)
+            what_bullets = _boost_signal_bullets(what_bullets, fact_pack_sentences, anchors_out)
+            key_details_bullets = _boost_signal_bullets(key_details_bullets, fact_pack_sentences, anchors_out)
+            why_bullets = _boost_signal_bullets(why_bullets, fact_pack_sentences, anchors_out)
+            what_bullets = _ensure_event_sentence_bullets(what_bullets, anchor, "what")
+            key_details_bullets = _ensure_event_sentence_bullets(key_details_bullets, anchor, "key")
+            why_bullets = _ensure_event_sentence_bullets(why_bullets, anchor, "why")
+
+            if not what_bullets or not key_details_bullets or not why_bullets:
+                continue
+
+            what_section = "\n".join(what_bullets)
+            why_section = "\n".join(why_bullets)
+            summary_zh = _normalize_ws(
+                f"{_clip_text(title, 48)}: {_clip_text(what_bullets[0], 56)} {_clip_text(why_bullets[0], 56)}"
+            )
+            if _brief_contains_boilerplate(summary_zh, what_section, why_section):
+                continue
+            if _brief_find_generic_narrative_hits(summary_zh, what_section, why_section):
+                continue
+
+            clean_what = [b for b in what_bullets if check_no_boilerplate(b, "")[0]][:2]
+            clean_why = [b for b in why_bullets if check_no_boilerplate("", b)[0]][:2]
+            if not clean_what:
+                clean_what = [what_bullets[0]]
+            if not clean_why:
+                clean_why = [why_bullets[0]]
+            q1_body = _normalize_ws(" ".join(clean_what))
+            q2_body = _normalize_ws(" ".join(clean_why))
+            q1_zh = _wrap_quote_window(q1_body, quote_window_1)
+            q2_zh = _wrap_quote_window(q2_body, quote_window_2)
+            q1_q2_ok, _ = check_no_boilerplate(q1_zh, q2_zh)
+            if not q1_q2_ok:
+                continue
+
+            out = dict(fc)
+            out["actor"] = actor
+            out["actor_primary"] = actor
+            out["anchors"] = anchors_out
+            out["quote_1"] = quote_1
+            out["quote_2"] = quote_2
+            out["quote_window_1"] = quote_window_1
+            out["quote_window_2"] = quote_window_2
+            category = _normalize_ws(str(fc.get("category", "") or ""))
+            out["impact_target"] = _brief_impact_target(category)
+            out["decision_angle"] = _brief_decision_angle(category)
+            out["summary_zh"] = summary_zh
+            out["what_happened_brief"] = what_section
+            out["why_it_matters_brief"] = why_section
+            out["q1_zh"] = q1_zh
+            out["q2_zh"] = q2_zh
+            out["q1"] = q1_zh
+            out["q2"] = q2_zh
+            out["what_happened"] = q1_zh
+            out["why_it_matters"] = q2_zh
+            out["what_happened_bullets"] = what_bullets
+            out["key_details_bullets"] = key_details_bullets
+            out["why_it_matters_bullets"] = why_bullets
+            out["fact_pack_sentences"] = fact_pack_sentences[:_BRIEF_FACT_PACK_MAX]
+            out["detail_sentences_en_used"] = _dedupe_sentences(sentence_pool, limit=6)
+            out["fact_candidates"] = _pad_list(fact_candidates, 6)[:15]
+            out["published_at"] = _normalize_ws(str(fc.get("published_at", "") or "")) or "unknown"
+            prepared.append(out)
+            accepted_titles.add(title_key)
+            if _is_tier_a_source(source_name, final_url, title):
+                diag["tierA_used"] += 1
+            diag["fallback_recovered"] = int(diag.get("fallback_recovered", 0) or 0) + 1
+            diag["content_miner_events"].append(
+                {
+                    "item_id": _normalize_ws(str(fc.get("item_id", "") or "")),
+                    "title": title[:120],
+                    "fact_pack_total": len(out["fact_pack_sentences"]),
+                    "fact_candidates_total": len(out["fact_candidates"]),
+                    "bullets_count_each": {
+                        "what_happened": len(what_bullets),
+                        "key_details": len(key_details_bullets),
+                        "why_it_matters": len(why_bullets),
+                    },
+                }
+            )
+
     diag["kept_total"] = len(prepared)
     return prepared, diag
 

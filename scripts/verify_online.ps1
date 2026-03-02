@@ -921,6 +921,29 @@ if (Test-Path $execSelMetaPath) {
 #   WARN-OK when file is absent (first run or pipeline skipped).
 # ---------------------------------------------------------------------------
 $filterSummaryPath = Join-Path $repoRoot "outputs\filter_summary.meta.json"
+$actEv = 0
+$nzdShowcaseMetaPath = Join-Path $repoRoot "outputs\showcase_ready.meta.json"
+$nzdExecMetaPath = Join-Path $repoRoot "outputs\exec_selection.meta.json"
+if (Test-Path $nzdShowcaseMetaPath) {
+    try {
+        $nzdShowcaseMeta = Get-Content $nzdShowcaseMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($nzdShowcaseMeta.PSObject.Properties['ai_selected_events']) {
+            $actEv = [int]$nzdShowcaseMeta.ai_selected_events
+        } elseif ($nzdShowcaseMeta.PSObject.Properties['selected_events']) {
+            $actEv = [int]$nzdShowcaseMeta.selected_events
+        }
+    } catch {}
+}
+if (($actEv -lt 1) -and (Test-Path $nzdExecMetaPath)) {
+    try {
+        $nzdExecMeta = Get-Content $nzdExecMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($nzdExecMeta.PSObject.Properties['final_selected_events']) {
+            $actEv = [int]$nzdExecMeta.final_selected_events
+        } elseif ($nzdExecMeta.PSObject.Properties['events_total']) {
+            $actEv = [int]$nzdExecMeta.events_total
+        }
+    } catch {}
+}
 Write-Output ""
 Write-Output "NO_ZERO_DAY GATE:"
 if (Test-Path $filterSummaryPath) {
