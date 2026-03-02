@@ -4162,7 +4162,7 @@ def _translate_md_to_zh(md_text: str) -> tuple[bool, str]:
     # Bare "備受" is a legitimate translation for "widely/broadly received";
     # only compound template phrases are banned in translation output.
     _BANLIST = re.compile(r"近日|備受矚目|備受關注|可核對|原文提到|本文指出|總結來說")
-    _MAX_CHUNK = 1800
+    _MAX_CHUNK = 1500
 
     try:
         from utils.llama_openai_client import chat as _qw
