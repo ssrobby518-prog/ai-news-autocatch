@@ -5776,6 +5776,10 @@ def run_pipeline() -> None:
     if _is_brief_mode:
         try:
             _brief_min_events = max(1, int(os.environ.get("BRIEF_MIN_EVENTS_HARD", "5") or 5))
+            _brief_min_events = max(
+                _brief_min_events,
+                int(os.environ.get("EXEC_MIN_EVENTS", str(_brief_min_events)) or _brief_min_events),
+            )
         except Exception:
             _brief_min_events = 5
     log.info(
