@@ -8523,7 +8523,13 @@ def run_pipeline() -> None:
         )
 
         # TIME_BUDGET checkpoint 2: before Translation-First ZH Delivery
-        _check_time_budget("before_translation")
+        # Brief-mode bypass: if PPTX already exists, Fix-2 will skip TFD entirely.
+        # No need to enforce the budget for a step we won't run — skip the check.
+        _pre_tfd_pptx_exists = (
+            Path(settings.PROJECT_ROOT) / "outputs" / "executive_report.pptx"
+        ).exists()
+        if not (_is_brief_mode and _pre_tfd_pptx_exists):
+            _check_time_budget("before_translation")
 
         # ---------------------------------------------------------------
         # Iteration 20: Translation-First ZH Delivery
