@@ -9028,7 +9028,10 @@ def run_pipeline() -> None:
                         _claude_product_in_title_d = bool(_re_dod.search(
                             r"\bClaude\s+(?:Code|API|Sonnet|Haiku|Opus)\b", _title_d, _re_dod.IGNORECASE
                         ))
-                        if _claude_product_in_title_d:
+                        _claude_brand_in_title_d = (
+                            ("claude" in _title_d.lower()) and ("anthropic" in _title_d.lower())
+                        )
+                        if _claude_product_in_title_d or _claude_brand_in_title_d:
                             _dod_naming = True
                         else:
                             _q1q2_naming_text = _q1_d + " " + _q2_d
