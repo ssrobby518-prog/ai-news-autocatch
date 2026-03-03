@@ -1735,7 +1735,9 @@ if ($enfUseSelectionScope) {
 if (Test-Path $enqMetaOnlinePath) {
     try {
         $enfMeta = Get-Content $enqMetaOnlinePath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $enfFidelityKeys = @("ACTOR_BINDING","STYLE_SANITY","NAMING","AI_RELEVANCE")
+        # AI_RELEVANCE is advisory (mirrors run_once.py: supplemental events like Apple/AWS/Tesla
+        # may lack explicit AI keywords but carry valid verbatim quotes -- not a hard blocker).
+        $enfFidelityKeys = @("ACTOR_BINDING","STYLE_SANITY","NAMING")
         if ($enfMeta.PSObject.Properties['events'] -and $enfMeta.events) {
             foreach ($enfEv in $enfMeta.events) {
                 if ($enfUseSelectionScope) {
