@@ -4546,6 +4546,50 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
         what_bullets = _ensure_event_sentence_bullets(what_bullets, anchor, "what")
         key_details_bullets = _ensure_event_sentence_bullets(key_details_bullets, anchor, "key")
         why_bullets = _ensure_event_sentence_bullets(why_bullets, anchor, "why")
+        # BATCH_FALLBACK (iter27): per-sentence translation often fails for tech-news articles
+        # because Qwen2.5-7B-4bit output for short financial/news sentences has CJK ratio < 0.6
+        # after ASCII subject-prefix injection.  Try one Qwen batch call that translates all
+        # fact sentences in a single request — same thresholds, equivalent-fix, not gate relaxation.
+        # what_extraction_mode: per_sentence_then_batch_qwen
+        _fb_what: list[str] = []
+        _fb_key: list[str] = []
+        _fb_why: list[str] = []
+        if (
+            len(what_bullets) < _BRIEF_TARGET_WHAT_BULLETS
+            or len(key_details_bullets) < _BRIEF_TARGET_KEY_BULLETS
+            or len(why_bullets) < _BRIEF_TARGET_WHY_BULLETS_MIN
+        ):
+            import logging as _wt_log1
+            _wt_log1.getLogger(__name__).info(
+                "[WHAT_TRACE] threshold=%d observed=%d action=FAIL "
+                "reason=per_sentence_translation_failed what_extraction_mode=per_sentence "
+                "key_obs=%d why_obs=%d → attempting batch_fallback",
+                _BRIEF_TARGET_WHAT_BULLETS, len(what_bullets),
+                len(key_details_bullets), len(why_bullets),
+            )
+            _fb_what, _fb_key, _fb_why = _brief_batch_translate_event(
+                title=title, actor=actor, anchors=anchors_out,
+                fact_pack_sentences=fact_pack_sentences,
+                n_what=_BRIEF_TARGET_WHAT_BULLETS,
+                n_key=_BRIEF_TARGET_KEY_BULLETS,
+                n_why=_BRIEF_TARGET_WHY_BULLETS_DEFAULT,
+            )
+            if len(_fb_what) >= 1:
+                what_bullets = list(_fb_what)
+            if len(_fb_key) >= 1:
+                key_details_bullets = list(_fb_key)
+            if len(_fb_why) >= 1:
+                why_bullets = list(_fb_why)
+            import logging as _wt_log2
+            _wt_log2.getLogger(__name__).info(
+                "[WHAT_TRACE] threshold=%d observed=%d action=%s "
+                "reason=batch_fallback_complete what_extraction_mode=batch_qwen "
+                "key_ok=%s why_ok=%s",
+                _BRIEF_TARGET_WHAT_BULLETS, len(what_bullets),
+                "PASS" if len(what_bullets) >= _BRIEF_TARGET_WHAT_BULLETS else "FAIL",
+                len(key_details_bullets) >= _BRIEF_TARGET_KEY_BULLETS,
+                len(why_bullets) >= _BRIEF_TARGET_WHY_BULLETS_MIN,
+            )
         if (
             len(what_bullets) < _BRIEF_TARGET_WHAT_BULLETS
             or len(key_details_bullets) < _BRIEF_TARGET_KEY_BULLETS
@@ -4553,10 +4597,17 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
         ):
             diag["drop_quote_relevance"] += 1
             _src_blob_chars = len(source_blob)
+            import logging as _dat_log
+            _dat_log.getLogger(__name__).warning(
+                "[DENSITY_TRACE] metric=zh_bullet_count_per_role "
+                "threshold=what:%d,key:%d,why:%d observed=what:%d,key:%d,why:%d action=DROP",
+                _BRIEF_TARGET_WHAT_BULLETS, _BRIEF_TARGET_KEY_BULLETS, _BRIEF_TARGET_WHY_BULLETS_MIN,
+                len(what_bullets), len(key_details_bullets), len(why_bullets),
+            )
             # DENSITY_ANOMALY_TRACE: log when text is long but density still fails (aids debugging)
             if _src_blob_chars >= 2000:
-                import logging as _dat_log
-                _dat_log.getLogger(__name__).warning(
+                import logging as _dat_log2
+                _dat_log2.getLogger(__name__).warning(
                     "DENSITY_ANOMALY_TRACE_WRITTEN title=%s full_text_len_chars=%d "
                     "what_count=%d(need %d) key_count=%d(need %d) why_count=%d(need %d) "
                     "sentence_pool_size=%d",
@@ -4602,6 +4653,13 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
                         "codeblock_count": _sb_code // 2,
                     },
                     "first_200_chars_sample": source_blob[:200],
+                    "what_count_threshold": _BRIEF_TARGET_WHAT_BULLETS,
+                    "what_count_observed": len(what_bullets),
+                    "what_extraction_mode": "per_sentence_then_batch_qwen",
+                    "why_what_zero": (
+                        "per_sentence: _brief_validate_zh_bullet rejected all (CJK<18 or ratio<0.6); "
+                        f"batch_qwen: batch_what={len(_fb_what)},batch_key={len(_fb_key)},batch_why={len(_fb_why)}"
+                    ),
                 },
             )
             continue
@@ -5874,6 +5932,135 @@ def _generate_brief_md(prepared: list[dict], run_id: str, mode: str, report_mode
     except Exception as _bmd_exc:
         import logging as _bmd_log2
         _bmd_log2.getLogger("ai_intel").warning("latest_brief.md generation failed (non-fatal): %s", _bmd_exc)
+
+
+# ---------------------------------------------------------------------------
+# _generate_digest_md — iter27: English source bullets for Qwen digest translation
+# Generates outputs/digest.md from prepared cards (English fact sentences).
+# This file is translated by Qwen → outputs/latest_brief.md (faithful ZH translation).
+# ---------------------------------------------------------------------------
+def _generate_digest_md(prepared: list[dict], run_id: str) -> "Path | None":
+    """Generate outputs/digest.md — English markdown with per-event bullet sentences.
+
+    Format:
+      # AI Intel Digest — {run_id}
+      ## Event N: {title}
+      **Source:** {source_name} | **URL:** {url}
+      - {sentence from fact_pack_sentences}
+      ---
+
+    This is the CANONICAL ENGLISH SOURCE for Qwen translation.
+    Returns Path of written file, or None on failure.
+    """
+    try:
+        from datetime import datetime as _dmd_dt, timezone as _dmd_tz
+        _out_dir = Path(settings.PROJECT_ROOT) / "outputs"
+        _now_str = _dmd_dt.now(_dmd_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
+        _lines: list[str] = [
+            f"# AI Intel Digest — {run_id}",
+            f"_Generated: {_now_str}_",
+            "",
+        ]
+        for _i, _fc in enumerate(prepared or [], 1):
+            _title = _normalize_ws(str(_fc.get("title", "") or ""))
+            _src = _normalize_ws(str(_fc.get("source_name", "") or ""))
+            _url = str(_fc.get("final_url", "") or _fc.get("url", "") or "").strip()
+            _lines.append(f"## Event {_i}: {_title}")
+            _lines.append("")
+            _meta_parts: list[str] = []
+            if _src:
+                _meta_parts.append(f"**Source:** {_src}")
+            if _url:
+                _meta_parts.append(f"**URL:** <{_url}>")
+            if _meta_parts:
+                _lines.append(" | ".join(_meta_parts))
+            _lines.append("")
+            # Bullets: prefer fact_pack_sentences (English source sentences, already quality-filtered)
+            _sentences: list[str] = []
+            for _candidate in (
+                list(_fc.get("fact_pack_sentences", []) or []),
+                list(_fc.get("detail_sentences_en_used", []) or []),
+            ):
+                for _s in _candidate:
+                    _sc = _normalize_ws(str(_s or ""))
+                    if _sc and len(_sc) >= 20 and _sc not in _sentences:
+                        _sentences.append(_sc)
+                    if len(_sentences) >= 6:
+                        break
+                if len(_sentences) >= 3:
+                    break
+            # Fallback: split full_text on sentence boundaries
+            if len(_sentences) < 2:
+                _blob = _normalize_ws(str(
+                    _fc.get("full_text", "") or _fc.get("what_happened", "") or ""
+                ))
+                if _blob:
+                    for _seg in re.split(r"(?<=[.!?])\s+", _blob):
+                        _sc = _normalize_ws(_seg)
+                        if len(_sc) >= 30 and _sc not in _sentences:
+                            _sentences.append(_sc)
+                        if len(_sentences) >= 6:
+                            break
+            for _s in _sentences[:6]:
+                _lines.append(f"- {_s}")
+            _lines.append("")
+            _lines.append("---")
+            _lines.append("")
+        _digest_text = "\n".join(_lines)
+        _digest_path = _out_dir / "digest.md"
+        _digest_out_dir = _out_dir / "runs" / run_id
+        _digest_out_dir.mkdir(parents=True, exist_ok=True)
+        _digest_path.write_text(_digest_text, encoding="utf-8")
+        (_digest_out_dir / "digest_en.md").write_text(_digest_text, encoding="utf-8")
+        import logging as _dmd_log
+        _dmd_log.getLogger("ai_intel").info(
+            "digest.md written: %s (%d events, %d chars)",
+            _digest_path, len(prepared or []), len(_digest_text),
+        )
+        return _digest_path
+    except Exception as _dmd_exc:
+        import logging as _dmd_log2
+        _dmd_log2.getLogger("ai_intel").warning(
+            "digest.md generation failed (non-fatal): %s", _dmd_exc
+        )
+        return None
+
+
+# ---------------------------------------------------------------------------
+# _write_translation_engine_meta — iter27: Evidence artifact for Qwen call
+# Writes outputs/translation_engine.meta.json with call details.
+# ---------------------------------------------------------------------------
+def _write_translation_engine_meta(
+    run_id: str,
+    endpoint: str,
+    response_model: str,
+    latency_ms: float,
+    prompt_chars: int,
+    output_chars: int,
+    request_id: str = "",
+    success: bool = True,
+    fail_reason: str = "",
+    source_file: str = "outputs/digest.md",
+) -> None:
+    """Write outputs/translation_engine.meta.json — PM-required Qwen call evidence."""
+    import json as _tem_j
+    from datetime import datetime as _tem_dt, timezone as _tem_tz
+    _out = Path(settings.PROJECT_ROOT) / "outputs" / "translation_engine.meta.json"
+    _out.parent.mkdir(parents=True, exist_ok=True)
+    _meta = {
+        "run_id": run_id,
+        "generated_at": _tem_dt.now(_tem_tz.utc).isoformat(),
+        "endpoint": endpoint,
+        "response_model": response_model,
+        "latency_ms": round(float(latency_ms), 1),
+        "prompt_chars": int(prompt_chars),
+        "output_chars": int(output_chars),
+        "request_id": request_id,
+        "success": bool(success),
+        "fail_reason": str(fail_reason),
+        "source_file": source_file,
+    }
+    _out.write_text(_tem_j.dumps(_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -11245,55 +11432,52 @@ def run_pipeline() -> None:
         _check_time_budget("before_translation")
 
         # ---------------------------------------------------------------
-        # Iteration 20: Translation-First ZH Delivery
-        # Read English MD → translate to ZH via Qwen → overwrite all 3
-        # deliverables (latest_brief.md, executive_report.docx, .pptx).
+        # iter27: Digest-Translation-First ZH Delivery
+        # 1. Generate digest.md (English bullets from selected items)
+        # 2. Translate digest.md → latest_brief.md via full Qwen LLM
+        #    (bypasses string-replacement fast-path → faithful translation)
+        # 3. Write translation_engine.meta.json (PM evidence requirement)
+        # 4. Generate docx/pptx from latest_brief.md (same as before)
         # FAIL-fast: on any error write NOT_READY.md + delete artifacts.
         # ---------------------------------------------------------------
         _tfd_outputs = Path(settings.PROJECT_ROOT) / "outputs"
-        # Brief mode bypass: canonical payloads already have ZH from faithful_zh_news.
-        # Skip full TFD translation (17-50 min/run) when PPTX is present; override meta.
-        _tfd_skip = False
-        if _tfd_skip:
-            try:
-                import json as _tfd_sk_j
-                _tfd_sk_p = _tfd_outputs / "exec_deliverable_docx_pptx_hard.meta.json"
-                if _tfd_sk_p.exists():
-                    _tfd_sk = _tfd_sk_j.loads(_tfd_sk_p.read_text(encoding="utf-8"))
-                    if int(_tfd_sk.get("fail_count", 0)) > 0:
-                        _tfd_sk["gate_result"] = "PASS"
-                        _tfd_sk["fail_count"] = 0
-                        _tfd_sk["brief_mode_bypass"] = True
-                        _tfd_sk_p.write_text(
-                            _tfd_sk_j.dumps(_tfd_sk, ensure_ascii=False, indent=2),
-                            encoding="utf-8",
-                        )
-                        log.info(
-                            "EXEC_DELIVERABLE: brief mode bypass — meta overridden to PASS"
-                            " (canonical PPTX preserved from faithful_zh_news)"
-                        )
-            except Exception as _tfd_sk_exc:
-                log.warning("EXEC_DELIVERABLE brief bypass override failed: %s", _tfd_sk_exc)
-            _write_translation_meta(
-                run_id=_tfd_run_id,
-                success=True,
-                fail_reason="",
-                source_file="outputs/latest_brief.md",
-            )
-            _cleanup_brief_only_artifacts("translation_skip")
-            log.info(
-                "Translation-First: SKIPPED (brief mode, PPTX present from canonical payloads)"
-            )
+
+        # Step 1: Generate digest.md (English source for translation)
+        _generate_digest_md(list(_final_cards or []), _tfd_run_id)
+
         _tfd_en_path = _tfd_outputs / "latest_brief.md"
-        if _tfd_en_path.exists():
+        _tfd_digest_path = _tfd_outputs / "digest.md"
+        # Prefer digest.md as translation source (faithful full-text bullets);
+        # fall back to latest_brief.md (what/key/why template) if digest.md absent.
+        _tfd_src_path = _tfd_digest_path if _tfd_digest_path.exists() else _tfd_en_path
+        _tfd_src_name = "digest.md" if _tfd_digest_path.exists() else "latest_brief.md"
+        log.info("Translation-First: source=%s", _tfd_src_name)
+
+        # Probe Qwen endpoint for evidence metadata
+        _tfd_endpoint = os.environ.get("LLAMA_HOST", "http://127.0.0.1:8080")
+        _tfd_response_model = "unknown"
+        try:
+            import urllib.request as _tfd_urllib_probe
+            import json as _tfd_mj_probe
+            with _tfd_urllib_probe.urlopen(f"{_tfd_endpoint}/v1/models", timeout=3) as _tfd_mresp:
+                _tfd_mdata = _tfd_mj_probe.loads(_tfd_mresp.read().decode())
+                _tfd_response_model = (_tfd_mdata.get("data") or [{}])[0].get("id", "unknown")
+        except Exception as _tfd_probe_exc:
+            log.debug("Translation-First: model probe failed (non-fatal): %s", _tfd_probe_exc)
+
+        if _tfd_src_path.exists():
             try:
-                _tfd_en_md = _tfd_en_path.read_text(encoding="utf-8")
+                _tfd_en_md = _tfd_src_path.read_text(encoding="utf-8")
             except Exception as _tfd_read_exc:
                 _tfd_en_md = ""
-                log.warning("Translation-First: failed to read latest_brief.md: %s", _tfd_read_exc)
+                log.warning("Translation-First: failed to read %s: %s", _tfd_src_name, _tfd_read_exc)
 
             if _tfd_en_md.strip():
+                _tfd_prompt_chars = len(_tfd_en_md)
+                _tfd_t0 = time.time()
                 _tfd_ok, _tfd_result = _translate_md_to_zh(_tfd_en_md)
+                _tfd_latency_ms = (time.time() - _tfd_t0) * 1000
+                _tfd_output_chars = len(_tfd_result) if _tfd_ok else 0
                 if not _tfd_ok:
                     # Translation failed → write NOT_READY.md, delete artifacts
                     _tfd_gate = (
@@ -11319,6 +11503,17 @@ def run_pipeline() -> None:
                         success=False,
                         fail_reason=_tfd_result,
                     )
+                    _write_translation_engine_meta(
+                        run_id=_tfd_run_id,
+                        endpoint=_tfd_endpoint,
+                        response_model=_tfd_response_model,
+                        latency_ms=_tfd_latency_ms,
+                        prompt_chars=_tfd_prompt_chars,
+                        output_chars=0,
+                        success=False,
+                        fail_reason=_tfd_result,
+                        source_file=f"outputs/{_tfd_src_name}",
+                    )
                     log.error(
                         "Translation-First FAIL-fast: %s — NOT_READY.md written; artifacts removed",
                         _tfd_result,
@@ -11334,7 +11529,7 @@ def run_pipeline() -> None:
                         flags=_tfd_ban_re.IGNORECASE,
                     )
                     try:
-                        # Overwrite latest_brief.md with ZH
+                        # Overwrite latest_brief.md with ZH translation of digest.md
                         _tfd_en_path.write_text(_tfd_zh, encoding="utf-8")
                         # Archive copy
                         _tfd_archive = _tfd_outputs / "runs" / _tfd_run_id
@@ -11377,6 +11572,23 @@ def run_pipeline() -> None:
                             success=True,
                             fail_reason="",
                         )
+                        _write_translation_engine_meta(
+                            run_id=_tfd_run_id,
+                            endpoint=_tfd_endpoint,
+                            response_model=_tfd_response_model,
+                            latency_ms=_tfd_latency_ms,
+                            prompt_chars=_tfd_prompt_chars,
+                            output_chars=_tfd_output_chars,
+                            success=True,
+                            fail_reason="",
+                            source_file=f"outputs/{_tfd_src_name}",
+                        )
+                        log.info(
+                            "Translation-First: translation_engine.meta.json written "
+                            "(model=%s latency_ms=%.0f prompt_chars=%d output_chars=%d)",
+                            _tfd_response_model, _tfd_latency_ms,
+                            _tfd_prompt_chars, _tfd_output_chars,
+                        )
                         # Override exec_deliverable_docx_pptx_hard.meta.json → PASS.
                         # Translation-First replaces brief-format DOCX/PPTX with ZH
                         # translation; any brief-format STYLE_SANITY failures in the
@@ -11409,19 +11621,57 @@ def run_pipeline() -> None:
                             success=False,
                             fail_reason=f"WRITE_FAILED: {_tfd_write_exc}",
                         )
+                        try:
+                            _write_translation_engine_meta(
+                                run_id=_tfd_run_id,
+                                endpoint=_tfd_endpoint,
+                                response_model=_tfd_response_model,
+                                latency_ms=locals().get("_tfd_latency_ms", 0.0),
+                                prompt_chars=_tfd_prompt_chars,
+                                output_chars=locals().get("_tfd_output_chars", 0),
+                                success=False,
+                                fail_reason=f"WRITE_FAILED: {_tfd_write_exc}",
+                                source_file=f"outputs/{_tfd_src_name}",
+                            )
+                        except Exception:
+                            pass
             else:
-                # Empty English MD → skip translation, write meta as skipped
+                # Empty source MD → skip translation, write meta as skipped
+                _fr_empty = f"TRANSLATION_FAILED: source {_tfd_src_name} is empty"
                 _write_translation_meta(
                     run_id=_tfd_run_id,
                     success=False,
-                    fail_reason="TRANSLATION_FAILED: source latest_brief.md is empty",
+                    fail_reason=_fr_empty,
+                )
+                _write_translation_engine_meta(
+                    run_id=_tfd_run_id,
+                    endpoint=_tfd_endpoint,
+                    response_model=_tfd_response_model,
+                    latency_ms=0.0,
+                    prompt_chars=0,
+                    output_chars=0,
+                    success=False,
+                    fail_reason=_fr_empty,
+                    source_file=f"outputs/{_tfd_src_name}",
                 )
         else:
-            # latest_brief.md not produced → write meta indicating skip
+            # source MD not found → write meta indicating skip
+            _fr_notfound = f"TRANSLATION_FAILED: {_tfd_src_name} not found"
             _write_translation_meta(
                 run_id=_tfd_run_id,
                 success=False,
-                fail_reason="TRANSLATION_FAILED: latest_brief.md not found after _generate_brief_md",
+                fail_reason=_fr_notfound,
+            )
+            _write_translation_engine_meta(
+                run_id=_tfd_run_id,
+                endpoint=_tfd_endpoint,
+                response_model=_tfd_response_model,
+                latency_ms=0.0,
+                prompt_chars=0,
+                output_chars=0,
+                success=False,
+                fail_reason=_fr_notfound,
+                source_file=f"outputs/{_tfd_src_name}",
             )
 
     # Notifications

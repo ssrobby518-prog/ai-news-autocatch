@@ -261,6 +261,7 @@ if ($false -and $SkipPipeline) {
         $_gpuReason = if ($_gpuFound) { "none" } else { "GPU_NOT_ACTIVE" }
         @{
             run_id            = $_voRunId
+            nvidia_smi_ok     = $_nvsmiExists
             gpu_process_found = $_gpuFound
             vram_mb           = $_vramMb
             nvidia_smi_found  = $_nvsmiExists
@@ -287,6 +288,7 @@ if ($false -and $SkipPipeline) {
         New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "outputs") -ErrorAction SilentlyContinue | Out-Null
         @{
             run_id            = $_voRunId
+            nvidia_smi_ok     = $false
             gpu_process_found = $false
             vram_mb           = 0
             nvidia_smi_found  = $false
@@ -3022,6 +3024,126 @@ if (Test-Path $_tdMetaPath) {
     Write-Output "  translation.meta.json not found"
     Write-Output "  => TRANSLATION_DELIVERY_HARD: FAIL (meta missing)"
     exit 1
+}
+
+Write-Output ""
+# ---------------------------------------------------------------------------
+# TRANSLATION_DENSITY_HARD gate (iter27)
+# Requires: latest_brief.md bullet lines >= digest.md bullet lines * 0.9
+# Ensures the faithful Qwen translation preserves source bullet density.
+# ---------------------------------------------------------------------------
+Write-Output "TRANSLATION_DENSITY_HARD:"
+$_tdDgPath = Join-Path $repoRoot "outputs\digest.md"
+$_tdBrPath = Join-Path $repoRoot "outputs\latest_brief.md"
+if ((Test-Path $_tdDgPath) -and (Test-Path $_tdBrPath)) {
+    try {
+        $_tdDgLines = Get-Content $_tdDgPath -Encoding UTF8
+        $_tdBrLines = Get-Content $_tdBrPath -Encoding UTF8
+        $_tdDgBullets = @($_tdDgLines | Where-Object { $_ -match '^\s*[-*]\s+' }).Count
+        $_tdBrBullets = @($_tdBrLines | Where-Object { $_ -match '^\s*[-*]\s+' }).Count
+        $_tdRequired  = [Math]::Ceiling($_tdDgBullets * 0.9)
+        $_tdPass = ($_tdBrBullets -ge $_tdRequired)
+        @{
+            run_id               = $_voRunId
+            gate_result          = if ($_tdPass) { "PASS" } else { "FAIL" }
+            digest_bullet_lines  = $_tdDgBullets
+            brief_bullet_lines   = $_tdBrBullets
+            required_min         = $_tdRequired
+            threshold_ratio      = 0.9
+        } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\translation_density_hard.meta.json") -Encoding UTF8
+        Write-Output ("  [BULLET_COUNT_COMPARE] digest_bullets={0}  brief_bullets={1}  required>={2}" -f $_tdDgBullets, $_tdBrBullets, $_tdRequired)
+        if ($_tdPass) {
+            Write-Output "  => TRANSLATION_DENSITY_HARD: PASS"
+        } else {
+            Write-Output ("  => TRANSLATION_DENSITY_HARD: FAIL (brief_bullets={0} < required={1}; digest needs faithful translation)" -f $_tdBrBullets, $_tdRequired)
+            exit 1
+        }
+    } catch {
+        Write-Output ("  => TRANSLATION_DENSITY_HARD: FAIL (error: {0})" -f $_)
+        exit 1
+    }
+} else {
+    $_tdSkipReason = if (-not (Test-Path $_tdDgPath)) { "digest.md absent" } else { "latest_brief.md absent" }
+    Write-Output ("  => TRANSLATION_DENSITY_HARD: SKIP ({0}) — non-gating when source absent" -f $_tdSkipReason)
+}
+
+Write-Output ""
+# ---------------------------------------------------------------------------
+# NO_REPEAT_SPAM_HARD gate (iter27)
+# Detects same sentence appearing >=3 times within the same ## section.
+# Fails on Q1/Q2 paste-spam or template repetition patterns.
+# ---------------------------------------------------------------------------
+Write-Output "NO_REPEAT_SPAM_HARD:"
+if (Test-Path $_tdBrPath) {
+    try {
+        $_nrLines       = Get-Content $_tdBrPath -Encoding UTF8
+        $_nrSpamFound   = $false
+        $_nrMaxRepeat   = 0
+        $_nrSpamSample  = ""
+        $_nrSection     = [System.Collections.Generic.List[string]]::new()
+        function _CheckNrSection([System.Collections.Generic.List[string]]$sLines) {
+            $sentences = [System.Collections.Generic.List[string]]::new()
+            foreach ($ln in $sLines) {
+                $clean = ($ln -replace '^[\-\*\>#\s]+', '').Trim()
+                if ($clean.Length -gt 10) { $sentences.Add($clean) }
+            }
+            $counts = @{}
+            foreach ($s in $sentences) {
+                if ($counts.ContainsKey($s)) { $counts[$s]++ } else { $counts[$s] = 1 }
+            }
+            return $counts
+        }
+        foreach ($_nrLine in $_nrLines) {
+            if ($_nrLine -match '^##') {
+                if ($_nrSection.Count -gt 0) {
+                    $sectionCounts = _CheckNrSection $_nrSection
+                    foreach ($k in $sectionCounts.Keys) {
+                        if ($sectionCounts[$k] -ge 3) {
+                            $_nrSpamFound = $true
+                            if ($sectionCounts[$k] -gt $_nrMaxRepeat) {
+                                $_nrMaxRepeat  = $sectionCounts[$k]
+                                $_nrSpamSample = $k.Substring(0, [Math]::Min(80, $k.Length))
+                            }
+                        }
+                    }
+                }
+                $_nrSection = [System.Collections.Generic.List[string]]::new()
+            }
+            $_nrSection.Add($_nrLine)
+        }
+        # Check last section
+        if ($_nrSection.Count -gt 0) {
+            $sectionCounts = _CheckNrSection $_nrSection
+            foreach ($k in $sectionCounts.Keys) {
+                if ($sectionCounts[$k] -ge 3) {
+                    $_nrSpamFound = $true
+                    if ($sectionCounts[$k] -gt $_nrMaxRepeat) {
+                        $_nrMaxRepeat  = $sectionCounts[$k]
+                        $_nrSpamSample = $k.Substring(0, [Math]::Min(80, $k.Length))
+                    }
+                }
+            }
+        }
+        @{
+            run_id                   = $_voRunId
+            gate_result              = if (-not $_nrSpamFound) { "PASS" } else { "FAIL" }
+            spam_found               = $_nrSpamFound
+            max_repeat_count         = $_nrMaxRepeat
+            sample_repeated_sentence = $_nrSpamSample
+            threshold_repeat_count   = 3
+        } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\no_repeat_spam_hard.meta.json") -Encoding UTF8
+        if (-not $_nrSpamFound) {
+            Write-Output "  => NO_REPEAT_SPAM_HARD: PASS (no sentence repeated >=3 times in same section)"
+        } else {
+            Write-Output ("  => NO_REPEAT_SPAM_HARD: FAIL (max_repeat={0}  sample={1})" -f $_nrMaxRepeat, $_nrSpamSample)
+            exit 1
+        }
+    } catch {
+        Write-Output ("  => NO_REPEAT_SPAM_HARD: FAIL (error: {0})" -f $_)
+        exit 1
+    }
+} else {
+    Write-Output "  latest_brief.md not found → SKIP (non-gating when absent)"
 }
 
 Write-Output ""
