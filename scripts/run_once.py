@@ -1979,10 +1979,17 @@ def _brief_sentence_to_zh_bullet(
         return ""
     anchor = _brief_pick_primary_anchor(actor, anchors)
     num = _brief_extract_num_token(s)
+    # DATE_INJECT: provide today's date so _format_date_zh returns a real date
+    # instead of "近日" (which is in the PM banlist and causes bullet validation failure).
+    try:
+        import datetime as _dt_brief
+        _today_str = _dt_brief.date.today().strftime("%Y-%m-%d")
+    except Exception:
+        _today_str = ""
     context = {
         "title": title or s[:100],
         "bucket": "tech",
-        "date": "",
+        "date": _today_str,
         "what_happened": s,
         "subject": actor or anchor,
     }
@@ -4388,6 +4395,18 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
         source_blob = _normalize_ws(
             str(fc.get("full_text", "") or fc.get("what_happened", "") or fc.get("q1", "") or "")
         )
+        # BLOB_CLEAN: strip residual HTML tags (may arrive from demo_ext DB body or scraped pages)
+        if "<" in source_blob and ">" in source_blob:
+            source_blob = re.sub(r"<[^>]{1,300}>", " ", source_blob)
+            for _be, _br in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"),
+                              ("&gt;", ">"), ("&#39;", "'"), ("&quot;", '"'), ("&hellip;", "…")):
+                source_blob = source_blob.replace(_be, _br)
+            source_blob = _normalize_ws(source_blob)
+        # RESHAPE: if the blob has no internal newlines but is long, break on sentence endings
+        # so _brief_split_source_sentences gains more diverse paragraph-level entries.
+        # NOTE: do NOT call _normalize_ws here — that would remove the inserted \n characters.
+        if "\n" not in source_blob and len(source_blob) > 300:
+            source_blob = re.sub(r"(?<=[.!?])\s+(?=[A-Z\u4e00-\u9fff])", "\n", source_blob)
         sentence_inputs = [
             str(fc.get("quote_1", "") or ""),
             str(fc.get("quote_2", "") or ""),
@@ -4533,6 +4552,26 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
             or len(why_bullets) < _BRIEF_TARGET_WHY_BULLETS_MIN
         ):
             diag["drop_quote_relevance"] += 1
+            _src_blob_chars = len(source_blob)
+            # DENSITY_ANOMALY_TRACE: log when text is long but density still fails (aids debugging)
+            if _src_blob_chars >= 2000:
+                import logging as _dat_log
+                _dat_log.getLogger(__name__).warning(
+                    "DENSITY_ANOMALY_TRACE_WRITTEN title=%s full_text_len_chars=%d "
+                    "what_count=%d(need %d) key_count=%d(need %d) why_count=%d(need %d) "
+                    "sentence_pool_size=%d",
+                    title[:80], _src_blob_chars,
+                    len(what_bullets), _BRIEF_TARGET_WHAT_BULLETS,
+                    len(key_details_bullets), _BRIEF_TARGET_KEY_BULLETS,
+                    len(why_bullets), _BRIEF_TARGET_WHY_BULLETS_MIN,
+                    len(sentence_pool),
+                )
+            # Build text_shape_fingerprint from source_blob
+            _sb_lines = [_l for _l in source_blob.split("\n") if _l.strip()]
+            _sb_bullet_lines = sum(1 for _l in _sb_lines if re.match(r"^\s*[-*•]\s+", _l))
+            _sb_heading = sum(1 for _l in _sb_lines if re.match(r"^#{1,6}\s+", _l))
+            _sb_links = len(re.findall(r"https?://\S+", source_blob))
+            _sb_code = source_blob.count("```")
             _record_drop(
                 "density_target_not_met",
                 title,
@@ -4540,6 +4579,29 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
                     "what_count": len(what_bullets),
                     "key_count": len(key_details_bullets),
                     "why_count": len(why_bullets),
+                    "density_gate_threshold": {
+                        "what": _BRIEF_TARGET_WHAT_BULLETS,
+                        "key": _BRIEF_TARGET_KEY_BULLETS,
+                        "why": _BRIEF_TARGET_WHY_BULLETS_MIN,
+                    },
+                    "density_gate_metric_name": "zh_bullet_count_per_role",
+                    "density_gate_observed_value": {
+                        "what": len(what_bullets),
+                        "key": len(key_details_bullets),
+                        "why": len(why_bullets),
+                    },
+                    "sentence_pool_size": len(sentence_pool),
+                    "full_text_len_chars": _src_blob_chars,
+                    "full_text_len_bytes": len(source_blob.encode("utf-8", errors="replace")),
+                    "full_text_len_tokens_est": len(re.findall(r"\S+", source_blob)),
+                    "text_shape_fingerprint": {
+                        "lines_count": len(_sb_lines),
+                        "bullet_lines_count": _sb_bullet_lines,
+                        "heading_count": _sb_heading,
+                        "link_count": _sb_links,
+                        "codeblock_count": _sb_code // 2,
+                    },
+                    "first_200_chars_sample": source_blob[:200],
                 },
             )
             continue
@@ -5382,22 +5444,23 @@ def _write_selection_debug_meta(
 
     Records for every candidate in pool: src_type, bigtech detection path,
     full_text_len, official_or_media status, drop reason from quality checks.
+    For density_target_not_met drops, also writes 8 extra diagnostic fields.
     """
     try:
         import json as _sdb_j
+        import logging as _sdb_log
         from urllib.parse import urlparse as _sdb_up
 
         _final_titles = {
             _normalize_ws(str(fc.get("title", "") or "")).lower()
             for fc in (final or [])
         }
-        _drop_by_title: dict[str, str] = {}
+        # Store full drop record (not just reason) keyed by normalised title
+        _drop_by_title: dict[str, dict] = {}
         for _de in (diag.get("dropped_events", []) or []):
             _dtitle = _normalize_ws(str(_de.get("title", "") or "")).lower()
             if _dtitle:
-                _drop_by_title[_dtitle] = _normalize_ws(
-                    str(_de.get("reason", "") or "unknown")
-                )
+                _drop_by_title[_dtitle] = _de
         _rows = []
         for _fc in (pool or []):
             _title = _normalize_ws(str(_fc.get("title", "") or ""))
@@ -5408,27 +5471,64 @@ def _write_selection_debug_meta(
                 _netloc = _sdb_up(_furl).netloc or _src_name
             except Exception:
                 _netloc = _src_name
-            _full_len = len(_normalize_ws(str(_fc.get("full_text", "") or "")))
+            _full_text_raw = _normalize_ws(str(_fc.get("full_text", "") or ""))
+            _full_len = len(_full_text_raw)
             _bt_title = bool(_BIGTECH_COMPANY_RE.search(_title))
             _bt_src = bool(_BIGTECH_COMPANY_RE.search(_src_name))
             _st = _classify_source_type(_src_name, _furl)
-            _dropped = _title_lc in _drop_by_title
-            _rows.append(
-                {
-                    "title": _title[:120],
-                    "source_name": _src_name,
-                    "source_domain": _netloc,
-                    "source_type": _st,
-                    "full_text_len": _full_len,
-                    "bigtech_hit": _bt_title or _bt_src,
-                    "bigtech_title_hit": _bt_title,
-                    "bigtech_srcname_hit": _bt_src,
-                    "official_or_media": _st in ("official", "media"),
-                    "dropped": _dropped,
-                    "drop_reason": _drop_by_title.get(_title_lc, ""),
-                    "selected": _title_lc in _final_titles,
-                }
-            )
+            _drop_rec = _drop_by_title.get(_title_lc)
+            _dropped = _drop_rec is not None
+            _drop_reason = _normalize_ws(str((_drop_rec or {}).get("reason", "") or ""))
+            _row: dict = {
+                "title": _title[:120],
+                "source_name": _src_name,
+                "source_domain": _netloc,
+                "source_type": _st,
+                "full_text_len": _full_len,
+                "bigtech_hit": _bt_title or _bt_src,
+                "bigtech_title_hit": _bt_title,
+                "bigtech_srcname_hit": _bt_src,
+                "official_or_media": _st in ("official", "media"),
+                "dropped": _dropped,
+                "drop_reason": _drop_reason,
+                "selected": _title_lc in _final_titles,
+            }
+            # For density_target_not_met drops, add 8 extra diagnostic fields
+            if _drop_reason == "density_target_not_met" and _drop_rec:
+                _row["full_text_len_chars"] = _drop_rec.get("full_text_len_chars", _full_len)
+                _row["full_text_len_bytes"] = _drop_rec.get(
+                    "full_text_len_bytes",
+                    len(_full_text_raw.encode("utf-8", errors="replace")),
+                )
+                _row["full_text_len_tokens_est"] = _drop_rec.get(
+                    "full_text_len_tokens_est",
+                    len(re.findall(r"\S+", _full_text_raw)),
+                )
+                _row["density_gate_threshold"] = _drop_rec.get("density_gate_threshold", {})
+                _row["density_gate_metric_name"] = _drop_rec.get(
+                    "density_gate_metric_name", "zh_bullet_count_per_role"
+                )
+                _row["density_gate_observed_value"] = _drop_rec.get(
+                    "density_gate_observed_value",
+                    {
+                        "what": _drop_rec.get("what_count"),
+                        "key": _drop_rec.get("key_count"),
+                        "why": _drop_rec.get("why_count"),
+                    },
+                )
+                _row["text_shape_fingerprint"] = _drop_rec.get("text_shape_fingerprint", {})
+                _row["first_200_chars_sample"] = _drop_rec.get(
+                    "first_200_chars_sample", _full_text_raw[:200]
+                )
+                # Log DENSITY_ANOMALY_TRACE if > 2000 chars but still dropped
+                if _row["full_text_len_chars"] >= 2000:
+                    _sdb_log.getLogger(__name__).warning(
+                        "DENSITY_ANOMALY_TRACE_WRITTEN title=%s chars=%d observed=%s",
+                        _title[:80],
+                        _row["full_text_len_chars"],
+                        _row["density_gate_observed_value"],
+                    )
+            _rows.append(_row)
         _sdbp = Path(settings.PROJECT_ROOT) / "outputs" / "selection_debug.meta.json"
         _sdbp.parent.mkdir(parents=True, exist_ok=True)
         _sdbp.write_text(
@@ -5487,12 +5587,57 @@ def _apply_brief_quota_filter(
         return 2 if _BIGTECH_COMPANY_RE.search(_t) else (1 if _BIGTECH_COMPANY_RE.search(_s) else 0)
 
     _official_media.sort(key=_bt_score, reverse=True)
-    _result = (
-        _official_media
-        + _papers[:max_paper]
-        + _social_code[:max_social_code]
-        + _other
-    )
+    # SOURCE_DIVERSITY: build a domain-aware selection.
+    # Strategy:
+    #   1. First-pass: fill up to (target - max_paper - max_social_code) from official_media,
+    #      capping each domain at max_per_source to encourage diversity.
+    #   2. Add up to max_paper papers and max_social_code social/code items.
+    #   3. If still under target, fill remaining slots from official_media deferred queue.
+    # Domain key = netloc (consistent with _write_selection_audit_meta distinct_sources count).
+    max_per_source = max(2, (target + 1) // 3)
+    _domain_counts: dict[str, int] = {}
+
+    def _get_domain(fc: dict) -> str:
+        try:
+            from urllib.parse import urlparse as _qf_up
+            _n = _qf_up(str(fc.get("final_url", "") or "")).netloc
+            return _n.lower() if _n else str(fc.get("source_name", "") or "unknown").lower()
+        except Exception:
+            return str(fc.get("source_name", "") or "unknown").lower()
+
+    def _pick_up_to(candidates: list[dict], n: int) -> tuple[list[dict], list[dict]]:
+        """Return (picked, deferred). picked respects domain cap; deferred are overflow."""
+        picked: list[dict] = []
+        deferred: list[dict] = []
+        for _c in candidates:
+            _dom = _get_domain(_c)
+            if _domain_counts.get(_dom, 0) < max_per_source:
+                _domain_counts[_dom] = _domain_counts.get(_dom, 0) + 1
+                picked.append(_c)
+                if len(picked) >= n:
+                    break
+            else:
+                deferred.append(_c)
+        return picked, deferred
+
+    _om_primary_cap = max(1, target - max_paper - max_social_code)
+    _om_primary, _om_deferred = _pick_up_to(_official_media, _om_primary_cap)
+    _papers_picked, _ = _pick_up_to(_papers, max_paper)
+    _sc_picked, _ = _pick_up_to(_social_code, max_social_code)
+    _other_picked, _ = _pick_up_to(_other, target)
+
+    _result = _om_primary + _papers_picked + _sc_picked + _other_picked
+    # Fill remaining quota from official_media overflow (deferred) if under target
+    if len(_result) < target:
+        _remaining_cap = target - len(_result)
+        _om_fill_picked = []
+        for _c in _om_deferred:
+            if len(_om_fill_picked) >= _remaining_cap:
+                break
+            _dom = _get_domain(_c)
+            _domain_counts[_dom] = _domain_counts.get(_dom, 0) + 1
+            _om_fill_picked.append(_c)
+        _result = _result + _om_fill_picked
     return _result[:target]
 
 
@@ -8954,6 +9099,14 @@ def run_pipeline() -> None:
                             ).strip()
                             _dbe_title = _dbe_title_plain
                             _dbe_body = str(_dbe_body_by_id.get(_dbe_id_orig, "") or "").strip()
+                            # HTML_CLEAN: strip tags so sentence extraction is not confused by markup
+                            if "<" in _dbe_body and ">" in _dbe_body:
+                                _dbe_body = re.sub(r"<[^>]{1,300}>", " ", _dbe_body)
+                                for _ent, _rep in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+                                                   ("&nbsp;", " "), ("&#39;", "'"),
+                                                   ("&quot;", '"'), ("&hellip;", "…")):
+                                    _dbe_body = _dbe_body.replace(_ent, _rep)
+                                _dbe_body = _normalize_ws(_dbe_body)
                             if len(_dbe_body) < 120:
                                 _dbe_body = str(_dbe_sa.get("summary_zh", "") or "").strip()
                             if not _dbe_title or len(_dbe_body) < 120:
