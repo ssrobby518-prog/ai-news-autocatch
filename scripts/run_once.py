@@ -5237,7 +5237,7 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
                 _netloc = _up_audit(final_url).netloc or src_name
             except Exception:
                 _netloc = src_name
-            bigtech_hit = bool(_BIGTECH_COMPANY_RE.search(title))
+            bigtech_hit = bool(_BIGTECH_COMPANY_RE.search(title) or _BIGTECH_COMPANY_RE.search(src_name))
             exec_hit = bool(_EXEC_ROLE_RE.search(title + " " + src_name))
             audit_rows.append({
                 "item_id": str(fc.get("item_id", "") or ""),
@@ -8910,6 +8910,22 @@ def run_pipeline() -> None:
                                     _backfill_brief_fact_candidates(_final_cards)
                                     _write_brief_fact_candidates_hard_meta(_final_cards)
                                     _write_brief_fact_pack_hard_meta(_final_cards)
+                                    # Write selection_audit.meta.json and enforce source diversity (dbe path)
+                                    _dbe_sel_run_id = os.environ.get("PIPELINE_RUN_ID", "unknown")
+                                    _dbe_sel_distinct, _dbe_sel_bigtech = _write_selection_audit_meta(_final_cards, run_id=_dbe_sel_run_id)
+                                    log.info("SELECTION_AUDIT(dbe): selected=%d distinct_sources=%d bigtech_hit=%d", len(_final_cards), _dbe_sel_distinct, _dbe_sel_bigtech)
+                                    if _dbe_sel_distinct < 3:
+                                        _dbe_div_reason = f"SOURCE_DIVERSITY_FAIL: selected_sources_distinct={_dbe_sel_distinct} < 3"
+                                        log.error(_dbe_div_reason)
+                                        _dbe_div_nr = Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md"
+                                        _dbe_div_nr.write_text(
+                                            f"# NOT_READY\n\ngate: SOURCE_DIVERSITY_FAIL\n"
+                                            f"run_id: {_dbe_sel_run_id}\n"
+                                            f"reason: {_dbe_div_reason}\n",
+                                            encoding="utf-8",
+                                        )
+                                        _write_brief_template_leak_meta([])
+                                        sys.exit(1)
                                     _dbe_btl_leak = _write_brief_template_leak_meta(_final_cards)
                                     if _dbe_btl_leak > 0:
                                         log.error(
