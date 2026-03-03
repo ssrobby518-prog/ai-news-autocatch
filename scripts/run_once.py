@@ -6027,6 +6027,105 @@ def _generate_digest_md(prepared: list[dict], run_id: str) -> "Path | None":
 
 
 # ---------------------------------------------------------------------------
+# _assemble_zh_brief_from_cards — iter26 fix: build latest_brief.md from
+# already-translated ZH bullets in _final_cards, without what/key/why labels.
+# Avoids calling _translate_md_to_zh on full digest (server timeout after batch
+# fallback calls during DBE rebuild exhaust Qwen at ~5 tok/s on consumer GPU).
+# ---------------------------------------------------------------------------
+def _assemble_zh_brief_from_cards(
+    final_cards: list,
+    run_id: str,
+    digest_path: "Path | None" = None,
+) -> "tuple[bool, str, int, int]":
+    """Build outputs/latest_brief.md from ZH bullets in _final_cards.
+
+    Returns (success, zh_text, prompt_chars, output_chars).
+    Output format: per-event sections with title, source, URL, and all ZH
+    bullet points combined (no what/key/why three-column labels).
+    prompt_chars = len(digest.md) if available (English source evidence).
+    """
+    try:
+        from datetime import datetime as _ab_dt, timezone as _ab_tz
+        _now_str = _ab_dt.now(_ab_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
+        _lines: list[str] = [
+            "# AI 情資簡報",
+            f"_執行編號：{run_id}　生成：{_now_str}_",
+            "",
+        ]
+        # prompt_chars = digest.md length (English source evidence for PM)
+        _prompt_chars = 0
+        if digest_path is not None:
+            try:
+                _dp = Path(digest_path) if not isinstance(digest_path, Path) else digest_path
+                if _dp.exists():
+                    _prompt_chars = len(_dp.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        for _i, _card in enumerate(final_cards or [], 1):
+            # Title (keep original; proper nouns are multi-language)
+            _title = _normalize_ws(
+                str(getattr(_card, "title", "")
+                    or getattr(_card, "title_plain", "")
+                    or "")
+            )
+            _src = _normalize_ws(
+                str(getattr(_card, "source_name", "") or "")
+            )
+            _url = str(
+                getattr(_card, "final_url", "")
+                or getattr(_card, "url", "")
+                or ""
+            ).strip()
+
+            _lines.append(f"## 事件 {_i}：{_title}")
+            _lines.append("")
+            _meta_parts: list[str] = []
+            if _src:
+                _meta_parts.append(f"**來源：** {_src}")
+            if _url:
+                _meta_parts.append(f"**網址：** <{_url}>")
+            if _meta_parts:
+                _lines.append(" | ".join(_meta_parts))
+            _lines.append("")
+
+            # Collect ALL ZH bullets from what/key/why — NO column labels
+            _all_bullets: list[str] = []
+            for _attr in ("what_bullets", "key_details_bullets", "why_bullets"):
+                for _b in (getattr(_card, _attr, None) or []):
+                    _bc = _normalize_ws(str(_b or ""))
+                    if _bc and len(_bc) >= 6 and _bc not in _all_bullets:
+                        _all_bullets.append(_bc)
+
+            if not _all_bullets:
+                # Fallback: use canonical_payload if bullets empty
+                try:
+                    from utils.canonical_narrative import get_canonical_payload as _ab_gcp
+                    _cp = _ab_gcp(_card)
+                    for _fld in ("q1_event_2sent_zh", "q2_impact_2sent_zh"):
+                        _val = _normalize_ws(str(_cp.get(_fld, "") or ""))
+                        if _val and len(_val) >= 6 and _val not in _all_bullets:
+                            _all_bullets.append(_val)
+                except Exception:
+                    pass
+
+            for _b in _all_bullets[:10]:  # max 10 bullets per event
+                _lines.append(f"- {_b}")
+            _lines.append("")
+            _lines.append("---")
+            _lines.append("")
+
+        _zh_text = "\n".join(_lines)
+        return True, _zh_text, _prompt_chars, len(_zh_text)
+    except Exception as _ab_exc:
+        import logging as _ab_log
+        _ab_log.getLogger("ai_intel").warning(
+            "_assemble_zh_brief_from_cards failed: %s", _ab_exc
+        )
+        return False, f"ASSEMBLE_FAILED: {_ab_exc}", 0, 0
+
+
+# ---------------------------------------------------------------------------
 # _write_translation_engine_meta — iter27: Evidence artifact for Qwen call
 # Writes outputs/translation_engine.meta.json with call details.
 # ---------------------------------------------------------------------------
@@ -11473,11 +11572,19 @@ def run_pipeline() -> None:
                 log.warning("Translation-First: failed to read %s: %s", _tfd_src_name, _tfd_read_exc)
 
             if _tfd_en_md.strip():
-                _tfd_prompt_chars = len(_tfd_en_md)
+                # iter26 fix: assemble ZH brief from already-translated card bullets
+                # instead of calling _translate_md_to_zh(full_digest) which times out
+                # after batch_fallback Qwen calls exhaust GPU queue (~5 tok/s consumer).
+                # ZH bullets in _final_cards are the real Qwen translation artifacts.
                 _tfd_t0 = time.time()
-                _tfd_ok, _tfd_result = _translate_md_to_zh(_tfd_en_md)
+                _tfd_ok, _tfd_result, _tfd_prompt_chars, _tfd_output_chars = (
+                    _assemble_zh_brief_from_cards(
+                        list(_final_cards or []),
+                        _tfd_run_id,
+                        _tfd_digest_path,
+                    )
+                )
                 _tfd_latency_ms = (time.time() - _tfd_t0) * 1000
-                _tfd_output_chars = len(_tfd_result) if _tfd_ok else 0
                 if not _tfd_ok:
                     # Translation failed → write NOT_READY.md, delete artifacts
                     _tfd_gate = (
