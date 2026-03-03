@@ -5375,6 +5375,127 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
         return 0, 0, 0
 
 
+def _write_selection_debug_meta(
+    pool: list[dict], diag: dict, final: list[dict], run_id: str = ""
+) -> None:
+    """Write outputs/selection_debug.meta.json — per-candidate rejection diagnosis.
+
+    Records for every candidate in pool: src_type, bigtech detection path,
+    full_text_len, official_or_media status, drop reason from quality checks.
+    """
+    try:
+        import json as _sdb_j
+        from urllib.parse import urlparse as _sdb_up
+
+        _final_titles = {
+            _normalize_ws(str(fc.get("title", "") or "")).lower()
+            for fc in (final or [])
+        }
+        _drop_by_title: dict[str, str] = {}
+        for _de in (diag.get("dropped_events", []) or []):
+            _dtitle = _normalize_ws(str(_de.get("title", "") or "")).lower()
+            if _dtitle:
+                _drop_by_title[_dtitle] = _normalize_ws(
+                    str(_de.get("reason", "") or "unknown")
+                )
+        _rows = []
+        for _fc in (pool or []):
+            _title = _normalize_ws(str(_fc.get("title", "") or ""))
+            _title_lc = _title.lower()
+            _src_name = str(_fc.get("source_name", "") or "unknown")
+            _furl = str(_fc.get("final_url", "") or "")
+            try:
+                _netloc = _sdb_up(_furl).netloc or _src_name
+            except Exception:
+                _netloc = _src_name
+            _full_len = len(_normalize_ws(str(_fc.get("full_text", "") or "")))
+            _bt_title = bool(_BIGTECH_COMPANY_RE.search(_title))
+            _bt_src = bool(_BIGTECH_COMPANY_RE.search(_src_name))
+            _st = _classify_source_type(_src_name, _furl)
+            _dropped = _title_lc in _drop_by_title
+            _rows.append(
+                {
+                    "title": _title[:120],
+                    "source_name": _src_name,
+                    "source_domain": _netloc,
+                    "source_type": _st,
+                    "full_text_len": _full_len,
+                    "bigtech_hit": _bt_title or _bt_src,
+                    "bigtech_title_hit": _bt_title,
+                    "bigtech_srcname_hit": _bt_src,
+                    "official_or_media": _st in ("official", "media"),
+                    "dropped": _dropped,
+                    "drop_reason": _drop_by_title.get(_title_lc, ""),
+                    "selected": _title_lc in _final_titles,
+                }
+            )
+        _sdbp = Path(settings.PROJECT_ROOT) / "outputs" / "selection_debug.meta.json"
+        _sdbp.parent.mkdir(parents=True, exist_ok=True)
+        _sdbp.write_text(
+            _sdb_j.dumps(
+                {
+                    "run_id": run_id,
+                    "pool_total": len(pool or []),
+                    "prepared_total": len(final or []),
+                    "candidates": _rows,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception as _sdbe:
+        import logging as _sdblog
+
+        _sdblog.getLogger(__name__).warning(
+            "selection_debug.meta.json write failed: %s", _sdbe
+        )
+
+
+def _apply_brief_quota_filter(
+    prepared: list[dict],
+    max_paper: int = 1,
+    max_social_code: int = 1,
+    target: int = 7,
+) -> list[dict]:
+    """Enforce source-type quota on prepared cards.
+
+    Keeps all official/media cards (bigtech-scored first), then up to max_paper
+    paper cards and max_social_code social/code cards; truncates to target.
+    The calling code enforces official_or_media >= 4 via _write_selection_audit_meta.
+    """
+    _official_media: list[dict] = []
+    _papers: list[dict] = []
+    _social_code: list[dict] = []
+    _other: list[dict] = []
+    for _fc in (prepared or []):
+        _sn = str(_fc.get("source_name", "") or "")
+        _fu = str(_fc.get("final_url", "") or "")
+        _st = _classify_source_type(_sn, _fu)
+        if _st in ("official", "media"):
+            _official_media.append(_fc)
+        elif _st == "paper":
+            _papers.append(_fc)
+        elif _st in ("social", "code"):
+            _social_code.append(_fc)
+        else:
+            _other.append(_fc)
+
+    def _bt_score(fc: dict) -> int:
+        _t = str(fc.get("title", "") or "")
+        _s = str(fc.get("source_name", "") or "")
+        return 2 if _BIGTECH_COMPANY_RE.search(_t) else (1 if _BIGTECH_COMPANY_RE.search(_s) else 0)
+
+    _official_media.sort(key=_bt_score, reverse=True)
+    _result = (
+        _official_media
+        + _papers[:max_paper]
+        + _social_code[:max_social_code]
+        + _other
+    )
+    return _result[:target]
+
+
 def _write_brief_template_leak_meta(prepared: list[dict]) -> int:
     """Scan all bullets for known template phrases and write brief_template_leak.meta.json.
 
@@ -8507,14 +8628,25 @@ def run_pipeline() -> None:
                         )
                     except Exception:
                         _brief_max_events = _brief_min_events
-                    _final_cards, _brief_diag = _prepare_brief_final_cards_fast(
+                    # B3) Quota: collect up to 10 candidates, then enforce official/media ≥4,
+                    # paper ≤1, social/code ≤1 to prevent PH_SUPP/social from filling all slots.
+                    _quota_brief_cap = min(10, _brief_max_events + 3)
+                    _brief_candidates, _brief_diag = _prepare_brief_final_cards_fast(
                         _brief_pool,
-                        max_events=_brief_max_events,
+                        max_events=_quota_brief_cap,
+                    )
+                    _final_cards = _apply_brief_quota_filter(
+                        _brief_candidates,
+                        max_paper=1,
+                        max_social_code=1,
+                        target=_brief_max_events,
                     )
                     log.info(
-                        "BRIEF_MAIN_PATH: fast max_events=%d input_pool=%d",
-                        _brief_max_events,
+                        "BRIEF_MAIN_PATH: quota_cap=%d input_pool=%d candidates=%d final=%d",
+                        _quota_brief_cap,
                         len(_brief_pool or []),
+                        len(_brief_candidates),
+                        len(_final_cards),
                     )
                     _write_brief_content_miner_meta(
                         diag=_brief_diag,
@@ -8527,6 +8659,11 @@ def run_pipeline() -> None:
                     _backfill_brief_fact_candidates(_final_cards)
                     _write_brief_fact_candidates_hard_meta(_final_cards)
                     _write_brief_fact_pack_hard_meta(_final_cards)
+                    # A) Write per-candidate debug meta (B1 evidence: bigtech detection path per item)
+                    _sel_audit_run_id = os.environ.get("PIPELINE_RUN_ID", "unknown")
+                    _write_selection_debug_meta(
+                        _brief_pool, _brief_diag, _final_cards, run_id=_sel_audit_run_id
+                    )
                     # Write selection_audit and enforce source-diversity + bigtech-focus gates
                     _sel_audit_run_id = os.environ.get("PIPELINE_RUN_ID", "unknown")
                     _sel_distinct, _sel_bigtech, _sel_off_media = _write_selection_audit_meta(_final_cards, run_id=_sel_audit_run_id)
@@ -8766,6 +8903,43 @@ def run_pipeline() -> None:
                         _dbe_quality_ready_count = 0
                         _dbe_top10: list[str] = []
 
+                        # B2) Pre-sort DB rows: bigtech + official/media sources first
+                        # so demo_ext creation adds high-value items before HN/social fills slots
+                        try:
+                            _OFFICIAL_KW_DBE = (
+                                "openai", "anthropic", "google research", "google blog",
+                                "microsoft ai", "microsoft research", "nvidia", "meta ai",
+                                "deepmind", "huggingface", "mistral", "cohere", "stability ai",
+                            )
+                            _MEDIA_KW_DBE = (
+                                "techcrunch", "bloomberg", "wired", "reuters",
+                                "venturebeat", "theverge", "arstechnica", "ithome",
+                                "36kr", "mit tech review", "zdnet", "the information",
+                            )
+
+                            def _dbe_row_pri(row: dict) -> tuple:
+                                _t = str(row.get("title", "") or "")
+                                _s = str(row.get("source_name", "") or "").lower()
+                                _bt = (
+                                    2 if _BIGTECH_COMPANY_RE.search(_t)
+                                    else (1 if _BIGTECH_COMPANY_RE.search(_s) else 0)
+                                )
+                                _stype = (
+                                    2 if any(x in _s for x in _OFFICIAL_KW_DBE)
+                                    else (1 if any(x in _s for x in _MEDIA_KW_DBE) else 0)
+                                )
+                                return (_bt + _stype, _bt, _stype)
+
+                            _dbe_rows = sorted(_dbe_rows, key=_dbe_row_pri, reverse=True)
+                            log.info(
+                                "DEMO_EXTENDED_POOL: sorted %d DB rows by bigtech+source priority",
+                                len(_dbe_rows),
+                            )
+                        except Exception as _dbe_sort_exc:
+                            log.warning(
+                                "DEMO_EXTENDED_POOL row sort failed (non-fatal): %s", _dbe_sort_exc
+                            )
+
                         for _dbe_row in _dbe_rows:
                             if _dbe_added >= _dbe_needed:
                                 break
@@ -8993,24 +9167,38 @@ def run_pipeline() -> None:
                                             int(os.environ.get("BRIEF_MAX_EVENTS", "7") or _brief_min_events),
                                         ),
                                     )
+                                    # B3) Quota: collect extra candidates then enforce type caps
+                                    _dbe_quota_cap = min(10, _dbe_brief_max + 3)
+                                    _dbe_input_pool = list(_final_cards)  # capture pool before reassignment
                                     if _pipeline_mode_runtime == "demo":
-                                        _final_cards, _dbe_brief_diag = _prepare_brief_final_cards_fast(
+                                        _dbe_candidates, _dbe_brief_diag = _prepare_brief_final_cards_fast(
                                             _final_cards,
-                                            max_events=_dbe_brief_max,
+                                            max_events=_dbe_quota_cap,
                                         )
                                         log.info(
-                                            "BRIEF_DBE_REBUILD_PATH: fast (demo mode) max_events=%d",
-                                            _dbe_brief_max,
+                                            "BRIEF_DBE_REBUILD_PATH: fast (demo mode) quota_cap=%d",
+                                            _dbe_quota_cap,
                                         )
                                     else:
-                                        _final_cards, _dbe_brief_diag = _prepare_brief_final_cards_fast(
+                                        _dbe_candidates, _dbe_brief_diag = _prepare_brief_final_cards_fast(
                                             _final_cards,
-                                            max_events=_dbe_brief_max,
+                                            max_events=_dbe_quota_cap,
                                         )
                                         log.info(
-                                            "BRIEF_DBE_REBUILD_PATH: fast (manual/daily brief) max_events=%d",
-                                            _dbe_brief_max,
+                                            "BRIEF_DBE_REBUILD_PATH: fast (manual/daily brief) quota_cap=%d",
+                                            _dbe_quota_cap,
                                         )
+                                    _final_cards = _apply_brief_quota_filter(
+                                        _dbe_candidates,
+                                        max_paper=1,
+                                        max_social_code=1,
+                                        target=_dbe_brief_max,
+                                    )
+                                    log.info(
+                                        "BRIEF_DBE_REBUILD_PATH: quota candidates=%d final=%d",
+                                        len(_dbe_candidates),
+                                        len(_final_cards),
+                                    )
                                     _write_brief_content_miner_meta(
                                         diag=_dbe_brief_diag,
                                         report_mode=_report_mode,
@@ -9022,6 +9210,12 @@ def run_pipeline() -> None:
                                     _backfill_brief_fact_candidates(_final_cards)
                                     _write_brief_fact_candidates_hard_meta(_final_cards)
                                     _write_brief_fact_pack_hard_meta(_final_cards)
+                                    # A) Write per-candidate debug meta (B1 evidence: pool=input to prep)
+                                    _dbe_sel_run_id = os.environ.get("PIPELINE_RUN_ID", "unknown")
+                                    _write_selection_debug_meta(
+                                        _dbe_input_pool, _dbe_brief_diag, _final_cards,
+                                        run_id=_dbe_sel_run_id,
+                                    )
                                     # Write selection_audit and enforce source-diversity + bigtech-focus gates (dbe path)
                                     _dbe_sel_run_id = os.environ.get("PIPELINE_RUN_ID", "unknown")
                                     _dbe_sel_distinct, _dbe_sel_bigtech, _dbe_sel_off_media = _write_selection_audit_meta(_final_cards, run_id=_dbe_sel_run_id)
