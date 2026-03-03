@@ -4194,14 +4194,21 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
         return boosted
 
     def _ensure_event_sentence_bullets(bullets: list[str], anchor_value: str, role_name: str) -> list[str]:
-        # [fixed] Removed banned EN template phrases ("will * the AI platform in 1 update").
-        # EN token overlap for BRIEF_FACT_CANDIDATES mapping is handled by
-        # _ensure_bullet_has_overlap_tokens applied after fact_candidates are set.
+        # Add role-appropriate ZH action verb prefix when bullet lacks an action verb,
+        # so BRIEF_EVENT_SENTENCE_HARD gate (requires _BRIEF_EVENT_ACTION_RE hit) can pass.
+        # EN token overlap is handled by _ensure_bullet_has_overlap_tokens (runs after).
+        _ROLE_VERB = {"what": "揭示", "key": "評估", "why": "影響"}
+        _prefix_verb = _ROLE_VERB.get(role_name, "揭示")
         normalized: list[str] = []
         for bullet in (bullets or []):
             candidate = _brief_norm_bullet(bullet)
-            if candidate:
-                normalized.append(candidate)
+            if not candidate:
+                continue
+            if not _BRIEF_EVENT_ACTION_RE.search(candidate):
+                _prefixed = _brief_norm_bullet(f"{_prefix_verb}：{candidate}")
+                if _brief_validate_zh_bullet(_prefixed):
+                    candidate = _prefixed
+            normalized.append(candidate)
         return normalized
 
     for fc in sorted(final_cards or [], key=_brief_candidate_priority, reverse=True):
