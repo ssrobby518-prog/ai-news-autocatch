@@ -308,6 +308,9 @@ $docxPathForChecks = if ($resolvedExecPaths.ContainsKey("DOCX")) { $resolvedExec
 $pptxPathForChecks = if ($resolvedExecPaths.ContainsKey("PPTX")) { $resolvedExecPaths["PPTX"] } else { "outputs\executive_report.pptx" }
 $docxPathForPy = $docxPathForChecks -replace '\\', '/'
 $pptxPathForPy = $pptxPathForChecks -replace '\\', '/'
+# Pass paths via env vars to avoid CJK garbling when interpolated into Python -c args
+$env:_VRF_DOCX_PATH = $docxPathForChecks
+$env:_VRF_PPTX_PATH = $pptxPathForChecks
 
 # 9) Executive Output v3 guard ??banned words + embedded images
 Write-Host "`n[9/9] 執行摘要輸出 v3 守衛..." -ForegroundColor Yellow
@@ -351,9 +354,9 @@ if ($env:BRIEF_ONLY -eq "1") {
 
 # Check banned words in DOCX (extract text via python; strip URLs to avoid false positives from base64 URL fragments)
 $docxText = & $py -c "
-import re
+import re, os
 from docx import Document
-doc = Document(r'''$docxPathForPy''')
+doc = Document(os.environ['_VRF_DOCX_PATH'])
 raw = ' '.join(p.text for p in doc.paragraphs)
 for t in doc.tables:
     for row in t.rows:
@@ -374,9 +377,9 @@ if ($docxText) {
 
 # Check banned words in PPTX (extract text via python; strip URLs to avoid false positives)
 $pptxText = & $py -c "
-import re
+import re, os
 from pptx import Presentation
-prs = Presentation(r'''$pptxPathForPy''')
+prs = Presentation(os.environ['_VRF_PPTX_PATH'])
 raw = ''
 for slide in prs.slides:
     for shape in slide.shapes:
@@ -401,14 +404,14 @@ if ($pptxText) {
 }
 
 # Count event cards for context (event cards need per-card images; zero events still need banner)
-$eventCardCount = & $py -c "from docx import Document; doc = Document(r'''$docxPathForPy'''); print(sum(1 for p in doc.paragraphs if p.text.lstrip().startswith(chr(31532))))" 2>$null
+$eventCardCount = & $py -c "import os; from docx import Document; doc = Document(os.environ['_VRF_DOCX_PATH']); print(sum(1 for p in doc.paragraphs if p.text.lstrip().startswith(chr(31532))))" 2>$null
 $eventCards = if ($eventCardCount) { [int]$eventCardCount } else { 0 }
 Write-Host "  Event cards detected: $eventCards"
 
 # DOCX must always have at least 1 embedded image (banner on cover or per-card images)
 $docxHasImage = & $py -c "
-import zipfile, sys
-with zipfile.ZipFile(r'''$docxPathForPy''') as z:
+import zipfile, os
+with zipfile.ZipFile(os.environ['_VRF_DOCX_PATH']) as z:
     media = [n for n in z.namelist() if n.startswith('word/media/')]
     print(len(media))
 " 2>$null
@@ -429,8 +432,8 @@ if ($isBriefModeVr) {
     Write-Host "  PPTX image check: SKIP (brief mode — images intentionally absent)" -ForegroundColor Yellow
 } else {
     $pptxHasImage = & $py -c "
-import zipfile, sys
-with zipfile.ZipFile(r'''$pptxPathForPy''') as z:
+import zipfile, os
+with zipfile.ZipFile(os.environ['_VRF_PPTX_PATH']) as z:
     media = [n for n in z.namelist() if n.startswith('ppt/media/')]
     print(len(media))
 " 2>$null
