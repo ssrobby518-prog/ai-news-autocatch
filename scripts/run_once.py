@@ -417,7 +417,8 @@ def _is_tier_a_source(source_name: str, url: str, title: str = "") -> bool:
 _BIGTECH_COMPANY_RE = re.compile(
     r"\b(?:NVIDIA|OpenAI|Anthropic|Amazon|AWS|Google|Apple|Meta|Microsoft|"
     r"xAI|X\.ai|Mistral|DeepMind|Gemini|DeepSeek|Tesla|Qualcomm|Samsung|"
-    r"Baidu|Alibaba|Cohere|Salesforce|Intel|AMD|Grok|Perplexity|Scale\s*AI)\b",
+    r"Baidu|Alibaba|Cohere|Salesforce|Intel|AMD|Grok|Perplexity|Scale\s*AI|"
+    r"HuggingFace|Hugging\s*Face|Stability\s*AI|Runway)\b",
     re.IGNORECASE,
 )
 
@@ -429,6 +430,90 @@ _EXEC_ROLE_RE = re.compile(
 )
 
 
+def _classify_source_type(source_name: str, final_url: str) -> str:
+    """Classify source as official/media/social/code/paper for quota enforcement."""
+    _sn = (source_name or "").lower()
+    _url = (final_url or "").lower()
+    # Paper: arxiv
+    if "arxiv" in _sn or "arxiv.org" in _url:
+        return "paper"
+    # Code: github
+    if "github" in _sn or "github.com" in _url:
+        return "code"
+    # Social/forum/community
+    _SOCIAL_KW = ("reddit", "hackernews", "hacker news", "forum", "discuss.",
+                  "ycombinator", "community", "/r/")
+    if any(x in _sn for x in _SOCIAL_KW) or any(x in _url for x in _SOCIAL_KW):
+        return "social"
+    # Official: company/research blogs
+    _OFFICIAL_KW = ("openai", "anthropic", "google research", "microsoft ai", "nvidia",
+                    "meta ai", "aws ml", "huggingface blog", "hugging face blog",
+                    "deepmind", "cohere", "mistral", "stability ai", "research blog")
+    _OFFICIAL_DOM = ("openai.com", "anthropic.com", "research.google", "blogs.microsoft.com",
+                     "aws.amazon.com", "nvidia.com", "ai.meta.com", "huggingface.co/blog",
+                     "deepmind.com", "cohere.com", "mistral.ai")
+    if any(x in _sn for x in _OFFICIAL_KW) or any(x in _url for x in _OFFICIAL_DOM):
+        return "official"
+    # Mainstream media
+    _MEDIA_KW = ("techcrunch", "bloomberg", "wired", "reuters", "mit tech review", "theverge",
+                 "venturebeat", "ithome", "36kr", "technews", "inside", "\u4e2d\u592e\u793e",
+                 "arstechnica", "zdnet", "the information", "cnbc", "fortune", "gizmodo")
+    _MEDIA_DOM = ("techcrunch.com", "bloomberg.com", "wired.com", "reuters.com",
+                  "theverge.com", "venturebeat.com", "ithome.com.tw", "36kr.com",
+                  "technologyreview.com", "arstechnica.com", "cnbc.com", "fortune.com")
+    if any(x in _sn for x in _MEDIA_KW) or any(x in _url for x in _MEDIA_DOM):
+        return "media"
+    return "media"
+
+
+def _write_not_ready_report_md(
+    gate: str,
+    reason: str,
+    run_id: str = "",
+    selected_items_count: int = 0,
+    selected_sources_distinct: int = 0,
+    bigtech_hit_count: int = 0,
+    official_or_media_count: int = 0,
+) -> None:
+    """Write outputs/NOT_READY_report.md + NOT_READY.md for all fail-fast gates.
+
+    NOT_READY_report.md = PM-facing contract deliverable (structured markdown).
+    NOT_READY.md        = compat shim for --not-ready-report branch + run_pipeline.ps1.
+    """
+    try:
+        from datetime import datetime as _nrw_dt, timezone as _nrw_tz
+        _nrw_now = _nrw_dt.now(_nrw_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
+        _nrw_outputs = Path(settings.PROJECT_ROOT) / "outputs"
+        _nrw_outputs.mkdir(parents=True, exist_ok=True)
+        _nrw_lines = [
+            f"# NOT READY Report \u2014 {run_id}", "",
+            "| Field | Value |", "|-------|-------|",
+            f"| run_id | `{run_id}` |",
+            "| status | **FAIL** |",
+            f"| generated_at | {_nrw_now} |",
+            f"| gate | `{gate}` |", "",
+            "## Failure Reason", "",
+            f"{reason}", "",
+            "## Selection Stats", "",
+            "| Metric | Value |", "|--------|-------|",
+            f"| selected_items_count | {selected_items_count} |",
+            f"| selected_sources_distinct | {selected_sources_distinct} |",
+            f"| bigtech_hit_count | {bigtech_hit_count} |",
+            f"| official_or_media_count | {official_or_media_count} |", "",
+        ]
+        (_nrw_outputs / "NOT_READY_report.md").write_text(
+            "\n".join(_nrw_lines), encoding="utf-8"
+        )
+        # Compat: NOT_READY.md for --not-ready-report branch and run_pipeline.ps1
+        (_nrw_outputs / "NOT_READY.md").write_text(
+            f"# NOT_READY\n\ngate: {gate}\nrun_id: {run_id}\nreason: {reason}\n",
+            encoding="utf-8",
+        )
+    except Exception as _nrwe:
+        import logging as _nrw_log
+        _nrw_log.getLogger(__name__).warning("_write_not_ready_report_md failed: %s", _nrwe)
+
+
 def _brief_candidate_priority(fc: dict) -> tuple:
     src_name = _normalize_ws(str(fc.get("source_name", "") or ""))
     final_url = _normalize_ws(str(fc.get("final_url", "") or fc.get("source_url", "") or ""))
@@ -438,9 +523,11 @@ def _brief_candidate_priority(fc: dict) -> tuple:
     full_text_len = len(_normalize_ws(str(fc.get("full_text", "") or "")))
     quote_len = len(_normalize_ws(str(fc.get("quote_1", "") or ""))) + len(_normalize_ws(str(fc.get("quote_2", "") or "")))
     anchors_n = len(fc.get("anchors", []) or [])
-    # Big-tech boost: 2 if company in title (product/corporate news), 1 if only in source name
+    # Big-tech direction quota: bigtech (title=2, src=1) + official/media type bonus (2)
     bigtech = 2 if _BIGTECH_COMPANY_RE.search(title) else (1 if _BIGTECH_COMPANY_RE.search(src_name) else 0)
-    return (tier_a, bigtech, ai, full_text_len, quote_len, anchors_n)
+    src_type = _classify_source_type(src_name, final_url)
+    src_type_score = 2 if src_type in ("official", "media") else 0
+    return (tier_a, bigtech + src_type_score, ai, full_text_len, quote_len, anchors_n)
 
 
 def _derive_actor_from_title(title_text: str) -> str:
@@ -5223,7 +5310,7 @@ def _write_collector_coverage_meta(raw_items: list, run_id: str = "") -> None:
 def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tuple:
     """Write outputs/selection_audit.meta.json per-selected-item audit.
 
-    Returns (selected_sources_distinct: int, bigtech_hit_count: int).
+    Returns (selected_sources_distinct: int, bigtech_hit_count: int, official_or_media_count: int).
     """
     try:
         import json as _saj
@@ -5239,18 +5326,35 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
                 _netloc = src_name
             bigtech_hit = bool(_BIGTECH_COMPANY_RE.search(title) or _BIGTECH_COMPANY_RE.search(src_name))
             exec_hit = bool(_EXEC_ROLE_RE.search(title + " " + src_name))
+            src_type = _classify_source_type(src_name, final_url)
+            official_or_media = src_type in ("official", "media")
+            if bigtech_hit and exec_hit:
+                why = "bigtech_exec"
+            elif bigtech_hit and src_type == "official":
+                why = "official_release"
+            elif bigtech_hit and src_type == "media":
+                why = "media_report"
+            elif bigtech_hit:
+                why = "bigtech"
+            elif official_or_media:
+                why = "quota_fill"
+            else:
+                why = "ai_relevance"
             audit_rows.append({
                 "item_id": str(fc.get("item_id", "") or ""),
                 "title": title[:120],
                 "source_name": src_name,
                 "source_domain": _netloc,
+                "source_type": src_type,
                 "bigtech_hit": bigtech_hit,
                 "exec_hit": exec_hit,
+                "official_or_media": official_or_media,
                 "final_score": float(fc.get("final_score", 0.0) or 0.0),
-                "why_selected": ("bigtech" if bigtech_hit else ("exec" if exec_hit else "ai_relevance")),
+                "why_selected": why,
             })
         distinct_sources = len({r["source_domain"] for r in audit_rows})
         bigtech_count = sum(1 for r in audit_rows if r["bigtech_hit"])
+        official_or_media_count = sum(1 for r in audit_rows if r["official_or_media"])
         _sap = Path(settings.PROJECT_ROOT) / "outputs" / "selection_audit.meta.json"
         _sap.parent.mkdir(parents=True, exist_ok=True)
         _sap.write_text(
@@ -5259,15 +5363,16 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
                 "selected_items_count": len(audit_rows),
                 "selected_sources_distinct": distinct_sources,
                 "bigtech_hit_count": bigtech_count,
+                "official_or_media_count": official_or_media_count,
                 "items": audit_rows,
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        return distinct_sources, bigtech_count
+        return distinct_sources, bigtech_count, official_or_media_count
     except Exception as _sae:
         import logging as _salog
         _salog.getLogger(__name__).warning("selection_audit.meta.json write failed: %s", _sae)
-        return 0, 0
+        return 0, 0, 0
 
 
 def _write_brief_template_leak_meta(prepared: list[dict]) -> int:
@@ -8422,20 +8527,27 @@ def run_pipeline() -> None:
                     _backfill_brief_fact_candidates(_final_cards)
                     _write_brief_fact_candidates_hard_meta(_final_cards)
                     _write_brief_fact_pack_hard_meta(_final_cards)
-                    # Write selection_audit.meta.json and enforce source diversity
+                    # Write selection_audit and enforce source-diversity + bigtech-focus gates
                     _sel_audit_run_id = os.environ.get("PIPELINE_RUN_ID", "unknown")
-                    _sel_distinct, _sel_bigtech = _write_selection_audit_meta(_final_cards, run_id=_sel_audit_run_id)
-                    log.info("SELECTION_AUDIT: selected=%d distinct_sources=%d bigtech_hit=%d", len(_final_cards), _sel_distinct, _sel_bigtech)
+                    _sel_distinct, _sel_bigtech, _sel_off_media = _write_selection_audit_meta(_final_cards, run_id=_sel_audit_run_id)
+                    _sel_count = len(_final_cards)
+                    log.info("SELECTION_AUDIT: selected=%d distinct_sources=%d bigtech_hit=%d official_or_media=%d",
+                             _sel_count, _sel_distinct, _sel_bigtech, _sel_off_media)
                     if _sel_distinct < 3:
-                        _src_div_fail_reason = f"SOURCE_DIVERSITY_FAIL: selected_sources_distinct={_sel_distinct} < 3"
-                        log.error(_src_div_fail_reason)
-                        _src_div_nr = Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md"
-                        _src_div_nr.write_text(
-                            f"# NOT_READY\n\ngate: SOURCE_DIVERSITY_FAIL\n"
-                            f"run_id: {_sel_audit_run_id}\n"
-                            f"reason: {_src_div_fail_reason}\n",
-                            encoding="utf-8",
-                        )
+                        _gate_r = "SOURCE_DIVERSITY_FAIL"
+                        _fail_r = f"SOURCE_DIVERSITY_FAIL: selected_sources_distinct={_sel_distinct} < 3"
+                        log.error(_fail_r)
+                        _write_not_ready_report_md(_gate_r, _fail_r, _sel_audit_run_id, _sel_count, _sel_distinct, _sel_bigtech, _sel_off_media)
+                        _write_brief_template_leak_meta([])
+                        sys.exit(1)
+                    _bigtech_threshold = 5 if _sel_count >= 7 else 4
+                    if _sel_bigtech < _bigtech_threshold or _sel_off_media < 4:
+                        _gate_r = "BIGTECH_FOCUS_FAIL"
+                        _fail_r = (f"BIGTECH_FOCUS_FAIL: bigtech_hit_count={_sel_bigtech} < {_bigtech_threshold}"
+                                   f" OR official_or_media_count={_sel_off_media} < 4"
+                                   f" (selected={_sel_count})")
+                        log.error(_fail_r)
+                        _write_not_ready_report_md(_gate_r, _fail_r, _sel_audit_run_id, _sel_count, _sel_distinct, _sel_bigtech, _sel_off_media)
                         _write_brief_template_leak_meta([])
                         sys.exit(1)
                     _btl_leak_count = _write_brief_template_leak_meta(_final_cards)
@@ -8910,20 +9022,27 @@ def run_pipeline() -> None:
                                     _backfill_brief_fact_candidates(_final_cards)
                                     _write_brief_fact_candidates_hard_meta(_final_cards)
                                     _write_brief_fact_pack_hard_meta(_final_cards)
-                                    # Write selection_audit.meta.json and enforce source diversity (dbe path)
+                                    # Write selection_audit and enforce source-diversity + bigtech-focus gates (dbe path)
                                     _dbe_sel_run_id = os.environ.get("PIPELINE_RUN_ID", "unknown")
-                                    _dbe_sel_distinct, _dbe_sel_bigtech = _write_selection_audit_meta(_final_cards, run_id=_dbe_sel_run_id)
-                                    log.info("SELECTION_AUDIT(dbe): selected=%d distinct_sources=%d bigtech_hit=%d", len(_final_cards), _dbe_sel_distinct, _dbe_sel_bigtech)
+                                    _dbe_sel_distinct, _dbe_sel_bigtech, _dbe_sel_off_media = _write_selection_audit_meta(_final_cards, run_id=_dbe_sel_run_id)
+                                    _dbe_sel_count = len(_final_cards)
+                                    log.info("SELECTION_AUDIT(dbe): selected=%d distinct_sources=%d bigtech_hit=%d official_or_media=%d",
+                                             _dbe_sel_count, _dbe_sel_distinct, _dbe_sel_bigtech, _dbe_sel_off_media)
                                     if _dbe_sel_distinct < 3:
-                                        _dbe_div_reason = f"SOURCE_DIVERSITY_FAIL: selected_sources_distinct={_dbe_sel_distinct} < 3"
-                                        log.error(_dbe_div_reason)
-                                        _dbe_div_nr = Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md"
-                                        _dbe_div_nr.write_text(
-                                            f"# NOT_READY\n\ngate: SOURCE_DIVERSITY_FAIL\n"
-                                            f"run_id: {_dbe_sel_run_id}\n"
-                                            f"reason: {_dbe_div_reason}\n",
-                                            encoding="utf-8",
-                                        )
+                                        _dbe_gate_r = "SOURCE_DIVERSITY_FAIL"
+                                        _dbe_fail_r = f"SOURCE_DIVERSITY_FAIL: selected_sources_distinct={_dbe_sel_distinct} < 3"
+                                        log.error(_dbe_fail_r)
+                                        _write_not_ready_report_md(_dbe_gate_r, _dbe_fail_r, _dbe_sel_run_id, _dbe_sel_count, _dbe_sel_distinct, _dbe_sel_bigtech, _dbe_sel_off_media)
+                                        _write_brief_template_leak_meta([])
+                                        sys.exit(1)
+                                    _dbe_bigtech_threshold = 5 if _dbe_sel_count >= 7 else 4
+                                    if _dbe_sel_bigtech < _dbe_bigtech_threshold or _dbe_sel_off_media < 4:
+                                        _dbe_gate_r = "BIGTECH_FOCUS_FAIL"
+                                        _dbe_fail_r = (f"BIGTECH_FOCUS_FAIL: bigtech_hit_count={_dbe_sel_bigtech} < {_dbe_bigtech_threshold}"
+                                                       f" OR official_or_media_count={_dbe_sel_off_media} < 4"
+                                                       f" (selected={_dbe_sel_count})")
+                                        log.error(_dbe_fail_r)
+                                        _write_not_ready_report_md(_dbe_gate_r, _dbe_fail_r, _dbe_sel_run_id, _dbe_sel_count, _dbe_sel_distinct, _dbe_sel_bigtech, _dbe_sel_off_media)
                                         _write_brief_template_leak_meta([])
                                         sys.exit(1)
                                     _dbe_btl_leak = _write_brief_template_leak_meta(_final_cards)
@@ -11037,8 +11156,29 @@ if __name__ == "__main__":
             except Exception:
                 pass
 
+        # 2b. Load selection audit stats for NOT_READY_report.md
+        _sel_stats = {
+            "selected_items_count": 0, "selected_sources_distinct": 0,
+            "bigtech_hit_count": 0, "official_or_media_count": 0,
+        }
+        _sel_audit_p = _outputs / "selection_audit.meta.json"
+        if _sel_audit_p.exists():
+            try:
+                _sel_data = _nr_json.loads(_sel_audit_p.read_text(encoding="utf-8"))
+                for _sk in list(_sel_stats.keys()):
+                    if _sk in _sel_data:
+                        _sel_stats[_sk] = int(_sel_data[_sk] or 0)
+            except Exception:
+                pass
+
         # 3. Build next_steps hint based on gate name
         _gate_tips = {
+            "SOURCE_DIVERSITY_FAIL": (
+                "Too few distinct source domains selected. Check Z0 feed config and expand source list."
+            ),
+            "BIGTECH_FOCUS_FAIL": (
+                "Not enough big-tech or official/media items. Ensure GNews big-tech queries are active and llama-server is running."
+            ),
             "EXEC_NEWS_QUALITY_HARD": (
                 "Check quote binding and ensure source text exists; re-run collection if needed."
             ),
@@ -11116,6 +11256,12 @@ if __name__ == "__main__":
                 "## Failure", "",
                 f"- gate: `{_gate_name}`",
                 f"- fail_reason: {_fail_reason}", "",
+                "## Selection Stats", "",
+                "| Metric | Value |", "|--------|-------|",
+                f"| selected_items_count | {_sel_stats['selected_items_count']} |",
+                f"| selected_sources_distinct | {_sel_stats['selected_sources_distinct']} |",
+                f"| bigtech_hit_count | {_sel_stats['bigtech_hit_count']} |",
+                f"| official_or_media_count | {_sel_stats['official_or_media_count']} |", "",
                 "## Supply Fallback", "",
                 f"- fallback_used: {str(_nr2_sfb_used).lower()}",
                 f"- reason: {_nr2_sfb_reason}",
