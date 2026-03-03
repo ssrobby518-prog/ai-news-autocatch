@@ -4055,8 +4055,17 @@ def _prepare_brief_final_cards_fast_override(final_cards: list[dict], max_events
     diag["kept_total"] = len(prepared)
     return prepared, diag
 
-def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 10) -> tuple[list[dict], dict]:
-    """Fast brief prep for fallback/demo-extended cards with minimal Qwen calls."""
+def _prepare_brief_final_cards_fast(
+    final_cards: list[dict],
+    max_events: int = 10,
+    skip_batch_fallback: bool = False,
+) -> tuple[list[dict], dict]:
+    """Fast brief prep for fallback/demo-extended cards with minimal Qwen calls.
+
+    skip_batch_fallback: if True, do NOT call _brief_batch_translate_event as
+    fallback. Use True in primary path (academic/PH_SUPP papers fail anyway and
+    waste Qwen bandwidth needed by DBE rebuild path). Use default False in DBE.
+    """
     prepared: list[dict] = []
     diag = {
         "input_total": len(final_cards or []),
@@ -4546,18 +4555,23 @@ def _prepare_brief_final_cards_fast(final_cards: list[dict], max_events: int = 1
         what_bullets = _ensure_event_sentence_bullets(what_bullets, anchor, "what")
         key_details_bullets = _ensure_event_sentence_bullets(key_details_bullets, anchor, "key")
         why_bullets = _ensure_event_sentence_bullets(why_bullets, anchor, "why")
-        # BATCH_FALLBACK (iter27): per-sentence translation often fails for tech-news articles
+        # BATCH_FALLBACK (iter26): per-sentence translation often fails for tech-news articles
         # because Qwen2.5-7B-4bit output for short financial/news sentences has CJK ratio < 0.6
         # after ASCII subject-prefix injection.  Try one Qwen batch call that translates all
         # fact sentences in a single request — same thresholds, equivalent-fix, not gate relaxation.
         # what_extraction_mode: per_sentence_then_batch_qwen
+        # skip_batch_fallback=True (primary path): academic/PH_SUPP papers consistently fail
+        # batch_fallback anyway and waste Qwen bandwidth needed for the DBE rebuild path.
         _fb_what: list[str] = []
         _fb_key: list[str] = []
         _fb_why: list[str] = []
         if (
-            len(what_bullets) < _BRIEF_TARGET_WHAT_BULLETS
-            or len(key_details_bullets) < _BRIEF_TARGET_KEY_BULLETS
-            or len(why_bullets) < _BRIEF_TARGET_WHY_BULLETS_MIN
+            not skip_batch_fallback
+            and (
+                len(what_bullets) < _BRIEF_TARGET_WHAT_BULLETS
+                or len(key_details_bullets) < _BRIEF_TARGET_KEY_BULLETS
+                or len(why_bullets) < _BRIEF_TARGET_WHY_BULLETS_MIN
+            )
         ):
             import logging as _wt_log1
             _wt_log1.getLogger(__name__).info(
@@ -9076,6 +9090,7 @@ def run_pipeline() -> None:
                     _brief_candidates, _brief_diag = _prepare_brief_final_cards_fast(
                         _brief_pool,
                         max_events=_quota_brief_cap,
+                        skip_batch_fallback=True,  # Primary path: papers/PH_SUPP exhaust Qwen
                     )
                     _final_cards = _apply_brief_quota_filter(
                         _brief_candidates,
