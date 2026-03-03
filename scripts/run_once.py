@@ -413,6 +413,22 @@ def _is_tier_a_source(source_name: str, url: str, title: str = "") -> bool:
     return bool(_TIER_A_SOURCE_RE.search(blob) or _TIER_A_URL_RE.search(_normalize_ws(url)))
 
 
+# Big-tech company names for scoring prioritization (Problem 3: direction)
+_BIGTECH_COMPANY_RE = re.compile(
+    r"\b(?:NVIDIA|OpenAI|Anthropic|Amazon|AWS|Google|Apple|Meta|Microsoft|"
+    r"xAI|X\.ai|Mistral|DeepMind|Gemini|DeepSeek|Tesla|Qualcomm|Samsung|"
+    r"Baidu|Alibaba|Cohere|Salesforce|Intel|AMD|Grok|Perplexity|Scale\s*AI)\b",
+    re.IGNORECASE,
+)
+
+# Executive / CEO role signals
+_EXEC_ROLE_RE = re.compile(
+    r"\b(?:CEO|CTO|CFO|COO|Chief\s+\w+\s+Officer|President|VP\s+of|Head\s+of|"
+    r"Director\s+of|Founder|Co-founder|Chairman)\b",
+    re.IGNORECASE,
+)
+
+
 def _brief_candidate_priority(fc: dict) -> tuple:
     src_name = _normalize_ws(str(fc.get("source_name", "") or ""))
     final_url = _normalize_ws(str(fc.get("final_url", "") or fc.get("source_url", "") or ""))
@@ -422,7 +438,9 @@ def _brief_candidate_priority(fc: dict) -> tuple:
     full_text_len = len(_normalize_ws(str(fc.get("full_text", "") or "")))
     quote_len = len(_normalize_ws(str(fc.get("quote_1", "") or ""))) + len(_normalize_ws(str(fc.get("quote_2", "") or "")))
     anchors_n = len(fc.get("anchors", []) or [])
-    return (tier_a, ai, full_text_len, quote_len, anchors_n)
+    # Big-tech boost: 2 if company in title (product/corporate news), 1 if only in source name
+    bigtech = 2 if _BIGTECH_COMPANY_RE.search(title) else (1 if _BIGTECH_COMPANY_RE.search(src_name) else 0)
+    return (tier_a, bigtech, ai, full_text_len, quote_len, anchors_n)
 
 
 def _derive_actor_from_title(title_text: str) -> str:
@@ -5169,6 +5187,89 @@ def _write_supply_fallback_meta() -> None:
         pass
 
 
+def _write_collector_coverage_meta(raw_items: list, run_id: str = "") -> None:
+    """Write outputs/collector_coverage.meta.json with per-source collection stats."""
+    try:
+        import json as _ccj
+        _src_stats: dict[str, dict] = {}
+        for _it in raw_items:
+            _sn = str(getattr(_it, "source_name", "") or "unknown")
+            if _sn not in _src_stats:
+                _src_stats[_sn] = {"source_name": _sn, "attempted": 0, "success_count": 0, "fail_reason": ""}
+            _src_stats[_sn]["attempted"] += 1
+            _url = str(getattr(_it, "url", "") or "").strip()
+            if _url.startswith(("http://", "https://")):
+                _src_stats[_sn]["success_count"] += 1
+            else:
+                if not _src_stats[_sn]["fail_reason"]:
+                    _src_stats[_sn]["fail_reason"] = "no_url"
+        _cover_list = sorted(list(_src_stats.values()), key=lambda x: -x["attempted"])
+        _ccp = Path(settings.PROJECT_ROOT) / "outputs" / "collector_coverage.meta.json"
+        _ccp.parent.mkdir(parents=True, exist_ok=True)
+        _ccp.write_text(
+            _ccj.dumps({
+                "run_id": run_id,
+                "total_sources": len(_cover_list),
+                "total_items": len(raw_items),
+                "sources": _cover_list,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as _cce:
+        import logging as _cclog
+        _cclog.getLogger(__name__).warning("collector_coverage.meta.json write failed: %s", _cce)
+
+
+def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tuple:
+    """Write outputs/selection_audit.meta.json per-selected-item audit.
+
+    Returns (selected_sources_distinct: int, bigtech_hit_count: int).
+    """
+    try:
+        import json as _saj
+        from urllib.parse import urlparse as _up_audit
+        audit_rows = []
+        for fc in final_cards:
+            title = str(fc.get("title", "") or "")
+            src_name = str(fc.get("source_name", "") or "unknown")
+            final_url = str(fc.get("final_url", "") or "")
+            try:
+                _netloc = _up_audit(final_url).netloc or src_name
+            except Exception:
+                _netloc = src_name
+            bigtech_hit = bool(_BIGTECH_COMPANY_RE.search(title))
+            exec_hit = bool(_EXEC_ROLE_RE.search(title + " " + src_name))
+            audit_rows.append({
+                "item_id": str(fc.get("item_id", "") or ""),
+                "title": title[:120],
+                "source_name": src_name,
+                "source_domain": _netloc,
+                "bigtech_hit": bigtech_hit,
+                "exec_hit": exec_hit,
+                "final_score": float(fc.get("final_score", 0.0) or 0.0),
+                "why_selected": ("bigtech" if bigtech_hit else ("exec" if exec_hit else "ai_relevance")),
+            })
+        distinct_sources = len({r["source_domain"] for r in audit_rows})
+        bigtech_count = sum(1 for r in audit_rows if r["bigtech_hit"])
+        _sap = Path(settings.PROJECT_ROOT) / "outputs" / "selection_audit.meta.json"
+        _sap.parent.mkdir(parents=True, exist_ok=True)
+        _sap.write_text(
+            _saj.dumps({
+                "run_id": run_id,
+                "selected_items_count": len(audit_rows),
+                "selected_sources_distinct": distinct_sources,
+                "bigtech_hit_count": bigtech_count,
+                "items": audit_rows,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return distinct_sources, bigtech_count
+    except Exception as _sae:
+        import logging as _salog
+        _salog.getLogger(__name__).warning("selection_audit.meta.json write failed: %s", _sae)
+        return 0, 0
+
+
 def _write_brief_template_leak_meta(prepared: list[dict]) -> int:
     """Scan all bullets for known template phrases and write brief_template_leak.meta.json.
 
@@ -7627,6 +7728,9 @@ def run_pipeline() -> None:
     except Exception as _fse:
         log.warning("feed_stats.meta.json write failed (non-fatal): %s", _fse)
 
+    # Write collector_coverage.meta.json (per-source attempted/success stats)
+    _write_collector_coverage_meta(raw_items, run_id=os.environ.get("PIPELINE_RUN_ID", "unknown"))
+
     # fetch_all_feeds() already returns normalized + enrichment-applied items.
     collector.normalized_total = len(raw_items)
     collector.enriched_total = len(raw_items)
@@ -8293,7 +8397,7 @@ def run_pipeline() -> None:
                             10,
                             max(
                                 _brief_min_events,
-                                int(os.environ.get("BRIEF_MAX_EVENTS", str(_brief_min_events)) or _brief_min_events),
+                                int(os.environ.get("BRIEF_MAX_EVENTS", "7") or _brief_min_events),
                             ),
                         )
                     except Exception:
@@ -8318,6 +8422,22 @@ def run_pipeline() -> None:
                     _backfill_brief_fact_candidates(_final_cards)
                     _write_brief_fact_candidates_hard_meta(_final_cards)
                     _write_brief_fact_pack_hard_meta(_final_cards)
+                    # Write selection_audit.meta.json and enforce source diversity
+                    _sel_audit_run_id = os.environ.get("PIPELINE_RUN_ID", "unknown")
+                    _sel_distinct, _sel_bigtech = _write_selection_audit_meta(_final_cards, run_id=_sel_audit_run_id)
+                    log.info("SELECTION_AUDIT: selected=%d distinct_sources=%d bigtech_hit=%d", len(_final_cards), _sel_distinct, _sel_bigtech)
+                    if _sel_distinct < 3:
+                        _src_div_fail_reason = f"SOURCE_DIVERSITY_FAIL: selected_sources_distinct={_sel_distinct} < 3"
+                        log.error(_src_div_fail_reason)
+                        _src_div_nr = Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md"
+                        _src_div_nr.write_text(
+                            f"# NOT_READY\n\ngate: SOURCE_DIVERSITY_FAIL\n"
+                            f"run_id: {_sel_audit_run_id}\n"
+                            f"reason: {_src_div_fail_reason}\n",
+                            encoding="utf-8",
+                        )
+                        _write_brief_template_leak_meta([])
+                        sys.exit(1)
                     _btl_leak_count = _write_brief_template_leak_meta(_final_cards)
                     if _btl_leak_count > 0:
                         log.error(
@@ -8758,7 +8878,7 @@ def run_pipeline() -> None:
                                         10,
                                         max(
                                             _brief_min_events,
-                                            int(os.environ.get("BRIEF_MAX_EVENTS", str(_brief_min_events)) or _brief_min_events),
+                                            int(os.environ.get("BRIEF_MAX_EVENTS", "7") or _brief_min_events),
                                         ),
                                     )
                                     if _pipeline_mode_runtime == "demo":
