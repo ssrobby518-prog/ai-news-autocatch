@@ -9657,7 +9657,10 @@ def run_pipeline() -> None:
                                         _dbe_candidates,
                                         max_paper=1,
                                         max_social_code=1,
-                                        target=_dbe_brief_max,
+                                        # +1 raises max_per_source (2→3) on sparse days when
+                                        # multiple official items share a domain (HF blog,
+                                        # Google Research) and would otherwise hit the cap.
+                                        target=_dbe_brief_max + 1,
                                     )
                                     log.info(
                                         "BRIEF_DBE_REBUILD_PATH: quota candidates=%d final=%d",
