@@ -6063,19 +6063,24 @@ def _assemble_zh_brief_from_cards(
                 pass
 
         for _i, _card in enumerate(final_cards or [], 1):
+            # _final_cards can be dicts (from _prepare_brief_final_cards_fast) or
+            # EduNewsCard objects — support both via _ab_get helper.
+            def _ab_get(obj, *keys, default=""):
+                for k in keys:
+                    v = obj.get(k) if isinstance(obj, dict) else getattr(obj, k, None)
+                    if v is not None:
+                        return v
+                return default
+
             # Title (keep original; proper nouns are multi-language)
-            _title = _normalize_ws(
-                str(getattr(_card, "title", "")
-                    or getattr(_card, "title_plain", "")
-                    or "")
-            )
-            _src = _normalize_ws(
-                str(getattr(_card, "source_name", "") or "")
-            )
+            _title = _normalize_ws(str(
+                _ab_get(_card, "title", "title_plain") or ""
+            ))
+            _src = _normalize_ws(str(
+                _ab_get(_card, "source_name") or ""
+            ))
             _url = str(
-                getattr(_card, "final_url", "")
-                or getattr(_card, "url", "")
-                or ""
+                _ab_get(_card, "final_url", "url") or ""
             ).strip()
 
             _lines.append(f"## 事件 {_i}：{_title}")
@@ -6089,10 +6094,16 @@ def _assemble_zh_brief_from_cards(
                 _lines.append(" | ".join(_meta_parts))
             _lines.append("")
 
-            # Collect ALL ZH bullets from what/key/why — NO column labels
+            # Collect ALL ZH bullets — NO column labels.
+            # Keys: what_happened_bullets/key_details_bullets/why_it_matters_bullets
+            # (set by _prepare_brief_final_cards_fast in prepared dicts)
             _all_bullets: list[str] = []
-            for _attr in ("what_bullets", "key_details_bullets", "why_bullets"):
-                for _b in (getattr(_card, _attr, None) or []):
+            for _bkey in (
+                "what_happened_bullets",
+                "key_details_bullets",
+                "why_it_matters_bullets",
+            ):
+                for _b in (_ab_get(_card, _bkey, default=None) or []):
                     _bc = _normalize_ws(str(_b or ""))
                     if _bc and len(_bc) >= 6 and _bc not in _all_bullets:
                         _all_bullets.append(_bc)
