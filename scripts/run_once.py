@@ -4557,18 +4557,57 @@ def _prepare_brief_final_cards_fast(
             _brief_trans_stats["error"],
         )
 
-        what_bullets = _expand_bullets(
-            [what_seed, key_seed, why_seed],
-            _BRIEF_TARGET_WHAT_BULLETS,
+        # iter28: detect seed duplication BEFORE expand_bullets padding.
+        # If all 3 seeds normalise to the same text, batch translate gives
+        # more unique content (uses all fact_pack_sentences as input).
+        _i28_wn = _normalize_bullet_for_dedup(what_seed) if what_seed else ""
+        _i28_kn = _normalize_bullet_for_dedup(key_seed) if key_seed else ""
+        _i28_yn = _normalize_bullet_for_dedup(why_seed) if why_seed else ""
+        _i28_seeds_dup = (
+            bool(_i28_wn)
+            and (_i28_wn == _i28_kn or _i28_wn == _i28_yn or _i28_kn == _i28_yn)
         )
-        key_details_bullets = _expand_bullets(
-            [key_seed, what_seed, why_seed],
-            _BRIEF_TARGET_KEY_BULLETS,
-        )
-        why_bullets = _expand_bullets(
-            [why_seed, key_seed, what_seed],
-            _BRIEF_TARGET_WHY_BULLETS_DEFAULT,
-        )
+        _i28_bt_used = False
+        if _i28_seeds_dup and len(fact_pack_sentences) >= 3:
+            _i28_bt_w, _i28_bt_k, _i28_bt_y = _brief_batch_translate_event(
+                title=title,
+                actor=actor,
+                anchors=anchors_out,
+                fact_pack_sentences=fact_pack_sentences,
+                n_what=_BRIEF_TARGET_WHAT_BULLETS,
+                n_key=_BRIEF_TARGET_KEY_BULLETS,
+                n_why=_BRIEF_TARGET_WHY_BULLETS_DEFAULT,
+            )
+            _i28_bt_ok = (
+                len(_i28_bt_w) >= _BRIEF_TARGET_WHAT_BULLETS - 1
+                and len(_i28_bt_k) >= _BRIEF_TARGET_KEY_BULLETS - 1
+                and len(_i28_bt_y) >= _BRIEF_TARGET_WHY_BULLETS_MIN
+            )
+            if _i28_bt_ok:
+                import logging as _i28_log
+                _i28_log.getLogger(__name__).info(
+                    "[ITER28_DEDUP_DIVERSE] batch replace (seeds_dup=True) event=%s "
+                    "what=%d key=%d why=%d",
+                    title[:50], len(_i28_bt_w), len(_i28_bt_k), len(_i28_bt_y),
+                )
+                what_bullets = list(_i28_bt_w)
+                key_details_bullets = list(_i28_bt_k)
+                why_bullets = list(_i28_bt_y)
+                _i28_bt_used = True
+
+        if not _i28_bt_used:
+            what_bullets = _expand_bullets(
+                [what_seed, key_seed, why_seed],
+                _BRIEF_TARGET_WHAT_BULLETS,
+            )
+            key_details_bullets = _expand_bullets(
+                [key_seed, what_seed, why_seed],
+                _BRIEF_TARGET_KEY_BULLETS,
+            )
+            why_bullets = _expand_bullets(
+                [why_seed, key_seed, what_seed],
+                _BRIEF_TARGET_WHY_BULLETS_DEFAULT,
+            )
         what_bullets = _repair_overlap(what_bullets, fact_pack_sentences, anchors_out)
         key_details_bullets = _repair_overlap(key_details_bullets, fact_pack_sentences, anchors_out)
         why_bullets = _repair_overlap(why_bullets, fact_pack_sentences, anchors_out)
