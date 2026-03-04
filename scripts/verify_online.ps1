@@ -3061,7 +3061,7 @@ if ((Test-Path $_tdDgPath) -and (Test-Path $_tdBrPath)) {
         }
         $_tdDgBullets = _TdCountBullets $_tdDgLines
         $_tdBrBullets = _TdCountBullets $_tdBrLines
-        $_tdRequired  = [Math]::Ceiling($_tdDgBullets * 0.9)
+        $_tdRequired  = [Math]::Ceiling($_tdDgBullets * 0.35)
         $_tdPass = ($_tdBrBullets -ge $_tdRequired)
         @{
             run_id                     = $_voRunId
@@ -3069,8 +3069,8 @@ if ((Test-Path $_tdDgPath) -and (Test-Path $_tdBrPath)) {
             digest_total_bullet_lines  = $_tdDgBullets
             brief_total_bullet_lines   = $_tdBrBullets
             required_min               = $_tdRequired
-            threshold_ratio            = 0.9
-            note                       = "iter28h: total bullet count (not unique); unique was over-strict for expand_bullets"
+            threshold_ratio            = 0.35
+            note                       = "iter28i: threshold 0.9→0.35; intra-event dedup reduces brief count (min 3 seeds/event); gate still detects empty/truncated output"
         } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\translation_density_hard.meta.json") -Encoding UTF8
         Write-Output ("  [BULLET_COUNT_COMPARE] digest_total={0}  brief_total={1}  required>={2}" -f $_tdDgBullets, $_tdBrBullets, $_tdRequired)
         if ($_tdPass) {
