@@ -2408,7 +2408,7 @@ def _brief_batch_translate_event(
             [{"role": "system", "content": _sys}, {"role": "user", "content": _usr}],
             max_tokens=220,
             temperature=0.0,
-            timeout=90,
+            timeout=20,  # iter28g: reduce from 90s; batch prompt is long → fail fast if slow
             max_retries=0,
         )
     except Exception:
