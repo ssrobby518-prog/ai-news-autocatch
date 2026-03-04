@@ -2351,6 +2351,7 @@ def _brief_batch_translate_event(
     n_what: int = 5,
     n_key: int = 4,
     n_why: int = 4,
+    strict_anchor: bool = True,
 ) -> tuple[list[str], list[str], list[str]]:
     """Single Qwen call per event → all three bullet sections.
 
@@ -2454,7 +2455,10 @@ def _brief_batch_translate_event(
                 b = _brief_norm_bullet(f"{anchor}：{b}")
             if not _brief_validate_zh_bullet(b):
                 continue
-            if not _brief_bullet_hit_anchor_or_number(b, anchors):
+            # iter28: strict_anchor=False skips anchor/number requirement
+            # (used for diversity batch when seeds are duplicate; quality
+            # is ensured by _boost_signal_bullets + _repair_overlap after).
+            if strict_anchor and not _brief_bullet_hit_anchor_or_number(b, anchors):
                 continue
             seen.add(b.lower())
             out.append(b)
@@ -4577,6 +4581,7 @@ def _prepare_brief_final_cards_fast(
                 n_what=_BRIEF_TARGET_WHAT_BULLETS,
                 n_key=_BRIEF_TARGET_KEY_BULLETS,
                 n_why=_BRIEF_TARGET_WHY_BULLETS_DEFAULT,
+                strict_anchor=False,  # iter28: diversity batch, anchor added later by _boost_signal_bullets
             )
             _i28_bt_ok = (
                 len(_i28_bt_w) >= _BRIEF_TARGET_WHAT_BULLETS - 1
