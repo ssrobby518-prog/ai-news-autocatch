@@ -4595,17 +4595,47 @@ def _prepare_brief_final_cards_fast(
                 _i28_bt_used = True
 
         if not _i28_bt_used:
-            what_bullets = _expand_bullets(
-                [what_seed, key_seed, why_seed],
-                _BRIEF_TARGET_WHAT_BULLETS,
+            # iter29: translate each fact sentence individually for unique ZH bullets.
+            # Non-overlapping slices per section → no cross-section duplicates after
+            # intra-event dedup. Falls back to circular padding only when all translations fail.
+            _nw = _BRIEF_TARGET_WHAT_BULLETS
+            _nk = _BRIEF_TARGET_KEY_BULLETS
+            _ny = _BRIEF_TARGET_WHY_BULLETS_DEFAULT
+            _fp_all = list(fact_pack_sentences or [])
+
+            def _iter29_sents_to_bullets(
+                sents: list, role: str, target: int, seed_fallback: list,
+            ) -> list:
+                out: list = []
+                seen_n: set = set()
+                for _s in sents:
+                    if len(out) >= target:
+                        break
+                    _zh = _brief_translate_fact_sentence_to_bullet(
+                        sentence_en=_s, title=title, actor=actor,
+                        anchors=anchors_out, role=role,
+                    )
+                    _zh = _brief_norm_bullet(_zh)
+                    if not _zh:
+                        continue
+                    _fn = _normalize_bullet_for_dedup(_zh)
+                    if _fn in seen_n:
+                        continue
+                    seen_n.add(_fn)
+                    out.append(_zh)
+                if not out:
+                    return _expand_bullets(seed_fallback, target)
+                return out
+
+            what_bullets = _iter29_sents_to_bullets(
+                _fp_all[:_nw], "what", _nw, [what_seed, key_seed, why_seed],
             )
-            key_details_bullets = _expand_bullets(
-                [key_seed, what_seed, why_seed],
-                _BRIEF_TARGET_KEY_BULLETS,
+            key_details_bullets = _iter29_sents_to_bullets(
+                _fp_all[_nw:_nw + _nk], "key", _nk, [key_seed, what_seed, why_seed],
             )
-            why_bullets = _expand_bullets(
+            why_bullets = _iter29_sents_to_bullets(
+                _fp_all[_nw + _nk:_nw + _nk + _ny], "why", _ny,
                 [why_seed, key_seed, what_seed],
-                _BRIEF_TARGET_WHY_BULLETS_DEFAULT,
             )
         what_bullets = _repair_overlap(what_bullets, fact_pack_sentences, anchors_out)
         key_details_bullets = _repair_overlap(key_details_bullets, fact_pack_sentences, anchors_out)

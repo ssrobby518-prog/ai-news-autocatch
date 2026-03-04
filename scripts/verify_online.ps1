@@ -20,10 +20,62 @@ chcp 65001 | Out-Null
 $env:PYTHONIOENCODING = "utf-8"
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$_voRunId = (Get-Date -Format "yyyyMMdd_HHmmss")
+$_voRunId    = (Get-Date -Format "yyyyMMdd_HHmmss")
+$_startedAt  = Get-Date
 $_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 900 }  # iter28g: raised 600→900s for batch-translate Qwen overhead
+$_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 1800 }  # iter29: 預設 1800s (30 分鐘)
 $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
+
+# ---------------------------------------------------------------------------
+# iter29: 計時 helper functions
+#   Append-TimingFooterToMd : 在指定 .md 末尾追加繁中耗時附錄
+#   Write-RunTimingMeta     : 寫 outputs/run_timing.meta.json
+# ---------------------------------------------------------------------------
+function Append-TimingFooterToMd {
+    param(
+        [Parameter(Mandatory=$true)][string]$MdPath,
+        [Parameter(Mandatory=$true)][string]$RunId,
+        [Parameter(Mandatory=$true)][datetime]$StartDt,
+        [Parameter(Mandatory=$true)][datetime]$EndDt,
+        [Parameter(Mandatory=$true)][int]$TotalSec
+    )
+    if (-not (Test-Path $MdPath)) { return }
+    $mins = [int]([Math]::Floor($TotalSec / 60))
+    $secs = [int]($TotalSec % 60)
+    $footer = @(
+        "",
+        "---",
+        "",
+        "## ⏱️ 本次流程耗時",
+        "- run_id：$RunId",
+        "- 開始：$($StartDt.ToString('yyyy-MM-dd HH:mm:ss'))",
+        "- 結束：$($EndDt.ToString('yyyy-MM-dd HH:mm:ss'))",
+        "- 總耗時：$TotalSec 秒（$mins 分 $secs 秒）",
+        ""
+    )
+    Add-Content -LiteralPath $MdPath -Value ($footer -join "`n") -Encoding utf8
+}
+
+function Write-RunTimingMeta {
+    param(
+        [Parameter(Mandatory=$true)][string]$OutPath,
+        [Parameter(Mandatory=$true)][string]$RunId,
+        [Parameter(Mandatory=$true)][datetime]$StartDt,
+        [Parameter(Mandatory=$true)][datetime]$EndDt,
+        [Parameter(Mandatory=$true)][int]$TotalSec,
+        [Parameter(Mandatory=$true)][int]$BudgetSec
+    )
+    $payload = [ordered]@{
+        run_id           = $RunId
+        started_at       = $StartDt.ToString("yyyy-MM-ddTHH:mm:ss")
+        finished_at      = $EndDt.ToString("yyyy-MM-ddTHH:mm:ss")
+        total_seconds    = $TotalSec
+        time_budget_seconds = $BudgetSec
+    } | ConvertTo-Json -Depth 6
+    $dir = Split-Path -Parent $OutPath
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    Set-Content -LiteralPath $OutPath -Value $payload -Encoding utf8
+}
 $env:PIPELINE_REPORT_MODE    = "brief"
 $env:BRIEF_ONLY              = "1"
 $env:BRIEF_MIN_EVENTS_HARD   = "5"
@@ -117,6 +169,30 @@ produced_files      = $_voNrProdStr
 fail_reason         = $Gate
 "@ | Out-File (Join-Path $outputsDir "LAST_RUN_SUMMARY.txt") -Encoding UTF8 -NoNewline
     Write-Output ("LAST_RUN_SUMMARY.txt written: status=FAIL  fail_reason={0}" -f $Gate)
+
+    # iter29: 計時 — 失敗路徑也寫 timing meta + 附錄
+    try {
+        $_voStopwatch.Stop()
+        $_fEndAt  = Get-Date
+        $_fSecTot = [int]$_voStopwatch.Elapsed.TotalSeconds
+        Write-RunTimingMeta `
+            -OutPath  (Join-Path $repoRoot "outputs\run_timing.meta.json") `
+            -RunId    $_voRunId `
+            -StartDt  $_startedAt `
+            -EndDt    $_fEndAt `
+            -TotalSec $_fSecTot `
+            -BudgetSec $_voBudgetSec
+        Append-TimingFooterToMd `
+            -MdPath   (Join-Path $repoRoot "outputs\NOT_READY_report.md") `
+            -RunId    $_voRunId `
+            -StartDt  $_startedAt `
+            -EndDt    $_fEndAt `
+            -TotalSec $_fSecTot
+        $__fm = [int]([Math]::Floor($_fSecTot / 60)); $__fs = [int]($_fSecTot % 60)
+        Write-Output ("  ⏱️ 總耗時：{0} 秒（{1} 分 {2} 秒）" -f $_fSecTot, $__fm, $__fs)
+    } catch {
+        Write-Output ("  [WARN] 計時寫入失敗: {0}" -f $_)
+    }
     exit $ExitCode
 }
 
@@ -3037,55 +3113,66 @@ if (Test-Path $_tdMetaPath) {
 
 Write-Output ""
 # ---------------------------------------------------------------------------
-# TRANSLATION_DENSITY_HARD gate (iter27)
-# Requires: latest_brief.md bullet lines >= digest.md bullet lines * 0.9
-# Ensures the faithful Qwen translation preserves source bullet density.
+# TRANSLATION_DENSITY_HARD gate (iter29)
+# 比較 unique normalized bullets：latest_brief.md >= digest.md * 0.9
+# unique = normalize（去除前綴標籤+符號）後去重計數；排除 footer 區塊（## ⏱️ marker 之後）
 # ---------------------------------------------------------------------------
-Write-Output "TRANSLATION_DENSITY_HARD:"
+Write-Output "TRANSLATION_DENSITY_HARD："
 $_tdDgPath = Join-Path $repoRoot "outputs\digest.md"
 $_tdBrPath = Join-Path $repoRoot "outputs\latest_brief.md"
 if ((Test-Path $_tdDgPath) -and (Test-Path $_tdBrPath)) {
     try {
         $_tdDgLines = Get-Content $_tdDgPath -Encoding UTF8
         $_tdBrLines = Get-Content $_tdBrPath -Encoding UTF8
-        # iter28h: revert to total bullet count (not unique) — unique counting was too strict
-        # because expand_bullets circular padding creates duplicates that intra-event dedup removes,
-        # making brief_unique artificially low vs digest_unique (which uses natural fact sentences).
-        # Total-line comparison correctly checks translation density: brief total >= digest total * 0.9.
-        function _TdCountBullets([string[]]$lines) {
-            $c = 0
+
+        # iter29: unique normalized bullet count；排除 ## ⏱️ footer 以後的行
+        function _TdUniqueBullets([string[]]$lines) {
+            $inFooter = $false
+            $unique   = @{}
             foreach ($ln in $lines) {
-                if ($ln -match '^\s*[-*•>]\s*\S') { $c++ }
+                # footer marker — ignore everything after
+                if ($ln -match '##\s*⏱') { $inFooter = $true }
+                if ($inFooter) { continue }
+                if ($ln -match '^\s*[-*•>]\s*(.+)') {
+                    $raw  = $Matches[1].Trim()
+                    # 去除繁中前綴標籤
+                    $norm = $raw -replace '^(?:揭示[：:]\s*|評估[：:]\s*|影響[：:]\s*|發生了什麼[：:]\s*|關鍵細節[：:]\s*|為何重要[：:]\s*|What\s+happened[：:]\s*|Key\s+details[：:]\s*|Why\s+it\s+matters[：:]\s*)', ''
+                    $norm = ($norm -replace '\s+', ' ').Trim().ToLower()
+                    if ($norm.Length -gt 5) { $unique[$norm] = 1 }
+                }
             }
-            return $c
+            return $unique.Count
         }
-        $_tdDgBullets = _TdCountBullets $_tdDgLines
-        $_tdBrBullets = _TdCountBullets $_tdBrLines
-        $_tdRequired  = [Math]::Ceiling($_tdDgBullets * 0.35)
-        $_tdPass = ($_tdBrBullets -ge $_tdRequired)
+
+        $_tdDgUnique  = _TdUniqueBullets $_tdDgLines
+        $_tdBrUnique  = _TdUniqueBullets $_tdBrLines
+        $_tdRequired  = [Math]::Ceiling($_tdDgUnique * 0.9)
+        $_tdPass      = ($_tdBrUnique -ge $_tdRequired)
         @{
-            run_id                     = $_voRunId
-            gate_result                = if ($_tdPass) { "PASS" } else { "FAIL" }
-            digest_total_bullet_lines  = $_tdDgBullets
-            brief_total_bullet_lines   = $_tdBrBullets
-            required_min               = $_tdRequired
-            threshold_ratio            = 0.35
-            note                       = "iter28i: threshold 0.9→0.35; intra-event dedup reduces brief count (min 3 seeds/event); gate still detects empty/truncated output"
+            run_id                    = $_voRunId
+            gate_result               = if ($_tdPass) { "通過" } else { "失敗" }
+            digest_unique_bullet_lines = $_tdDgUnique
+            brief_unique_bullet_lines  = $_tdBrUnique
+            required_min              = $_tdRequired
+            threshold_ratio           = 0.9
+            note                      = "iter29: unique normalized bullets >= digest_unique * 0.9；footer 排除（## ⏱️ marker 以後不計入）"
         } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\translation_density_hard.meta.json") -Encoding UTF8
-        Write-Output ("  [BULLET_COUNT_COMPARE] digest_total={0}  brief_total={1}  required>={2}" -f $_tdDgBullets, $_tdBrBullets, $_tdRequired)
+        Write-Output ("  [UNIQUE_BULLET_COMPARE] digest_unique={0}  brief_unique={1}  門檻>={2}  ratio={3:F2}" -f `
+            $_tdDgUnique, $_tdBrUnique, $_tdRequired, `
+            $(if ($_tdDgUnique -gt 0) { $_tdBrUnique / $_tdDgUnique } else { 0 }))
         if ($_tdPass) {
-            Write-Output "  => TRANSLATION_DENSITY_HARD: PASS"
+            Write-Output "  => TRANSLATION_DENSITY_HARD：通過"
         } else {
-            Write-Output ("  => TRANSLATION_DENSITY_HARD: FAIL (brief_total={0} < required={1})" -f $_tdBrBullets, $_tdRequired)
+            Write-Output ("  => TRANSLATION_DENSITY_HARD：失敗（brief_unique={0} < 門檻={1}；digest_unique={2}）" -f $_tdBrUnique, $_tdRequired, $_tdDgUnique)
             exit 1
         }
     } catch {
-        Write-Output ("  => TRANSLATION_DENSITY_HARD: FAIL (error: {0})" -f $_)
+        Write-Output ("  => TRANSLATION_DENSITY_HARD：失敗（錯誤: {0}）" -f $_)
         exit 1
     }
 } else {
-    $_tdSkipReason = if (-not (Test-Path $_tdDgPath)) { "digest.md absent" } else { "latest_brief.md absent" }
-    Write-Output ("  => TRANSLATION_DENSITY_HARD: SKIP ({0}) — non-gating when source absent" -f $_tdSkipReason)
+    $_tdSkipReason = if (-not (Test-Path $_tdDgPath)) { "digest.md 不存在" } else { "latest_brief.md 不存在" }
+    Write-Output ("  => TRANSLATION_DENSITY_HARD：略過（{0}）— 來源不存在時非阻擋" -f $_tdSkipReason)
 }
 
 Write-Output ""
@@ -3443,9 +3530,36 @@ produced_files      = $_voProdStr
 Write-Output ("LAST_RUN_SUMMARY.txt written: status=OK  ai_selected_events={0}  report_mode={1}" -f $_voSucAiSel, $_voSucRepMode)
 Write-Output ""
 
+# ---------------------------------------------------------------------------
+# iter29: 計時 — 成功路徑寫 timing meta + 追加 brief 末尾附錄
+# ---------------------------------------------------------------------------
+try {
+    $_voStopwatch.Stop()
+    $_sEndAt  = Get-Date
+    $_sSecTot = [int]$_voStopwatch.Elapsed.TotalSeconds
+    Write-RunTimingMeta `
+        -OutPath  (Join-Path $repoRoot "outputs\run_timing.meta.json") `
+        -RunId    $_voRunId `
+        -StartDt  $_startedAt `
+        -EndDt    $_sEndAt `
+        -TotalSec $_sSecTot `
+        -BudgetSec $_voBudgetSec
+    Append-TimingFooterToMd `
+        -MdPath   (Join-Path $repoRoot "outputs\latest_brief.md") `
+        -RunId    $_voRunId `
+        -StartDt  $_startedAt `
+        -EndDt    $_sEndAt `
+        -TotalSec $_sSecTot
+    $__sm = [int]([Math]::Floor($_sSecTot / 60)); $__ss = [int]($_sSecTot % 60)
+    Write-Output ("⏱️ 總耗時：{0} 秒（{1} 分 {2} 秒）— run_timing.meta.json 已寫入" -f $_sSecTot, $__sm, $__ss)
+} catch {
+    Write-Output ("  [WARN] 計時寫入失敗: {0}" -f $_)
+}
+Write-Output ""
+
 if ($pool85Degraded) {
-    Write-Output "=== verify_online.ps1 COMPLETE: DEGRADED RUN (Z0 frontier85_72h below strict target; fallback accepted) ==="
+    Write-Output "=== verify_online.ps1 完成：降級運行（Z0 frontier85_72h 低於嚴格目標；已接受 fallback）==="
 } else {
-    Write-Output "=== verify_online.ps1 COMPLETE: all gates passed ==="
+    Write-Output "=== verify_online.ps1 完成：所有門檻通過 ==="
 }
 exit 0
