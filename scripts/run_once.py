@@ -4561,18 +4561,12 @@ def _prepare_brief_final_cards_fast(
             _brief_trans_stats["error"],
         )
 
-        # iter28: detect seed duplication BEFORE expand_bullets padding.
-        # If all 3 seeds normalise to the same text, batch translate gives
-        # more unique content (uses all fact_pack_sentences as input).
-        _i28_wn = _normalize_bullet_for_dedup(what_seed) if what_seed else ""
-        _i28_kn = _normalize_bullet_for_dedup(key_seed) if key_seed else ""
-        _i28_yn = _normalize_bullet_for_dedup(why_seed) if why_seed else ""
-        _i28_seeds_dup = (
-            bool(_i28_wn)
-            and (_i28_wn == _i28_kn or _i28_wn == _i28_yn or _i28_kn == _i28_yn)
-        )
+        # iter28d: always try batch translate first (unconditional) when we
+        # have enough fact sentences. _expand_bullets pads seeds circularly so
+        # even 3 DIFFERENT seeds produce only ~3 unique after label-strip dedup.
+        # Batch translate uses all fact_pack_sentences → genuinely diverse ZH.
         _i28_bt_used = False
-        if _i28_seeds_dup and len(fact_pack_sentences) >= 3:
+        if len(fact_pack_sentences) >= 3:
             _i28_bt_w, _i28_bt_k, _i28_bt_y = _brief_batch_translate_event(
                 title=title,
                 actor=actor,
@@ -4591,7 +4585,7 @@ def _prepare_brief_final_cards_fast(
             if _i28_bt_ok:
                 import logging as _i28_log
                 _i28_log.getLogger(__name__).info(
-                    "[ITER28_DEDUP_DIVERSE] batch replace (seeds_dup=True) event=%s "
+                    "[ITER28_DEDUP_DIVERSE] batch replace (always=True) event=%s "
                     "what=%d key=%d why=%d",
                     title[:50], len(_i28_bt_w), len(_i28_bt_k), len(_i28_bt_y),
                 )
