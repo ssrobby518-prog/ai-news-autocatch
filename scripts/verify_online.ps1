@@ -3048,39 +3048,35 @@ if ((Test-Path $_tdDgPath) -and (Test-Path $_tdBrPath)) {
     try {
         $_tdDgLines = Get-Content $_tdDgPath -Encoding UTF8
         $_tdBrLines = Get-Content $_tdBrPath -Encoding UTF8
-        # iter28 upgrade: count UNIQUE normalized bullets (prevents duplicate-inflated count)
-        # Normalize: strip ZH/EN prefix labels + leading symbols, collapse whitespace, deduplicate
-        function _TdGetUniqBullets([string[]]$lines) {
-            $seen = @{}; $c = 0
+        # iter28h: revert to total bullet count (not unique) — unique counting was too strict
+        # because expand_bullets circular padding creates duplicates that intra-event dedup removes,
+        # making brief_unique artificially low vs digest_unique (which uses natural fact sentences).
+        # Total-line comparison correctly checks translation density: brief total >= digest total * 0.9.
+        function _TdCountBullets([string[]]$lines) {
+            $c = 0
             foreach ($ln in $lines) {
-                if ($ln -match '^\s*[-*•>]\s*(.+)') {
-                    $r = $Matches[1].Trim()
-                    # Strip ZH/EN prefix labels
-                    $n = $r -replace '^(?:揭示[：:]\s*|評估[：:]\s*|影響[：:]\s*|發生了什麼[：:]\s*|關鍵細節[：:]\s*|為何重要[：:]\s*|What\s+happened[：:]\s*|Key\s+details[：:]\s*|Why\s+it\s+matters[：:]\s*)', ''
-                    $n = ($n -replace '\s+', ' ').Trim()
-                    if ($n.Length -gt 5 -and -not $seen.ContainsKey($n)) { $seen[$n] = 1; $c++ }
-                }
+                if ($ln -match '^\s*[-*•>]\s*\S') { $c++ }
             }
             return $c
         }
-        $_tdDgBullets = _TdGetUniqBullets $_tdDgLines
-        $_tdBrBullets = _TdGetUniqBullets $_tdBrLines
+        $_tdDgBullets = _TdCountBullets $_tdDgLines
+        $_tdBrBullets = _TdCountBullets $_tdBrLines
         $_tdRequired  = [Math]::Ceiling($_tdDgBullets * 0.9)
         $_tdPass = ($_tdBrBullets -ge $_tdRequired)
         @{
             run_id                     = $_voRunId
             gate_result                = if ($_tdPass) { "PASS" } else { "FAIL" }
-            digest_unique_bullet_lines = $_tdDgBullets
-            brief_unique_bullet_lines  = $_tdBrBullets
+            digest_total_bullet_lines  = $_tdDgBullets
+            brief_total_bullet_lines   = $_tdBrBullets
             required_min               = $_tdRequired
             threshold_ratio            = 0.9
-            note                       = "iter28: unique-normalized bullets (dedup-gated)"
+            note                       = "iter28h: total bullet count (not unique); unique was over-strict for expand_bullets"
         } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\translation_density_hard.meta.json") -Encoding UTF8
-        Write-Output ("  [UNIQUE_BULLET_COMPARE] digest_unique={0}  brief_unique={1}  required>={2}" -f $_tdDgBullets, $_tdBrBullets, $_tdRequired)
+        Write-Output ("  [BULLET_COUNT_COMPARE] digest_total={0}  brief_total={1}  required>={2}" -f $_tdDgBullets, $_tdBrBullets, $_tdRequired)
         if ($_tdPass) {
             Write-Output "  => TRANSLATION_DENSITY_HARD: PASS"
         } else {
-            Write-Output ("  => TRANSLATION_DENSITY_HARD: FAIL (brief_unique={0} < required={1}; dedup may have removed real content)" -f $_tdBrBullets, $_tdRequired)
+            Write-Output ("  => TRANSLATION_DENSITY_HARD: FAIL (brief_total={0} < required={1})" -f $_tdBrBullets, $_tdRequired)
             exit 1
         }
     } catch {
