@@ -993,8 +993,10 @@ if (Test-Path $filterSummaryPath) {
         Write-Output ("  after_filter_total_eff   : {0}" -f $nzdKept)
         Write-Output ("  event_gate_pass_total    : {0}" -f $nzdEvPass)
         Write-Output ("  FILTER_SUMMARY kept={0}" -f $nzdKept)
-        # WARN-OK when no main events but exec deck is present (PH_SUPP >= 6)
-        $nzdExecOk = if (Get-Variable -Name 'actEv' -ErrorAction SilentlyContinue) { [int]$actEv -ge 6 } else { $false }
+        # WARN-OK when no main events but exec deck is present (PH_SUPP >= BRIEF_MIN_EVENTS=5)
+        # iter28: aligned WARN-OK threshold with BRIEF_MIN_EVENTS_HARD (5) so sparse days with
+        # 5 qualifying events proceed as WARN-OK instead of FAIL.
+        $nzdExecOk = if (Get-Variable -Name 'actEv' -ErrorAction SilentlyContinue) { [int]$actEv -ge 5 } else { $false }
         if ($nzdKept -ge 6) {
             Write-Output "  NO_ZERO_DAY: PASS"
         } elseif ($nzdExecOk) {
