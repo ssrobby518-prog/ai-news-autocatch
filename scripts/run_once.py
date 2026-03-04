@@ -9128,22 +9128,26 @@ def run_pipeline() -> None:
                     log.info("SELECTION_AUDIT: selected=%d distinct_sources=%d bigtech_hit=%d official_or_media=%d",
                              _sel_count, _sel_distinct, _sel_bigtech, _sel_off_media)
                     if _sel_distinct < 3:
-                        _gate_r = "SOURCE_DIVERSITY_FAIL"
-                        _fail_r = f"SOURCE_DIVERSITY_FAIL: selected_sources_distinct={_sel_distinct} < 3"
-                        log.error(_fail_r)
-                        _write_not_ready_report_md(_gate_r, _fail_r, _sel_audit_run_id, _sel_count, _sel_distinct, _sel_bigtech, _sel_off_media)
-                        _write_brief_template_leak_meta([])
-                        sys.exit(1)
+                        # Primary path below source-diversity threshold.
+                        # Fall through to DBE rebuild (reads multi-source DB) instead of
+                        # hard-exiting; DBE gate will enforce the same check and exit if
+                        # it also fails.  Clearing _final_cards triggers the DBE condition.
+                        log.warning(
+                            "SOURCE_DIVERSITY_WARN primary: distinct=%d < 3 "
+                            "— clearing final_cards to trigger DBE rebuild",
+                            _sel_distinct,
+                        )
+                        _final_cards = []
                     _bigtech_threshold = 5 if _sel_count >= 7 else 4
-                    if _sel_bigtech < _bigtech_threshold or _sel_off_media < 4:
-                        _gate_r = "BIGTECH_FOCUS_FAIL"
-                        _fail_r = (f"BIGTECH_FOCUS_FAIL: bigtech_hit_count={_sel_bigtech} < {_bigtech_threshold}"
-                                   f" OR official_or_media_count={_sel_off_media} < 4"
-                                   f" (selected={_sel_count})")
-                        log.error(_fail_r)
-                        _write_not_ready_report_md(_gate_r, _fail_r, _sel_audit_run_id, _sel_count, _sel_distinct, _sel_bigtech, _sel_off_media)
-                        _write_brief_template_leak_meta([])
-                        sys.exit(1)
+                    if _sel_distinct >= 3 and (_sel_bigtech < _bigtech_threshold or _sel_off_media < 4):
+                        # Primary path below bigtech/media threshold (and diversity already OK).
+                        # Same soft-fallback: clear cards → DBE rebuild.
+                        log.warning(
+                            "BIGTECH_FOCUS_WARN primary: bigtech=%d off_media=%d threshold=%d "
+                            "— clearing final_cards to trigger DBE rebuild",
+                            _sel_bigtech, _sel_off_media, _bigtech_threshold,
+                        )
+                        _final_cards = []
                     _btl_leak_count = _write_brief_template_leak_meta(_final_cards)
                     if _btl_leak_count > 0:
                         log.error(
