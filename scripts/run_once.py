@@ -2408,7 +2408,7 @@ def _brief_batch_translate_event(
             [{"role": "system", "content": _sys}, {"role": "user", "content": _usr}],
             max_tokens=220,
             temperature=0.0,
-            timeout=20,  # iter28g: reduce from 90s; batch prompt is long → fail fast if slow
+            timeout=60,  # iter29: 60s — balanced; 1800s budget allows 5×60=300s for batch translate
             max_retries=0,
         )
     except Exception:
@@ -4596,21 +4596,21 @@ def _prepare_brief_final_cards_fast(
 
         if not _i28_bt_used:
             # iter29: translate each fact sentence individually for unique ZH bullets.
-            # Non-overlapping slices per section → no cross-section duplicates after
-            # intra-event dedup. Falls back to circular padding only when all translations fail.
+            # Uses ALL fact_pack_sentences per section (not slices) so translation
+            # failures in some positions don't starve the section.
+            # Pads to target count circularly from unique translations; falls back to
+            # circular seed-padding only when all translations produce empty output.
             _nw = _BRIEF_TARGET_WHAT_BULLETS
             _nk = _BRIEF_TARGET_KEY_BULLETS
             _ny = _BRIEF_TARGET_WHY_BULLETS_DEFAULT
             _fp_all = list(fact_pack_sentences or [])
 
             def _iter29_sents_to_bullets(
-                sents: list, role: str, target: int, seed_fallback: list,
+                role: str, target: int, seed_fallback: list,
             ) -> list:
                 out: list = []
                 seen_n: set = set()
-                for _s in sents:
-                    if len(out) >= target:
-                        break
+                for _s in _fp_all:
                     _zh = _brief_translate_fact_sentence_to_bullet(
                         sentence_en=_s, title=title, actor=actor,
                         anchors=anchors_out, role=role,
@@ -4624,18 +4624,26 @@ def _prepare_brief_final_cards_fast(
                     seen_n.add(_fn)
                     out.append(_zh)
                 if not out:
+                    # complete failure — fall back to circular seed padding
                     return _expand_bullets(seed_fallback, target)
-                return out
+                # pad to target circularly from unique translations (not seeds)
+                if len(out) < target:
+                    _pad = list(out)
+                    _pi = 0
+                    while len(_pad) < target:
+                        _pad.append(out[_pi % len(out)])
+                        _pi += 1
+                    return _pad[:target]
+                return out[:target]
 
             what_bullets = _iter29_sents_to_bullets(
-                _fp_all[:_nw], "what", _nw, [what_seed, key_seed, why_seed],
+                "what", _nw, [what_seed, key_seed, why_seed],
             )
             key_details_bullets = _iter29_sents_to_bullets(
-                _fp_all[_nw:_nw + _nk], "key", _nk, [key_seed, what_seed, why_seed],
+                "key", _nk, [key_seed, what_seed, why_seed],
             )
             why_bullets = _iter29_sents_to_bullets(
-                _fp_all[_nw + _nk:_nw + _nk + _ny], "why", _ny,
-                [why_seed, key_seed, what_seed],
+                "why", _ny, [why_seed, key_seed, what_seed],
             )
         what_bullets = _repair_overlap(what_bullets, fact_pack_sentences, anchors_out)
         key_details_bullets = _repair_overlap(key_details_bullets, fact_pack_sentences, anchors_out)
