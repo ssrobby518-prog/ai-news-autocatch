@@ -2406,7 +2406,7 @@ def _brief_batch_translate_event(
     try:
         _ok, _txt = _llama_chat(
             [{"role": "system", "content": _sys}, {"role": "user", "content": _usr}],
-            max_tokens=220,
+            max_tokens=480,  # iter29c: 480 tokens allows 12 bullets×~30 chars/bullet in 3 sections
             temperature=0.0,
             timeout=60,  # iter29: 60s — balanced; 1800s budget allows 5×60=300s for batch translate
             max_retries=0,
@@ -4615,7 +4615,10 @@ def _prepare_brief_final_cards_fast(
                         sentence_en=_s, title=title, actor=actor,
                         anchors=anchors_out, role=role,
                     )
-                    _zh = _brief_norm_bullet(_zh)
+                    # iter29c: check empty BEFORE _brief_norm_bullet.
+                    # _brief_translate_fact_sentence_to_bullet already normalises internally.
+                    # Calling _brief_norm_bullet on "" would produce "(decision-relevant detail)."
+                    # which is non-empty → bypasses the skip and injects junk into the brief.
                     if not _zh:
                         continue
                     _fn = _normalize_bullet_for_dedup(_zh)
