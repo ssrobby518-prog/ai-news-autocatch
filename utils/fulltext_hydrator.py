@@ -496,8 +496,13 @@ def hydrate_items_batch(
     unique_urls = sorted(url_to_items.keys(), key=_url_priority)
     done: dict[str, dict] = {}
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_map = {executor.submit(hydrate_fulltext, u, timeout_s): u for u in unique_urls}
+    # Use explicit shutdown(wait=False) so that threads stuck on hanging TCP connections
+    # (where urlopen timeout doesn't fire reliably on Windows) do not block the batch
+    # return after batch_timeout elapses.  Threads self-terminate once their socket
+    # timeout (timeout_s) eventually fires; the main pipeline thread continues immediately.
+    _hb_executor = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        future_map = {_hb_executor.submit(hydrate_fulltext, u, timeout_s): u for u in unique_urls}
         remaining = max(5.0, batch_timeout - (time.monotonic() - t0))
         try:
             for future in as_completed(future_map, timeout=remaining):
@@ -519,6 +524,8 @@ def hydrate_items_batch(
                         "full_text": "", "fulltext_len": 0,
                         "reason": "batch_timeout",
                     }
+    finally:
+        _hb_executor.shutdown(wait=False)
 
     ok_count = 0
     for url, grp in url_to_items.items():
