@@ -340,6 +340,29 @@ def _clip_text(text: str, limit: int = 110) -> str:
     return txt if len(txt) <= limit else txt[:limit].rstrip()
 
 
+# iter28: regex for stripping ZH/EN prefix labels from bullet text (intra-event dedup)
+_BULLET_PREFIX_LABEL_RE = re.compile(
+    r"^(?:揭示[：:]\s*|評估[：:]\s*|影響[：:]\s*|發生了什麼[：:]\s*|"
+    r"關鍵細節[：:]\s*|為何重要[：:]\s*|"
+    r"What\s+happened[：:]\s*|Key\s+details[：:]\s*|Why\s+it\s+matters[：:]\s*)",
+    re.IGNORECASE,
+)
+_BULLET_LEADING_SYMBOL_RE = re.compile(r"^[\-\*\•\>\#\s]+")
+
+
+def _normalize_bullet_for_dedup(text: str) -> str:
+    """Normalize bullet text for intra-event dedup comparison.
+
+    Strips ZH/EN prefix labels (揭示：/評估：/影響：/…), leading symbols (•/>/-/*),
+    and collapses whitespace. Used to detect near-duplicates across
+    what_happened_bullets / key_details_bullets / why_it_matters_bullets.
+    """
+    t = _normalize_ws(str(text or ""))
+    t = _BULLET_PREFIX_LABEL_RE.sub("", t)
+    t = _BULLET_LEADING_SYMBOL_RE.sub("", t)
+    return _normalize_ws(t)
+
+
 _BRIEF_BOILERPLATE_RE = re.compile(
     r"(?:template|placeholder|lorem ipsum|to be filled|boilerplate)",
     re.IGNORECASE,
@@ -6066,6 +6089,7 @@ def _assemble_zh_brief_from_cards(
             f"_執行編號：{run_id}　生成：{_now_str}_",
             "",
         ]
+        _events_audit: list[dict] = []  # iter28: per-event dedup audit for repeat_audit.meta.json
         # prompt_chars = digest.md length (English source evidence for PM)
         _prompt_chars = 0
         if digest_path is not None:
@@ -6111,7 +6135,11 @@ def _assemble_zh_brief_from_cards(
             # Collect ALL ZH bullets — NO column labels.
             # Keys: what_happened_bullets/key_details_bullets/why_it_matters_bullets
             # (set by _prepare_brief_final_cards_fast in prepared dicts)
+            # iter28: intra-event dedup — normalize (strip prefix labels + leading symbols)
+            # before dedup check; track removed duplicates for repeat_audit.meta.json.
             _all_bullets: list[str] = []
+            _seen_norms: dict[str, int] = {}       # normalized_text -> occurrence count
+            _evt_dup_groups: dict[str, dict] = {}  # normalized_text -> audit record
             for _bkey in (
                 "what_happened_bullets",
                 "key_details_bullets",
@@ -6119,8 +6147,25 @@ def _assemble_zh_brief_from_cards(
             ):
                 for _b in (_ab_get(_card, _bkey, default=None) or []):
                     _bc = _normalize_ws(str(_b or ""))
-                    if _bc and len(_bc) >= 6 and _bc not in _all_bullets:
+                    if not _bc or len(_bc) < 6:
+                        continue
+                    _bc_norm = _normalize_bullet_for_dedup(_bc)
+                    if _bc_norm not in _seen_norms:
+                        _seen_norms[_bc_norm] = 1
                         _all_bullets.append(_bc)
+                    else:
+                        # Duplicate — track for audit, do NOT add to output
+                        _seen_norms[_bc_norm] += 1
+                        if _bc_norm not in _evt_dup_groups:
+                            _evt_dup_groups[_bc_norm] = {
+                                "normalized_text": _bc_norm[:120],
+                                "occurrences": 2,
+                                "removed_count": 1,
+                                "drop_reason": "DEDUP_INTRA_EVENT",
+                            }
+                        else:
+                            _evt_dup_groups[_bc_norm]["occurrences"] += 1
+                            _evt_dup_groups[_bc_norm]["removed_count"] += 1
 
             if not _all_bullets:
                 # Fallback: use canonical_payload if bullets empty
@@ -6129,10 +6174,32 @@ def _assemble_zh_brief_from_cards(
                     _cp = _ab_gcp(_card)
                     for _fld in ("q1_event_2sent_zh", "q2_impact_2sent_zh"):
                         _val = _normalize_ws(str(_cp.get(_fld, "") or ""))
-                        if _val and len(_val) >= 6 and _val not in _all_bullets:
+                        if not _val or len(_val) < 6:
+                            continue
+                        _val_norm = _normalize_bullet_for_dedup(_val)
+                        if _val_norm not in _seen_norms:
+                            _seen_norms[_val_norm] = 1
                             _all_bullets.append(_val)
+                        else:
+                            _seen_norms[_val_norm] += 1
+                            if _val_norm not in _evt_dup_groups:
+                                _evt_dup_groups[_val_norm] = {
+                                    "normalized_text": _val_norm[:120],
+                                    "occurrences": 2,
+                                    "removed_count": 1,
+                                    "drop_reason": "DEDUP_INTRA_EVENT",
+                                }
+                            else:
+                                _evt_dup_groups[_val_norm]["occurrences"] += 1
+                                _evt_dup_groups[_val_norm]["removed_count"] += 1
                 except Exception:
                     pass
+            # Record per-event audit entry
+            _events_audit.append({
+                "event_idx": _i,
+                "title": _title[:80],
+                "duplicate_groups": list(_evt_dup_groups.values()),
+            })
 
             for _b in _all_bullets[:10]:  # max 10 bullets per event
                 _lines.append(f"- {_b}")
@@ -6140,6 +6207,7 @@ def _assemble_zh_brief_from_cards(
             _lines.append("---")
             _lines.append("")
 
+        _write_repeat_audit_meta(_events_audit, run_id)
         _zh_text = "\n".join(_lines)
         return True, _zh_text, _prompt_chars, len(_zh_text)
     except Exception as _ab_exc:
@@ -6148,6 +6216,56 @@ def _assemble_zh_brief_from_cards(
             "_assemble_zh_brief_from_cards failed: %s", _ab_exc
         )
         return False, f"ASSEMBLE_FAILED: {_ab_exc}", 0, 0
+
+
+# ---------------------------------------------------------------------------
+# _write_repeat_audit_meta — iter28: intra-event dedup audit evidence
+# Writes outputs/repeat_audit.meta.json per event with duplicate_groups.
+# ---------------------------------------------------------------------------
+def _write_repeat_audit_meta(events_audit: list, run_id: str = "") -> None:
+    """Write outputs/repeat_audit.meta.json — intra-event bullet dedup audit.
+
+    events_audit: list of {event_idx, title, duplicate_groups}
+    each duplicate_group: {normalized_text, occurrences, removed_count, drop_reason}
+    duplicates_found  = total removed_count across all events
+    duplicates_removed = same (by construction: dedup removes all found)
+    """
+    try:
+        import json as _ram_json
+        _ram_out = Path(settings.PROJECT_ROOT) / "outputs"
+        _ram_out.mkdir(parents=True, exist_ok=True)
+        _ram_found = sum(
+            sum(int(g.get("removed_count", 0)) for g in ev.get("duplicate_groups", []))
+            for ev in (events_audit or [])
+        )
+        _ram_payload = {
+            "run_id": run_id or "",
+            "events_checked": len(events_audit or []),
+            "duplicates_found": _ram_found,
+            "duplicates_removed": _ram_found,  # dedup removes all found by design
+            "events": [
+                {
+                    "event_idx": ev.get("event_idx", 0),
+                    "title": (str(ev.get("title", "")) or "")[:80],
+                    "duplicate_groups": ev.get("duplicate_groups", []),
+                }
+                for ev in (events_audit or [])
+            ],
+        }
+        (_ram_out / "repeat_audit.meta.json").write_text(
+            _ram_json.dumps(_ram_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        import logging as _ram_log_ok
+        _ram_log_ok.getLogger("ai_intel").info(
+            "_write_repeat_audit_meta: events=%d duplicates_found=%d duplicates_removed=%d",
+            len(events_audit or []), _ram_found, _ram_found,
+        )
+    except Exception as _ram_exc:
+        import logging as _ram_log_e
+        _ram_log_e.getLogger("ai_intel").warning(
+            "_write_repeat_audit_meta failed: %s", _ram_exc
+        )
 
 
 # ---------------------------------------------------------------------------

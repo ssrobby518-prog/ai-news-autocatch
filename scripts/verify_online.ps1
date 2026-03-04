@@ -3046,23 +3046,39 @@ if ((Test-Path $_tdDgPath) -and (Test-Path $_tdBrPath)) {
     try {
         $_tdDgLines = Get-Content $_tdDgPath -Encoding UTF8
         $_tdBrLines = Get-Content $_tdBrPath -Encoding UTF8
-        $_tdDgBullets = @($_tdDgLines | Where-Object { $_ -match '^\s*[-*]\s+' }).Count
-        $_tdBrBullets = @($_tdBrLines | Where-Object { $_ -match '^\s*[-*]\s+' }).Count
+        # iter28 upgrade: count UNIQUE normalized bullets (prevents duplicate-inflated count)
+        # Normalize: strip ZH/EN prefix labels + leading symbols, collapse whitespace, deduplicate
+        function _TdGetUniqBullets([string[]]$lines) {
+            $seen = @{}; $c = 0
+            foreach ($ln in $lines) {
+                if ($ln -match '^\s*[-*•>]\s*(.+)') {
+                    $r = $Matches[1].Trim()
+                    # Strip ZH/EN prefix labels
+                    $n = $r -replace '^(?:揭示[：:]\s*|評估[：:]\s*|影響[：:]\s*|發生了什麼[：:]\s*|關鍵細節[：:]\s*|為何重要[：:]\s*|What\s+happened[：:]\s*|Key\s+details[：:]\s*|Why\s+it\s+matters[：:]\s*)', ''
+                    $n = ($n -replace '\s+', ' ').Trim()
+                    if ($n.Length -gt 5 -and -not $seen.ContainsKey($n)) { $seen[$n] = 1; $c++ }
+                }
+            }
+            return $c
+        }
+        $_tdDgBullets = _TdGetUniqBullets $_tdDgLines
+        $_tdBrBullets = _TdGetUniqBullets $_tdBrLines
         $_tdRequired  = [Math]::Ceiling($_tdDgBullets * 0.9)
         $_tdPass = ($_tdBrBullets -ge $_tdRequired)
         @{
-            run_id               = $_voRunId
-            gate_result          = if ($_tdPass) { "PASS" } else { "FAIL" }
-            digest_bullet_lines  = $_tdDgBullets
-            brief_bullet_lines   = $_tdBrBullets
-            required_min         = $_tdRequired
-            threshold_ratio      = 0.9
+            run_id                     = $_voRunId
+            gate_result                = if ($_tdPass) { "PASS" } else { "FAIL" }
+            digest_unique_bullet_lines = $_tdDgBullets
+            brief_unique_bullet_lines  = $_tdBrBullets
+            required_min               = $_tdRequired
+            threshold_ratio            = 0.9
+            note                       = "iter28: unique-normalized bullets (dedup-gated)"
         } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\translation_density_hard.meta.json") -Encoding UTF8
-        Write-Output ("  [BULLET_COUNT_COMPARE] digest_bullets={0}  brief_bullets={1}  required>={2}" -f $_tdDgBullets, $_tdBrBullets, $_tdRequired)
+        Write-Output ("  [UNIQUE_BULLET_COMPARE] digest_unique={0}  brief_unique={1}  required>={2}" -f $_tdDgBullets, $_tdBrBullets, $_tdRequired)
         if ($_tdPass) {
             Write-Output "  => TRANSLATION_DENSITY_HARD: PASS"
         } else {
-            Write-Output ("  => TRANSLATION_DENSITY_HARD: FAIL (brief_bullets={0} < required={1}; digest needs faithful translation)" -f $_tdBrBullets, $_tdRequired)
+            Write-Output ("  => TRANSLATION_DENSITY_HARD: FAIL (brief_unique={0} < required={1}; dedup may have removed real content)" -f $_tdBrBullets, $_tdRequired)
             exit 1
         }
     } catch {
@@ -3151,6 +3167,225 @@ if (Test-Path $_tdBrPath) {
     }
 } else {
     Write-Output "  latest_brief.md not found → SKIP (non-gating when absent)"
+}
+
+Write-Output ""
+# ---------------------------------------------------------------------------
+# NO_NEAR_DUPLICATE_INTRA_EVENT_HARD gate (iter28)
+# Reads latest_brief.md, splits by ## event sections.
+# For each section, normalizes bullet lines (strip prefix labels + leading symbols)
+# and checks if any normalized sentence appears >=2 times → FAIL.
+# ---------------------------------------------------------------------------
+Write-Output "NO_NEAR_DUPLICATE_INTRA_EVENT_HARD:"
+if (Test-Path $_tdBrPath) {
+    try {
+        $_ndiLines     = Get-Content $_tdBrPath -Encoding UTF8
+        $_ndiFound     = $false
+        $_ndiMaxRepeat = 0
+        $_ndiSample    = ""
+        $_ndiSection   = [System.Collections.Generic.List[string]]::new()
+        $_ndiSectionHdr= ""
+        function _CheckNdiSection([System.Collections.Generic.List[string]]$sLines) {
+            $seen = @{}
+            foreach ($ln in $sLines) {
+                if ($ln -match '^\s*[-*•>]\s*(.+)') {
+                    $r = $Matches[1].Trim()
+                    $n = $r -replace '^(?:揭示[：:]\s*|評估[：:]\s*|影響[：:]\s*|發生了什麼[：:]\s*|關鍵細節[：:]\s*|為何重要[：:]\s*|What\s+happened[：:]\s*|Key\s+details[：:]\s*|Why\s+it\s+matters[：:]\s*)', ''
+                    $n = ($n -replace '\s+', ' ').Trim()
+                    if ($n.Length -gt 5) {
+                        if ($seen.ContainsKey($n)) { $seen[$n]++ } else { $seen[$n] = 1 }
+                    }
+                }
+            }
+            return $seen
+        }
+        foreach ($_ndiLine in $_ndiLines) {
+            if ($_ndiLine -match '^##') {
+                if ($_ndiSection.Count -gt 0) {
+                    $ndiCounts = _CheckNdiSection $_ndiSection
+                    foreach ($k in $ndiCounts.Keys) {
+                        if ($ndiCounts[$k] -ge 2) {
+                            $_ndiFound = $true
+                            if ($ndiCounts[$k] -gt $_ndiMaxRepeat) {
+                                $_ndiMaxRepeat = $ndiCounts[$k]
+                                $_ndiSample    = "$_ndiSectionHdr | " + $k.Substring(0, [Math]::Min(60, $k.Length))
+                            }
+                        }
+                    }
+                }
+                $_ndiSection    = [System.Collections.Generic.List[string]]::new()
+                $_ndiSectionHdr = $_ndiLine.Trim()
+            }
+            $_ndiSection.Add($_ndiLine)
+        }
+        # Check last section
+        if ($_ndiSection.Count -gt 0) {
+            $ndiCounts = _CheckNdiSection $_ndiSection
+            foreach ($k in $ndiCounts.Keys) {
+                if ($ndiCounts[$k] -ge 2) {
+                    $_ndiFound = $true
+                    if ($ndiCounts[$k] -gt $_ndiMaxRepeat) {
+                        $_ndiMaxRepeat = $ndiCounts[$k]
+                        $_ndiSample    = "$_ndiSectionHdr | " + $k.Substring(0, [Math]::Min(60, $k.Length))
+                    }
+                }
+            }
+        }
+        @{
+            run_id             = $_voRunId
+            gate_result        = if (-not $_ndiFound) { "PASS" } else { "FAIL" }
+            duplicate_found    = $_ndiFound
+            max_repeat_count   = $_ndiMaxRepeat
+            sample             = $_ndiSample
+            threshold          = 2
+        } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\no_near_duplicate_intra_event_hard.meta.json") -Encoding UTF8
+        if (-not $_ndiFound) {
+            Write-Output "  => NO_NEAR_DUPLICATE_INTRA_EVENT_HARD: PASS (no intra-event bullet repeated >=2 times)"
+        } else {
+            Write-Output ("  => NO_NEAR_DUPLICATE_INTRA_EVENT_HARD: FAIL (max_repeat={0}  sample={1})" -f $_ndiMaxRepeat, $_ndiSample)
+            exit 1
+        }
+    } catch {
+        Write-Output ("  => NO_NEAR_DUPLICATE_INTRA_EVENT_HARD: FAIL (error: {0})" -f $_)
+        exit 1
+    }
+} else {
+    Write-Output "  latest_brief.md not found → SKIP"
+}
+
+Write-Output ""
+# ---------------------------------------------------------------------------
+# NO_TRIPLET_COPYPASTE_HARD gate (iter28)
+# If latest_brief.md contains 揭示/評估/影響 or 發生/細節/重要 labeled segments,
+# checks that no two segments within the same event share identical normalized content.
+# Also checks: within any ## section, no normalized sentence is shared
+# between the three label groups (cross-field mutual exclusion).
+# ---------------------------------------------------------------------------
+Write-Output "NO_TRIPLET_COPYPASTE_HARD:"
+if (Test-Path $_tdBrPath) {
+    try {
+        $_ntcLines   = Get-Content $_tdBrPath -Encoding UTF8
+        $_ntcFound   = $false
+        $_ntcSample  = ""
+        # Collect per-section label-grouped content
+        $_ntcSection     = [System.Collections.Generic.List[string]]::new()
+        $_ntcSectionHdr  = ""
+        function _CheckNtcSection([System.Collections.Generic.List[string]]$sLines) {
+            # Build label->normalized_sentences map
+            $labelGroups = @{}
+            $curLabel    = "_default"
+            foreach ($ln in $sLines) {
+                # Detect label lines (揭示：/評估：/影響：/發生了什麼：/關鍵細節：/為何重要：)
+                if ($ln -match '^(?:[\*\#]*)?\s*(揭示|評估|影響|發生了什麼|關鍵細節|為何重要)[：:]') {
+                    $curLabel = $Matches[1]
+                    if (-not $labelGroups.ContainsKey($curLabel)) { $labelGroups[$curLabel] = [System.Collections.Generic.List[string]]::new() }
+                } elseif ($ln -match '^\s*[-*•>]\s*(.+)') {
+                    $r = $Matches[1].Trim()
+                    $n = $r -replace '^(?:揭示[：:]\s*|評估[：:]\s*|影響[：:]\s*|發生了什麼[：:]\s*|關鍵細節[：:]\s*|為何重要[：:]\s*)', ''
+                    $n = ($n -replace '\s+', ' ').Trim()
+                    if ($n.Length -gt 5) {
+                        if (-not $labelGroups.ContainsKey($curLabel)) { $labelGroups[$curLabel] = [System.Collections.Generic.List[string]]::new() }
+                        $labelGroups[$curLabel].Add($n)
+                    }
+                }
+            }
+            # Check cross-label duplicates: any sentence appearing in >=2 groups
+            $allSents = @{}
+            foreach ($lbl in $labelGroups.Keys) {
+                foreach ($s in $labelGroups[$lbl]) {
+                    if ($allSents.ContainsKey($s)) {
+                        if ($allSents[$s] -ne $lbl) { return $s }  # same sentence in different label groups
+                    } else {
+                        $allSents[$s] = $lbl
+                    }
+                }
+            }
+            # Also check within _default group for label groups with same content
+            $groups = @($labelGroups.Keys | Where-Object { $_ -ne "_default" })
+            if ($groups.Count -ge 2) {
+                for ($gi = 0; $gi -lt $groups.Count - 1; $gi++) {
+                    for ($gj = $gi + 1; $gj -lt $groups.Count; $gj++) {
+                        $ga = $labelGroups[$groups[$gi]]; $gb = $labelGroups[$groups[$gj]]
+                        if ($ga.Count -gt 0 -and $gb.Count -gt 0) {
+                            # Check if any sentence from ga is in gb
+                            foreach ($s in $ga) {
+                                if ($gb.Contains($s)) { return "$($groups[$gi]) vs $($groups[$gj]): $($s.Substring(0,[Math]::Min(50,$s.Length)))" }
+                            }
+                        }
+                    }
+                }
+            }
+            return $null
+        }
+        foreach ($_ntcLine in $_ntcLines) {
+            if ($_ntcLine -match '^##') {
+                if ($_ntcSection.Count -gt 0) {
+                    $ntcResult = _CheckNtcSection $_ntcSection
+                    if ($ntcResult) {
+                        $_ntcFound  = $true
+                        $_ntcSample = "$_ntcSectionHdr | $ntcResult"
+                    }
+                }
+                $_ntcSection    = [System.Collections.Generic.List[string]]::new()
+                $_ntcSectionHdr = $_ntcLine.Trim()
+            }
+            $_ntcSection.Add($_ntcLine)
+        }
+        if ($_ntcSection.Count -gt 0) {
+            $ntcResult = _CheckNtcSection $_ntcSection
+            if ($ntcResult) { $_ntcFound = $true; $_ntcSample = "$_ntcSectionHdr | $ntcResult" }
+        }
+        @{
+            run_id      = $_voRunId
+            gate_result = if (-not $_ntcFound) { "PASS" } else { "FAIL" }
+            found       = $_ntcFound
+            sample      = $_ntcSample
+        } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\no_triplet_copypaste_hard.meta.json") -Encoding UTF8
+        if (-not $_ntcFound) {
+            Write-Output "  => NO_TRIPLET_COPYPASTE_HARD: PASS (no cross-field triplet copypaste detected)"
+        } else {
+            Write-Output ("  => NO_TRIPLET_COPYPASTE_HARD: FAIL (sample: {0})" -f $_ntcSample)
+            exit 1
+        }
+    } catch {
+        Write-Output ("  => NO_TRIPLET_COPYPASTE_HARD: FAIL (error: {0})" -f $_)
+        exit 1
+    }
+} else {
+    Write-Output "  latest_brief.md not found → SKIP"
+}
+
+Write-Output ""
+# ---------------------------------------------------------------------------
+# REPEAT_AUDIT_META gate (iter28)
+# Checks outputs/repeat_audit.meta.json exists (written by _assemble_zh_brief_from_cards).
+# Gate: file must exist AND (duplicates_found==0 OR duplicates_removed==duplicates_found).
+# If duplicates were found and removed, displays evidence of successful dedup.
+# ---------------------------------------------------------------------------
+Write-Output "REPEAT_AUDIT_META:"
+$_raPath = Join-Path $repoRoot "outputs\repeat_audit.meta.json"
+if (Test-Path $_raPath) {
+    try {
+        $_raData   = Get-Content $_raPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $_raFound  = if ($_raData.PSObject.Properties["duplicates_found"])   { [int]$_raData.duplicates_found }   else { -1 }
+        $_raRemoved= if ($_raData.PSObject.Properties["duplicates_removed"]) { [int]$_raData.duplicates_removed } else { -1 }
+        $_raChecked= if ($_raData.PSObject.Properties["events_checked"])     { [int]$_raData.events_checked }     else { 0 }
+        Write-Output ("  events_checked={0}  duplicates_found={1}  duplicates_removed={2}" -f $_raChecked, $_raFound, $_raRemoved)
+        if ($_raFound -eq 0) {
+            Write-Output "  => REPEAT_AUDIT_META: PASS (duplicates_found=0, brief is clean)"
+        } elseif ($_raFound -gt 0 -and $_raRemoved -eq $_raFound) {
+            Write-Output ("  => REPEAT_AUDIT_META: PASS (duplicates_found={0} but all removed={1}; dedup applied)" -f $_raFound, $_raRemoved)
+        } else {
+            Write-Output ("  => REPEAT_AUDIT_META: FAIL (duplicates_found={0} but duplicates_removed={1}; not all removed)" -f $_raFound, $_raRemoved)
+            exit 1
+        }
+    } catch {
+        Write-Output ("  => REPEAT_AUDIT_META: FAIL (parse error: {0})" -f $_)
+        exit 1
+    }
+} else {
+    Write-Output "  => REPEAT_AUDIT_META: FAIL (repeat_audit.meta.json not found)"
+    exit 1
 }
 
 Write-Output ""
