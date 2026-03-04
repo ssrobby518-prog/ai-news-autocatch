@@ -2406,9 +2406,9 @@ def _brief_batch_translate_event(
     try:
         _ok, _txt = _llama_chat(
             [{"role": "system", "content": _sys}, {"role": "user", "content": _usr}],
-            max_tokens=700,
+            max_tokens=220,
             temperature=0.0,
-            timeout=28,
+            timeout=90,
             max_retries=0,
         )
     except Exception:
@@ -4584,8 +4584,8 @@ def _prepare_brief_final_cards_fast(
             )
             if _i28_bt_ok:
                 import logging as _i28_log
-                _i28_log.getLogger(__name__).info(
-                    "[ITER28_DEDUP_DIVERSE] batch replace (always=True) event=%s "
+                _i28_log.getLogger("ai_intel").info(
+                    "[ITER28_DEDUP_DIVERSE] batch replace event=%s "
                     "what=%d key=%d why=%d",
                     title[:50], len(_i28_bt_w), len(_i28_bt_k), len(_i28_bt_y),
                 )
