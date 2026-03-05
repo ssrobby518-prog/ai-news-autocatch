@@ -6663,14 +6663,22 @@ def _translate_digest_1to1(
             _lines.append(" | ".join(_meta_parts))
         _lines.append("")
 
-        # Write 1:1 ZH bullets — skip empty entries
+        # Write 1:1 ZH bullets — skip empty; dedup identical Qwen translations
+        # (Qwen sometimes maps two similar EN bullets to the same Chinese text)
         _audit_bullets: list = []
+        _seen_zh_norms: set = set()
         for _b in _zh_bullets:
             _bc = _normalize_ws(str(_b or "")).strip()
-            if _bc and len(_bc) >= 4:
-                _lines.append(f"- {_bc}")
-                _output_chars_total += len(_bc)
-                _audit_bullets.append(_bc)
+            if not _bc or len(_bc) < 4:
+                continue
+            _bc_norm = _normalize_bullet_for_dedup(_bc)
+            if _bc_norm in _seen_zh_norms:
+                log.debug("iter30 dedup: dropped duplicate ZH translation: %s", _bc[:60])
+                continue
+            _seen_zh_norms.add(_bc_norm)
+            _lines.append(f"- {_bc}")
+            _output_chars_total += len(_bc)
+            _audit_bullets.append(_bc)
         _lines.append("")
         _lines.append("---")
         _lines.append("")

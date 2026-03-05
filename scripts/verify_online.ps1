@@ -3377,12 +3377,14 @@ if ((Test-Path $_tbpDgPath) -and (Test-Path $_tbpBrPath)) {
         $_tbpRequired = [int][Math]::Ceiling($_tbpDgTotal * 0.9)
         $_tbpFail     = $false
         $_tbpFailEvt  = ""
-        # Per-event check: each event in brief must have >= digest event count
+        # Per-event check: brief event must have >= floor(digest_event * 0.9) bullets
+        # (floor 0.9 allows 1 bullet to be removed by intra-event dedup without failing)
         $minLen = [Math]::Min($_tbpDgCounts.Count, $_tbpBrCounts.Count)
         for ($ei = 0; $ei -lt $minLen; $ei++) {
-            if ($_tbpBrCounts[$ei] -lt $_tbpDgCounts[$ei]) {
+            $_tbpEvtReq = [int][Math]::Floor($_tbpDgCounts[$ei] * 0.9)
+            if ($_tbpBrCounts[$ei] -lt $_tbpEvtReq) {
                 $_tbpFail    = $true
-                $_tbpFailEvt = "事件$($ei+1)：brief=$($_tbpBrCounts[$ei]) < digest=$($_tbpDgCounts[$ei])"
+                $_tbpFailEvt = "事件$($ei+1)：brief=$($_tbpBrCounts[$ei]) < 門檻=$_tbpEvtReq（digest=$($_tbpDgCounts[$ei])×0.9）"
                 break
             }
         }
