@@ -6430,6 +6430,42 @@ def _write_translation_engine_meta(
 
 
 # ---------------------------------------------------------------------------
+# iter31: stage timing helper — writes outputs/stage_timing.meta.json
+# Tracks wall-clock seconds for each pipeline stage so bottlenecks are visible.
+# Called from the success path of the Translation-First block in run_pipeline().
+# ---------------------------------------------------------------------------
+def _write_stage_timing_meta(run_id: str, stg: dict) -> None:
+    """Compute stage durations from stg timestamps and write stage_timing.meta.json."""
+    import json as _st_j
+
+    def _dur(sk: str, ek: str) -> float:
+        s = float(stg.get(sk) or 0)
+        e = float(stg.get(ek) or 0)
+        return round(e - s, 1) if s > 0 and e >= s else 0.0
+
+    _stage_secs = {
+        "z0_collect": _dur("z0_collect_start", "z0_collect_end"),
+        "hydration":  _dur("hydration_start",  "hydration_end"),
+        "card_build": _dur("card_build_start",  "card_build_end"),
+        "translate":  _dur("translate_start",   "translate_end"),
+        "build_docx": _dur("build_docx_start",  "build_docx_end"),
+        "build_pptx": _dur("build_pptx_start",  "build_pptx_end"),
+    }
+    try:
+        _p = Path(settings.PROJECT_ROOT) / "outputs" / "stage_timing.meta.json"
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.write_text(
+            _st_j.dumps(
+                {"run_id": run_id, "stage_seconds": _stage_secs},
+                ensure_ascii=False, indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # iter30: 1:1 digest-to-ZH translation helpers
 # Translation cache keyed by (url + model_id + bullets_hash); persists across reruns.
 # ---------------------------------------------------------------------------
@@ -8440,6 +8476,8 @@ def run_pipeline() -> None:
     _pipeline_budget_sec = int(os.environ.get("PIPELINE_TIME_BUDGET_SEC", "600"))
     _pipeline_run_id_bgt = os.environ.get("PIPELINE_RUN_ID", "unknown")
     os.environ["PIPELINE_T_START_EPOCH"] = f"{t_start:.6f}"
+    # iter31: stage timing dict — records start/end timestamps for each major stage
+    _stg: dict = {"z0_collect_start": t_start}
 
     def _cleanup_brief_only_artifacts(stage: str) -> None:
         """Delete artifacts that must never survive in brief mode."""
@@ -8690,11 +8728,22 @@ def run_pipeline() -> None:
                 _bfp_before, len(raw_items), _bfp_limit, _pipeline_budget_sec,
             )
         # Z0 mode: fulltext hydration (normally runs inside fetch_all_feeds; must run here too)
+        _stg["z0_collect_end"] = time.time()   # iter31 stage timing
+        _stg["hydration_start"] = time.time()  # iter31 stage timing
         try:
             from utils.fulltext_hydrator import hydrate_items_batch
             if _is_brief_mode and raw_items:
                 _batch_size = max(20, int(os.environ.get("BRIEF_HYDRATE_BATCH_SIZE", "80") or 80))
-                _probe_target = max(1, _brief_min_events)
+                # iter31: use BRIEF_MAX_EVENTS (7) as the early-stop probe target so hydration
+                # stops as soon as enough candidates for the full selection quota are found.
+                # Previously used _brief_min_events (5) which was too conservative.
+                _probe_target = max(
+                    1,
+                    max(
+                        _brief_min_events,
+                        int(os.environ.get("BRIEF_MAX_EVENTS", "7") or "7"),
+                    ),
+                )
                 _early_stop_target_default = _probe_target  # stop as soon as min viable events found
                 try:
                     _early_stop_target = max(
@@ -8891,6 +8940,8 @@ def run_pipeline() -> None:
     _write_supply_fallback_meta()
     # TIME_BUDGET checkpoint 1: after Z0 hydration
     _check_time_budget("after_z0_hydration")
+    _stg["hydration_end"] = time.time()    # iter31 stage timing
+    _stg["card_build_start"] = time.time() # iter31 stage timing
 
     # Write per-source counts to feed_stats.meta.json (covers both Z0 and RSS paths).
     # ingestion.py already writes this for RSS path; for Z0 path we overwrite with live counts.
@@ -12071,6 +12122,7 @@ def run_pipeline() -> None:
         # TIME_BUDGET checkpoint 2: before Translation-First ZH Delivery
         # Brief-mode bypass: if PPTX already exists, Fix-2 will skip TFD entirely.
         # No need to enforce the budget for a step we won't run — skip the check.
+        _stg["card_build_end"] = time.time()   # iter31 stage timing
         _check_time_budget("before_translation")
 
         # ---------------------------------------------------------------
@@ -12121,6 +12173,7 @@ def run_pipeline() -> None:
                 # (iter26 card-bullet approach superseded: role-bucket prefix injection
                 # is eliminated by reading digest.md directly instead of card attributes.)
                 _tfd_t0 = time.time()
+                _stg["translate_start"] = _tfd_t0   # iter31 stage timing
                 _tfd_ok, _tfd_result, _tfd_prompt_chars, _tfd_output_chars, _tfd_xlat_stats = (
                     _assemble_zh_brief_from_cards(
                         list(_final_cards or []),
@@ -12129,6 +12182,7 @@ def run_pipeline() -> None:
                     )
                 )
                 _tfd_latency_ms = (time.time() - _tfd_t0) * 1000
+                _stg["translate_end"] = time.time()  # iter31 stage timing
                 if not _tfd_ok:
                     # Translation failed → write NOT_READY.md, delete artifacts
                     _tfd_gate = (
@@ -12191,6 +12245,7 @@ def run_pipeline() -> None:
                         _tfd_archive.mkdir(parents=True, exist_ok=True)
                         (_tfd_archive / "brief_zh.md").write_text(_tfd_zh, encoding="utf-8")
                         # Overwrite executive_report.docx with ZH
+                        _stg["build_docx_start"] = time.time()  # iter31 stage timing
                         try:
                             from core.doc_generator import generate_zh_md_docx as _gen_zh_docx
                             _gen_zh_docx(_tfd_zh, _tfd_outputs / "executive_report.docx")
@@ -12215,13 +12270,16 @@ def run_pipeline() -> None:
                             log.info("Translation-First: ZH DOCX written: outputs/executive_report.docx")
                         except Exception as _tfd_docx_exc:
                             log.warning("Translation-First: ZH DOCX generation failed (non-fatal): %s", _tfd_docx_exc)
+                        _stg["build_docx_end"] = time.time()    # iter31 stage timing
                         # Overwrite executive_report.pptx with ZH
+                        _stg["build_pptx_start"] = time.time()  # iter31 stage timing
                         try:
                             from core.ppt_generator import generate_zh_md_pptx as _gen_zh_pptx
                             _gen_zh_pptx(_tfd_zh, _tfd_outputs / "executive_report.pptx")
                             log.info("Translation-First: ZH PPTX written: outputs/executive_report.pptx")
                         except Exception as _tfd_pptx_exc:
                             log.warning("Translation-First: ZH PPTX generation failed (non-fatal): %s", _tfd_pptx_exc)
+                        _stg["build_pptx_end"] = time.time()    # iter31 stage timing
                         _write_translation_meta(
                             run_id=_tfd_run_id,
                             success=True,
@@ -12276,6 +12334,10 @@ def run_pipeline() -> None:
                         except Exception as _tfd_ed_exc:
                             log.warning("Translation-First: exec_deliverable override failed: %s", _tfd_ed_exc)
                         _cleanup_brief_only_artifacts("translation_success")
+                        # iter31: write stage timing meta (success path only)
+                        _write_stage_timing_meta(
+                            os.environ.get("PIPELINE_RUN_ID", _tfd_run_id), _stg
+                        )
                         log.info("Translation-First: ZH delivery complete (run_id=%s)", _tfd_run_id)
                     except Exception as _tfd_write_exc:
                         log.warning("Translation-First: ZH write failed (non-fatal): %s", _tfd_write_exc)

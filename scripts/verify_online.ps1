@@ -37,22 +37,31 @@ function Append-TimingFooterToMd {
         [Parameter(Mandatory=$true)][string]$RunId,
         [Parameter(Mandatory=$true)][datetime]$StartDt,
         [Parameter(Mandatory=$true)][datetime]$EndDt,
-        [Parameter(Mandatory=$true)][int]$TotalSec
+        [Parameter(Mandatory=$true)][int]$TotalSec,
+        [hashtable]$StageSec = @{}
     )
     if (-not (Test-Path $MdPath)) { return }
     $mins = [int]([Math]::Floor($TotalSec / 60))
     $secs = [int]($TotalSec % 60)
-    $footer = @(
-        "",
-        "---",
-        "",
-        "## ⏱️ 本次流程耗時",
-        "- run_id：$RunId",
-        "- 開始：$($StartDt.ToString('yyyy-MM-dd HH:mm:ss'))",
-        "- 結束：$($EndDt.ToString('yyyy-MM-dd HH:mm:ss'))",
-        "- 總耗時：$TotalSec 秒（$mins 分 $secs 秒）",
-        ""
-    )
+    $footer = [System.Collections.Generic.List[string]]::new()
+    $footer.Add("")
+    $footer.Add("---")
+    $footer.Add("")
+    $footer.Add("## ⏱️ 本次流程耗時")
+    $footer.Add("- run_id：$RunId")
+    $footer.Add("- 開始：$($StartDt.ToString('yyyy-MM-dd HH:mm:ss'))")
+    $footer.Add("- 結束：$($EndDt.ToString('yyyy-MM-dd HH:mm:ss'))")
+    $footer.Add("- 總耗時：$TotalSec 秒（$mins 分 $secs 秒）")
+    # iter31: stage breakdown (if available)
+    if ($StageSec -and $StageSec.Count -gt 0) {
+        $footer.Add("- 分段耗時：")
+        foreach ($k in @("z0_collect","hydration","card_build","translate","build_docx","build_pptx","gates")) {
+            if ($StageSec.ContainsKey($k)) {
+                $footer.Add(("  - {0}：{1} 秒" -f $k, $StageSec[$k]))
+            }
+        }
+    }
+    $footer.Add("")
     Add-Content -LiteralPath $MdPath -Value ($footer -join "`n") -Encoding utf8
 }
 
@@ -63,19 +72,46 @@ function Write-RunTimingMeta {
         [Parameter(Mandatory=$true)][datetime]$StartDt,
         [Parameter(Mandatory=$true)][datetime]$EndDt,
         [Parameter(Mandatory=$true)][int]$TotalSec,
-        [Parameter(Mandatory=$true)][int]$BudgetSec
+        [Parameter(Mandatory=$true)][int]$BudgetSec,
+        [hashtable]$StageSec = @{}
     )
-    $payload = [ordered]@{
-        run_id           = $RunId
-        started_at       = $StartDt.ToString("yyyy-MM-ddTHH:mm:ss")
-        finished_at      = $EndDt.ToString("yyyy-MM-ddTHH:mm:ss")
-        total_seconds    = $TotalSec
+    $meta = [ordered]@{
+        run_id              = $RunId
+        started_at          = $StartDt.ToString("yyyy-MM-ddTHH:mm:ss")
+        finished_at         = $EndDt.ToString("yyyy-MM-ddTHH:mm:ss")
+        total_seconds       = $TotalSec
         time_budget_seconds = $BudgetSec
-    } | ConvertTo-Json -Depth 6
+    }
+    # iter31: include stage_seconds if available
+    if ($StageSec -and $StageSec.Count -gt 0) {
+        $meta["stage_seconds"] = $StageSec
+    }
+    $payload = $meta | ConvertTo-Json -Depth 6
     $dir = Split-Path -Parent $OutPath
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     Set-Content -LiteralPath $OutPath -Value $payload -Encoding utf8
 }
+
+# iter31: read stage_timing.meta.json written by run_once.py and return as hashtable
+function Read-StageTiming {
+    param([string]$RepoRoot, [int]$GateSec = 0)
+    $path = Join-Path $RepoRoot "outputs\stage_timing.meta.json"
+    $ht = @{}
+    if (Test-Path $path) {
+        try {
+            $obj = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($obj.PSObject.Properties["stage_seconds"]) {
+                foreach ($p in $obj.stage_seconds.PSObject.Properties) {
+                    $ht[$p.Name] = [double]$p.Value
+                }
+            }
+        } catch {}
+    }
+    # gates timing is measured by verify_online.ps1 itself (passed as param)
+    if ($GateSec -gt 0) { $ht["gates"] = [double]$GateSec }
+    return $ht
+}
+
 $env:PIPELINE_REPORT_MODE    = "brief"
 $env:BRIEF_ONLY              = "1"
 $env:BRIEF_MIN_EVENTS_HARD   = "5"
@@ -170,24 +206,28 @@ fail_reason         = $Gate
 "@ | Out-File (Join-Path $outputsDir "LAST_RUN_SUMMARY.txt") -Encoding UTF8 -NoNewline
     Write-Output ("LAST_RUN_SUMMARY.txt written: status=FAIL  fail_reason={0}" -f $Gate)
 
-    # iter29: 計時 — 失敗路徑也寫 timing meta + 附錄
+    # iter29/31: 計時 — 失敗路徑也寫 timing meta + 附錄（含分段耗時）
     try {
         $_voStopwatch.Stop()
         $_fEndAt  = Get-Date
         $_fSecTot = [int]$_voStopwatch.Elapsed.TotalSeconds
+        # iter31: read stage_seconds (partial — pipeline may have exited early)
+        $_fStgHt = Read-StageTiming -RepoRoot $repoRoot
         Write-RunTimingMeta `
             -OutPath  (Join-Path $repoRoot "outputs\run_timing.meta.json") `
             -RunId    $_voRunId `
             -StartDt  $_startedAt `
             -EndDt    $_fEndAt `
             -TotalSec $_fSecTot `
-            -BudgetSec $_voBudgetSec
+            -BudgetSec $_voBudgetSec `
+            -StageSec $_fStgHt
         Append-TimingFooterToMd `
             -MdPath   (Join-Path $repoRoot "outputs\NOT_READY_report.md") `
             -RunId    $_voRunId `
             -StartDt  $_startedAt `
             -EndDt    $_fEndAt `
-            -TotalSec $_fSecTot
+            -TotalSec $_fSecTot `
+            -StageSec $_fStgHt
         $__fm = [int]([Math]::Floor($_fSecTot / 60)); $__fs = [int]($_fSecTot % 60)
         Write-Output ("  ⏱️ 總耗時：{0} 秒（{1} 分 {2} 秒）" -f $_fSecTot, $__fm, $__fs)
     } catch {
@@ -848,6 +888,9 @@ fail_reason         = $_voFailReason
         exit $exitCode
     }
 }
+
+# iter31: mark start of content-gate checking in verify_online.ps1
+$_stgGatesStart = $_voStopwatch.Elapsed.TotalSeconds
 
 # ---------------------------------------------------------------------------
 # EXEC_ZH_NARRATIVE_WITH_QUOTE_HARD — gate summary (verify_online view)
@@ -3700,27 +3743,36 @@ Write-Output ("LAST_RUN_SUMMARY.txt written: status=OK  ai_selected_events={0}  
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter29: 計時 — 成功路徑寫 timing meta + 追加 brief 末尾附錄
+# iter29/31: 計時 — 成功路徑寫 timing meta + 追加 brief 末尾附錄（含分段耗時）
 # ---------------------------------------------------------------------------
 try {
     $_voStopwatch.Stop()
     $_sEndAt  = Get-Date
     $_sSecTot = [int]$_voStopwatch.Elapsed.TotalSeconds
+    # iter31: compute gates stage seconds and read pipeline stage_seconds from meta
+    $_stgGatesSec = [int]([Math]::Max(0, $_voStopwatch.Elapsed.TotalSeconds - $_stgGatesStart))
+    $_stgHt = Read-StageTiming -RepoRoot $repoRoot -GateSec $_stgGatesSec
     Write-RunTimingMeta `
         -OutPath  (Join-Path $repoRoot "outputs\run_timing.meta.json") `
         -RunId    $_voRunId `
         -StartDt  $_startedAt `
         -EndDt    $_sEndAt `
         -TotalSec $_sSecTot `
-        -BudgetSec $_voBudgetSec
+        -BudgetSec $_voBudgetSec `
+        -StageSec $_stgHt
     Append-TimingFooterToMd `
         -MdPath   (Join-Path $repoRoot "outputs\latest_brief.md") `
         -RunId    $_voRunId `
         -StartDt  $_startedAt `
         -EndDt    $_sEndAt `
-        -TotalSec $_sSecTot
+        -TotalSec $_sSecTot `
+        -StageSec $_stgHt
     $__sm = [int]([Math]::Floor($_sSecTot / 60)); $__ss = [int]($_sSecTot % 60)
     Write-Output ("⏱️ 總耗時：{0} 秒（{1} 分 {2} 秒）— run_timing.meta.json 已寫入" -f $_sSecTot, $__sm, $__ss)
+    if ($_stgHt -and $_stgHt.Count -gt 0) {
+        $_stgLine = ($_stgHt.Keys | ForEach-Object { "{0}:{1}s" -f $_, [int]$_stgHt[$_] }) -join "  "
+        Write-Output ("  stage_seconds: {0}" -f $_stgLine)
+    }
 } catch {
     Write-Output ("  [WARN] 計時寫入失敗: {0}" -f $_)
 }
