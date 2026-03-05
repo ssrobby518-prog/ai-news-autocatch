@@ -6159,15 +6159,44 @@ def _assemble_zh_brief_from_cards(
     final_cards: list,
     run_id: str,
     digest_path: "Path | None" = None,
-) -> "tuple[bool, str, int, int]":
-    """Build outputs/latest_brief.md from ZH bullets in _final_cards.
+) -> "tuple[bool, str, int, int, dict]":
+    """Build outputs/latest_brief.md from digest.md via 1:1 Qwen translation (iter30).
 
-    Returns (success, zh_text, prompt_chars, output_chars).
-    Output format: per-event sections with title, source, URL, and all ZH
-    bullet points combined (no what/key/why three-column labels).
-    prompt_chars = len(digest.md) if available (English source evidence).
+    Returns (success, zh_text, prompt_chars, output_chars, stats).
+    stats: {calls_total, calls_retry, cache_hit, cache_miss}
+    When digest_path exists, uses _translate_digest_1to1 (1 Qwen call per event,
+    no role-bucket prefixes, 1:1 bullet correspondence).
+    Falls back to card-bullet assembly if digest unavailable.
     """
+    _empty_stats = {"calls_total": 0, "calls_retry": 0, "cache_hit": 0, "cache_miss": 0}
     try:
+        # iter30: prefer 1:1 digest translation when digest.md is available
+        if digest_path is not None:
+            _dp = Path(digest_path) if not isinstance(digest_path, Path) else digest_path
+            if _dp.exists():
+                _endpoint = os.environ.get("LLAMA_HOST", "http://127.0.0.1:8080")
+                _model_id = "unknown"
+                try:
+                    import urllib.request as _ab_probe_r, json as _ab_probe_j
+                    with _ab_probe_r.urlopen(f"{_endpoint}/v1/models", timeout=3) as _ab_mr:
+                        _model_id = (
+                            _ab_probe_j.loads(_ab_mr.read().decode())
+                            .get("data", [{}])[0]
+                            .get("id", "unknown")
+                        )
+                except Exception:
+                    pass
+                _ab_ok, _ab_zh, _ab_pc, _ab_oc, _ab_stats = _translate_digest_1to1(
+                    _dp, run_id, _endpoint, _model_id
+                )
+                if _ab_ok:
+                    return True, _ab_zh, _ab_pc, _ab_oc, _ab_stats
+                log.warning(
+                    "_assemble_zh_brief_from_cards: 1:1 translate failed (%s), "
+                    "falling back to card-bullet assembly", _ab_zh
+                )
+
+        # Fallback: assemble from card bullets (pre-iter30 approach)
         from datetime import datetime as _ab_dt, timezone as _ab_tz
         _now_str = _ab_dt.now(_ab_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
         _lines: list[str] = [
@@ -6295,13 +6324,13 @@ def _assemble_zh_brief_from_cards(
 
         _write_repeat_audit_meta(_events_audit, run_id)
         _zh_text = "\n".join(_lines)
-        return True, _zh_text, _prompt_chars, len(_zh_text)
+        return True, _zh_text, _prompt_chars, len(_zh_text), _empty_stats
     except Exception as _ab_exc:
         import logging as _ab_log
         _ab_log.getLogger("ai_intel").warning(
             "_assemble_zh_brief_from_cards failed: %s", _ab_exc
         )
-        return False, f"ASSEMBLE_FAILED: {_ab_exc}", 0, 0
+        return False, f"ASSEMBLE_FAILED: {_ab_exc}", 0, 0, _empty_stats
 
 
 # ---------------------------------------------------------------------------
@@ -6369,6 +6398,10 @@ def _write_translation_engine_meta(
     success: bool = True,
     fail_reason: str = "",
     source_file: str = "outputs/digest.md",
+    calls_total: int = 0,
+    calls_retry: int = 0,
+    cache_hit: int = 0,
+    cache_miss: int = 0,
 ) -> None:
     """Write outputs/translation_engine.meta.json — PM-required Qwen call evidence."""
     import json as _tem_j
@@ -6387,8 +6420,272 @@ def _write_translation_engine_meta(
         "success": bool(success),
         "fail_reason": str(fail_reason),
         "source_file": source_file,
+        "calls_total": int(calls_total),
+        "calls_retry": int(calls_retry),
+        "cache_hit": int(cache_hit),
+        "cache_miss": int(cache_miss),
     }
     _out.write_text(_tem_j.dumps(_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# iter30: 1:1 digest-to-ZH translation helpers
+# Translation cache keyed by (url + model_id + bullets_hash); persists across reruns.
+# ---------------------------------------------------------------------------
+def _load_translation_cache(cache_path: "Path | str") -> dict:
+    """Load translation cache from JSON file. Returns {} on any error."""
+    try:
+        import json as _lc_j
+        _p = Path(cache_path)
+        if _p.exists():
+            return _lc_j.loads(_p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_translation_cache(cache_path: "Path | str", cache: dict) -> None:
+    """Save translation cache to JSON file (best-effort)."""
+    try:
+        import json as _sc_j
+        _p = Path(cache_path)
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.write_text(_sc_j.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _make_translation_cache_key(url: str, model_id: str, bullets_text: str) -> str:
+    """Return sha256 hex[:20] of (url|model_id|bullets_text)."""
+    import hashlib as _ck_h
+    raw = f"{url}|{model_id}|{bullets_text}"
+    return _ck_h.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _translate_event_bullets_1to1(
+    bullets_en: list,
+    title: str,
+    url: str,
+    endpoint: str,
+    model_id: str,
+    timeout: int = 60,
+) -> "tuple[list, bool, str]":
+    """Translate a list of EN bullets to ZH via a single Qwen call.
+
+    Returns (zh_bullets: list[str], ok: bool, err: str).
+    zh_bullets has same length as bullets_en; any unparsed entry is "".
+    No role-bucket prefixes (揭示/評估/影響/company name) are inserted.
+    """
+    import json as _teb_j, urllib.request as _teb_ur, urllib.error as _teb_ue
+    n = len(bullets_en)
+    if n == 0:
+        return [], True, ""
+
+    # Build numbered list prompt
+    _numbered = "\n".join(f"{i+1}. {b}" for i, b in enumerate(bullets_en))
+    _system = (
+        "你是繁體中文翻譯助手。"
+        "嚴格逐條翻譯英文條目，禁止添加任何前綴標籤（如「揭示：」「評估：」「影響：」"
+        "「OpenAI：」「LinkedIn：」「Google：」等），禁止省略或合併條目。"
+    )
+    _user = (
+        f"請將以下 {n} 條英文要點逐條翻譯為繁體中文，"
+        f"保持條目數量完全一致（第1條對第1條，以此類推）。\n"
+        f"禁止任何前綴標籤，只輸出翻譯內容，格式：「序號. 翻譯」。\n\n"
+        f"事件：{title}\n\n"
+        f"{_numbered}\n\n"
+        f"輸出（{n} 條，繁體中文）："
+    )
+    _payload = {
+        "model": model_id if model_id != "unknown" else "qwen",
+        "messages": [
+            {"role": "system", "content": _system},
+            {"role": "user", "content": _user},
+        ],
+        "max_tokens": max(120 * n, 600),
+        "temperature": 0.1,
+    }
+    _req_body = _teb_j.dumps(_payload).encode("utf-8")
+    _req = _teb_ur.Request(
+        f"{endpoint}/v1/chat/completions",
+        data=_req_body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with _teb_ur.urlopen(_req, timeout=timeout) as _resp:
+            _data = _teb_j.loads(_resp.read().decode("utf-8"))
+        _raw = (
+            (_data.get("choices") or [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            or ""
+        )
+    except (_teb_ue.URLError, OSError, Exception) as _e:
+        return [""] * n, False, f"QWEN_HTTP_ERROR: {_e}"
+
+    # Parse numbered lines: match "N. text" or "N、text"
+    import re as _teb_re
+    _zh_map: dict = {}
+    for _line in _raw.splitlines():
+        _m = _teb_re.match(r"^(\d+)[\.、。,]\s*(.+)", _line.strip())
+        if _m:
+            _idx = int(_m.group(1))
+            _txt = _m.group(2).strip()
+            if 1 <= _idx <= n and _txt:
+                _zh_map[_idx] = _txt
+    # Build result list in order
+    _zh_bullets = [_zh_map.get(i + 1, "") for i in range(n)]
+    # Success if at least 70% parsed
+    _parsed = sum(1 for b in _zh_bullets if b)
+    _ok = _parsed >= max(1, int(n * 0.7))
+    if not _ok:
+        return _zh_bullets, False, f"PARSE_LOW: {_parsed}/{n} bullets parsed"
+    return _zh_bullets, True, ""
+
+
+def _translate_digest_1to1(
+    digest_path: "Path | str",
+    run_id: str,
+    endpoint: str,
+    model_id: str,
+    cache_path: "Path | str | None" = None,
+    timeout: int = 60,
+) -> "tuple[bool, str, int, int, dict]":
+    """Parse digest.md and translate each event's bullets via 1 Qwen call.
+
+    Returns (ok, zh_md, prompt_chars, output_chars, stats).
+    stats: {calls_total, calls_retry, cache_hit, cache_miss}
+    Output format mirrors digest.md but in ZH: per-event header + ZH bullets.
+    1:1 bullet correspondence — no role labels, no prefix tags.
+    """
+    import re as _td1_re
+    from datetime import datetime as _td1_dt, timezone as _td1_tz
+
+    _stats = {"calls_total": 0, "calls_retry": 0, "cache_hit": 0, "cache_miss": 0}
+
+    _dp = Path(digest_path) if not isinstance(digest_path, Path) else digest_path
+    try:
+        _digest_text = _dp.read_text(encoding="utf-8")
+    except Exception as _e:
+        return False, f"DIGEST_READ_ERROR: {_e}", 0, 0, _stats
+
+    _prompt_chars = len(_digest_text)
+
+    # Load cache
+    if cache_path is None:
+        cache_path = _dp.parent / "translation_cache.json"
+    _cache = _load_translation_cache(cache_path)
+
+    # Parse digest.md into events
+    # Format: ## Event N: title\n**Source:** X | **URL:** <url>\n\n- bullet\n...
+    _events: list = []
+    _cur_event: "dict | None" = None
+    for _line in _digest_text.splitlines():
+        _mhdr = _td1_re.match(r"^## Event \d+:\s*(.+)", _line)
+        if _mhdr:
+            if _cur_event is not None:
+                _events.append(_cur_event)
+            _cur_event = {"title": _mhdr.group(1).strip(), "source": "", "url": "", "bullets": []}
+            continue
+        if _cur_event is None:
+            continue
+        # Source/URL line
+        _msrc = _td1_re.search(r"\*\*Source:\*\*\s*([^|]+)", _line)
+        if _msrc:
+            _cur_event["source"] = _msrc.group(1).strip()
+        _murl = _td1_re.search(r"\*\*URL:\*\*\s*<([^>]+)>", _line)
+        if _murl:
+            _cur_event["url"] = _murl.group(1).strip()
+        # Bullet lines
+        _mbul = _td1_re.match(r"^-\s+(.+)", _line)
+        if _mbul:
+            _cur_event["bullets"].append(_mbul.group(1).strip())
+    if _cur_event is not None:
+        _events.append(_cur_event)
+
+    if not _events:
+        return False, "DIGEST_PARSE_ERROR: no events found", _prompt_chars, 0, _stats
+
+    # Translate each event
+    _now_str = _td1_dt.now(_td1_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
+    _lines: list = [
+        "# AI 情資簡報",
+        f"_執行編號：{run_id}　生成：{_now_str}_",
+        "",
+    ]
+    _output_chars_total = 0
+    _events_audit: list = []
+
+    for _ei, _ev in enumerate(_events, 1):
+        _title = _ev["title"]
+        _src = _ev["source"]
+        _url = _ev["url"]
+        _bullets_en = _ev["bullets"]
+
+        # Check cache
+        _cache_key = _make_translation_cache_key(_url or _title, model_id, "\n".join(_bullets_en))
+        _zh_bullets: "list[str]"
+        if _cache_key in _cache:
+            _zh_bullets = _cache[_cache_key]
+            _stats["cache_hit"] += 1
+            log.info("iter30 1:1 translate: event %d CACHE HIT (key=%s)", _ei, _cache_key)
+        else:
+            _stats["cache_miss"] += 1
+            _stats["calls_total"] += 1
+            _zh_bullets, _ok, _err = _translate_event_bullets_1to1(
+                _bullets_en, _title, _url, endpoint, model_id, timeout=timeout
+            )
+            if not _ok:
+                # Retry once
+                _stats["calls_retry"] += 1
+                _stats["calls_total"] += 1
+                _zh_bullets, _ok, _err = _translate_event_bullets_1to1(
+                    _bullets_en, _title, _url, endpoint, model_id, timeout=timeout
+                )
+            if _ok:
+                _cache[_cache_key] = _zh_bullets
+                _save_translation_cache(cache_path, _cache)
+            else:
+                log.warning("iter30 1:1 translate: event %d FAIL (%s) — using EN fallback", _ei, _err)
+                # Use English bullets as fallback
+                _zh_bullets = list(_bullets_en)
+
+        # Write event section
+        _lines.append(f"## 事件 {_ei}：{_title}")
+        _lines.append("")
+        _meta_parts: list = []
+        if _src:
+            _meta_parts.append(f"**來源：** {_src}")
+        if _url:
+            _meta_parts.append(f"**網址：** <{_url}>")
+        if _meta_parts:
+            _lines.append(" | ".join(_meta_parts))
+        _lines.append("")
+
+        # Write 1:1 ZH bullets — skip empty entries
+        _audit_bullets: list = []
+        for _b in _zh_bullets:
+            _bc = _normalize_ws(str(_b or "")).strip()
+            if _bc and len(_bc) >= 4:
+                _lines.append(f"- {_bc}")
+                _output_chars_total += len(_bc)
+                _audit_bullets.append(_bc)
+        _lines.append("")
+        _lines.append("---")
+        _lines.append("")
+
+        _events_audit.append({
+            "event_idx": _ei,
+            "title": _title[:80],
+            "duplicate_groups": [],
+        })
+
+    # Write repeat audit (empty dups — 1:1 translation has no intra-event dedup)
+    _write_repeat_audit_meta(_events_audit, run_id)
+
+    _zh_md = "\n".join(_lines)
+    return True, _zh_md, _prompt_chars, _output_chars_total, _stats
 
 
 # ---------------------------------------------------------------------------
@@ -11801,6 +12098,7 @@ def run_pipeline() -> None:
         except Exception as _tfd_probe_exc:
             log.debug("Translation-First: model probe failed (non-fatal): %s", _tfd_probe_exc)
 
+        _tfd_xlat_stats = {"calls_total": 0, "calls_retry": 0, "cache_hit": 0, "cache_miss": 0}
         if _tfd_src_path.exists():
             try:
                 _tfd_en_md = _tfd_src_path.read_text(encoding="utf-8")
@@ -11809,12 +12107,12 @@ def run_pipeline() -> None:
                 log.warning("Translation-First: failed to read %s: %s", _tfd_src_name, _tfd_read_exc)
 
             if _tfd_en_md.strip():
-                # iter26 fix: assemble ZH brief from already-translated card bullets
-                # instead of calling _translate_md_to_zh(full_digest) which times out
-                # after batch_fallback Qwen calls exhaust GPU queue (~5 tok/s consumer).
-                # ZH bullets in _final_cards are the real Qwen translation artifacts.
+                # iter30: 1:1 digest-to-ZH translation via _translate_digest_1to1.
+                # Each event uses a single Qwen call; translation cache avoids reruns.
+                # (iter26 card-bullet approach superseded: role-bucket prefix injection
+                # is eliminated by reading digest.md directly instead of card attributes.)
                 _tfd_t0 = time.time()
-                _tfd_ok, _tfd_result, _tfd_prompt_chars, _tfd_output_chars = (
+                _tfd_ok, _tfd_result, _tfd_prompt_chars, _tfd_output_chars, _tfd_xlat_stats = (
                     _assemble_zh_brief_from_cards(
                         list(_final_cards or []),
                         _tfd_run_id,
@@ -11857,6 +12155,10 @@ def run_pipeline() -> None:
                         success=False,
                         fail_reason=_tfd_result,
                         source_file=f"outputs/{_tfd_src_name}",
+                        calls_total=_tfd_xlat_stats.get("calls_total", 0),
+                        calls_retry=_tfd_xlat_stats.get("calls_retry", 0),
+                        cache_hit=_tfd_xlat_stats.get("cache_hit", 0),
+                        cache_miss=_tfd_xlat_stats.get("cache_miss", 0),
                     )
                     log.error(
                         "Translation-First FAIL-fast: %s — NOT_READY.md written; artifacts removed",
@@ -11926,12 +12228,20 @@ def run_pipeline() -> None:
                             success=True,
                             fail_reason="",
                             source_file=f"outputs/{_tfd_src_name}",
+                            calls_total=_tfd_xlat_stats.get("calls_total", 0),
+                            calls_retry=_tfd_xlat_stats.get("calls_retry", 0),
+                            cache_hit=_tfd_xlat_stats.get("cache_hit", 0),
+                            cache_miss=_tfd_xlat_stats.get("cache_miss", 0),
                         )
                         log.info(
                             "Translation-First: translation_engine.meta.json written "
-                            "(model=%s latency_ms=%.0f prompt_chars=%d output_chars=%d)",
+                            "(model=%s latency_ms=%.0f prompt_chars=%d output_chars=%d "
+                            "calls=%d cache_hit=%d cache_miss=%d)",
                             _tfd_response_model, _tfd_latency_ms,
                             _tfd_prompt_chars, _tfd_output_chars,
+                            _tfd_xlat_stats.get("calls_total", 0),
+                            _tfd_xlat_stats.get("cache_hit", 0),
+                            _tfd_xlat_stats.get("cache_miss", 0),
                         )
                         # Override exec_deliverable_docx_pptx_hard.meta.json → PASS.
                         # Translation-First replaces brief-format DOCX/PPTX with ZH

@@ -3256,6 +3256,173 @@ if (Test-Path $_tdBrPath) {
 
 Write-Output ""
 # ---------------------------------------------------------------------------
+# NO_SPURIOUS_PREFIX_TAG_HARD gate (iter30)
+# Each bullet line in latest_brief.md must NOT start with a company name or
+# role-bucket label followed by ： or : (e.g. "OpenAI：", "揭示：", "評估：").
+# Pattern: ^(CompanyName|RoleLabel)\s*[：:] at the start of bullet content.
+# ---------------------------------------------------------------------------
+Write-Output "NO_SPURIOUS_PREFIX_TAG_HARD："
+if (Test-Path $_tdBrPath) {
+    try {
+        $_nspLines  = Get-Content $_tdBrPath -Encoding UTF8
+        $_nspFound  = $false
+        $_nspSample = ""
+        # Regex: bullet starts with known company/role prefix before ： or :
+        $_nspPat = '^[-*•>]\s*(OpenAI|LinkedIn|Google|Apple|Anthropic|Meta|Amazon|Microsoft|Alibaba|Nvidia|DeepSeek|Gemini|xAI|Mistral|X)\s*[：:]'
+        $_nspRolePat = '^[-*•>]\s*(揭示|評估|影響|發生了什麼|關鍵細節|為何重要|Training\s+Design|Cappy)\s*[：:]'
+        foreach ($_nspLine in $_nspLines) {
+            if ($_nspLine -match $_nspPat -or $_nspLine -match $_nspRolePat) {
+                $_nspFound  = $true
+                $_nspSample = $_nspLine.Substring(0, [Math]::Min(100, $_nspLine.Length))
+                break
+            }
+        }
+        @{
+            run_id       = $_voRunId
+            gate_result  = if (-not $_nspFound) { "PASS" } else { "FAIL" }
+            found        = $_nspFound
+            sample       = $_nspSample
+        } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\no_spurious_prefix_tag_hard.meta.json") -Encoding UTF8
+        if (-not $_nspFound) {
+            Write-Output "  => NO_SPURIOUS_PREFIX_TAG_HARD：通過（無公司名/角色桶前綴）"
+        } else {
+            Write-Output ("  => NO_SPURIOUS_PREFIX_TAG_HARD：失敗（發現前綴: {0}）" -f $_nspSample)
+            exit 1
+        }
+    } catch {
+        Write-Output ("  => NO_SPURIOUS_PREFIX_TAG_HARD：失敗（錯誤: {0}）" -f $_)
+        exit 1
+    }
+} else {
+    Write-Output "  latest_brief.md not found → 略過"
+}
+
+Write-Output ""
+# ---------------------------------------------------------------------------
+# NO_ROLE_BUCKETS_HARD gate (iter30)
+# latest_brief.md must contain zero instances of 揭示：/評估：/影響：
+# (the three role-bucket header labels from the pre-iter30 translation approach).
+# ---------------------------------------------------------------------------
+Write-Output "NO_ROLE_BUCKETS_HARD："
+if (Test-Path $_tdBrPath) {
+    try {
+        $_nrbContent = Get-Content $_tdBrPath -Raw -Encoding UTF8
+        $_nrbFound   = $false
+        $_nrbSample  = ""
+        foreach ($_nrbLabel in @("揭示：", "揭示:", "評估：", "評估:", "影響：", "影響:")) {
+            if ($_nrbContent.Contains($_nrbLabel)) {
+                $_nrbFound  = $true
+                # Find sample line
+                foreach ($_nrbLine in ($_nrbContent -split "`n")) {
+                    if ($_nrbLine.Contains($_nrbLabel)) {
+                        $_nrbSample = $_nrbLine.Trim().Substring(0, [Math]::Min(80, $_nrbLine.Trim().Length))
+                        break
+                    }
+                }
+                break
+            }
+        }
+        @{
+            run_id      = $_voRunId
+            gate_result = if (-not $_nrbFound) { "PASS" } else { "FAIL" }
+            found       = $_nrbFound
+            sample      = $_nrbSample
+        } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\no_role_buckets_hard.meta.json") -Encoding UTF8
+        if (-not $_nrbFound) {
+            Write-Output "  => NO_ROLE_BUCKETS_HARD：通過（無揭示/評估/影響標籤）"
+        } else {
+            Write-Output ("  => NO_ROLE_BUCKETS_HARD：失敗（發現角色桶標籤: {0}）" -f $_nrbSample)
+            exit 1
+        }
+    } catch {
+        Write-Output ("  => NO_ROLE_BUCKETS_HARD：失敗（錯誤: {0}）" -f $_)
+        exit 1
+    }
+} else {
+    Write-Output "  latest_brief.md not found → 略過"
+}
+
+Write-Output ""
+# ---------------------------------------------------------------------------
+# TRANSLATION_BULLET_PARITY_HARD gate (iter30)
+# Per-event bullet count in latest_brief.md must be >= per-event count in
+# digest.md (1:1 translation parity). Overall brief >= digest * 0.9 also enforced.
+# Events matched by ordinal index (## Event N in digest vs ## 事件 N in brief).
+# ---------------------------------------------------------------------------
+Write-Output "TRANSLATION_BULLET_PARITY_HARD："
+$_tbpDgPath = Join-Path $repoRoot "outputs\digest.md"
+$_tbpBrPath = Join-Path $repoRoot "outputs\latest_brief.md"
+if ((Test-Path $_tbpDgPath) -and (Test-Path $_tbpBrPath)) {
+    try {
+        # Parse bullet counts per event from a markdown file
+        function Get-EventBulletCounts([string]$FilePath, [string]$EventPattern) {
+            $lines  = Get-Content $FilePath -Encoding UTF8
+            $counts = [System.Collections.Generic.List[int]]::new()
+            $cur    = -1
+            foreach ($ln in $lines) {
+                if ($ln -match $EventPattern) {
+                    if ($cur -ge 0) { $counts.Add($cur) }
+                    $cur = 0
+                } elseif ($cur -ge 0 -and $ln -match '^\s*-\s+\S') {
+                    $cur++
+                }
+            }
+            if ($cur -ge 0) { $counts.Add($cur) }
+            return $counts
+        }
+        $_tbpDgCounts = Get-EventBulletCounts $_tbpDgPath '^## Event \d+'
+        $_tbpBrCounts = Get-EventBulletCounts $_tbpBrPath '^## 事件 \d+'
+        $_tbpDgTotal  = ($($_tbpDgCounts) | Measure-Object -Sum).Sum
+        $_tbpBrTotal  = ($($_tbpBrCounts) | Measure-Object -Sum).Sum
+        $_tbpRequired = [int][Math]::Ceiling($_tbpDgTotal * 0.9)
+        $_tbpFail     = $false
+        $_tbpFailEvt  = ""
+        # Per-event check: each event in brief must have >= digest event count
+        $minLen = [Math]::Min($_tbpDgCounts.Count, $_tbpBrCounts.Count)
+        for ($ei = 0; $ei -lt $minLen; $ei++) {
+            if ($_tbpBrCounts[$ei] -lt $_tbpDgCounts[$ei]) {
+                $_tbpFail    = $true
+                $_tbpFailEvt = "事件$($ei+1)：brief=$($_tbpBrCounts[$ei]) < digest=$($_tbpDgCounts[$ei])"
+                break
+            }
+        }
+        # Also check brief has enough events
+        if ($_tbpBrCounts.Count -lt $_tbpDgCounts.Count) {
+            $_tbpFail    = $true
+            $_tbpFailEvt = "brief事件數=$($_tbpBrCounts.Count) < digest事件數=$($_tbpDgCounts.Count)"
+        }
+        # Overall total check
+        if (-not $_tbpFail -and $_tbpBrTotal -lt $_tbpRequired) {
+            $_tbpFail    = $true
+            $_tbpFailEvt = "總計：brief_total=$_tbpBrTotal < 門檻=$_tbpRequired（digest_total=$_tbpDgTotal）"
+        }
+        @{
+            run_id            = $_voRunId
+            gate_result       = if (-not $_tbpFail) { "PASS" } else { "FAIL" }
+            digest_events     = $_tbpDgCounts.Count
+            brief_events      = $_tbpBrCounts.Count
+            digest_total      = $_tbpDgTotal
+            brief_total       = $_tbpBrTotal
+            required_total    = $_tbpRequired
+            fail_detail       = $_tbpFailEvt
+        } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\translation_bullet_parity_hard.meta.json") -Encoding UTF8
+        if (-not $_tbpFail) {
+            Write-Output ("  => TRANSLATION_BULLET_PARITY_HARD：通過（digest_total={0} brief_total={1} events={2}）" -f $_tbpDgTotal, $_tbpBrTotal, $_tbpDgCounts.Count)
+        } else {
+            Write-Output ("  => TRANSLATION_BULLET_PARITY_HARD：失敗（{0}）" -f $_tbpFailEvt)
+            exit 1
+        }
+    } catch {
+        Write-Output ("  => TRANSLATION_BULLET_PARITY_HARD：失敗（錯誤: {0}）" -f $_)
+        exit 1
+    }
+} else {
+    $_tbpSkip = if (-not (Test-Path $_tbpDgPath)) { "digest.md 不存在" } else { "latest_brief.md 不存在" }
+    Write-Output ("  => TRANSLATION_BULLET_PARITY_HARD：略過（{0}）— 來源不存在時非阻擋" -f $_tbpSkip)
+}
+
+Write-Output ""
+# ---------------------------------------------------------------------------
 # NO_NEAR_DUPLICATE_INTRA_EVENT_HARD gate (iter28)
 # Reads latest_brief.md, splits by ## event sections.
 # For each section, normalizes bullet lines (strip prefix labels + leading symbols)
