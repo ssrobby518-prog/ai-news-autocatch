@@ -8701,13 +8701,27 @@ def run_pipeline() -> None:
             # preserved so AI-relevance still wins among equally-fresh items.
             _bfp_now_ts   = time.time()
             _bfp_fresh_hrs = float(getattr(settings, "NEWER_THAN_HOURS", 72) or 72)
+            # iter32b: Z0 items carry published_at as ISO-8601 string, NOT published_at_ts unix float
+            def _bfp_parse_pub_ts(it):
+                try:
+                    _pa = getattr(it, "published_at", None)
+                    if not _pa:
+                        return 0.0
+                    import datetime as _bfp_dt
+                    _s = str(_pa).strip().replace("Z", "+00:00")
+                    _dt = _bfp_dt.datetime.fromisoformat(_s)
+                    if _dt.tzinfo is None:
+                        _dt = _dt.replace(tzinfo=_bfp_dt.timezone.utc)
+                    return _dt.timestamp()
+                except Exception:
+                    return 0.0
             def _bfp_score(it):
                 try:
-                    fs = float(getattr(it, "frontier_score", 0) or 0)
+                    fs = float(getattr(it, "z0_frontier_score", 0) or 0)
                 except Exception:
                     fs = 0.0
                 try:
-                    pub_ts = float(getattr(it, "published_at_ts", 0) or 0)
+                    pub_ts = _bfp_parse_pub_ts(it)
                 except Exception:
                     pub_ts = 0.0
                 # iter32: freshness bucket (1=fresh ≤72h, 0=stale) as primary sort key
@@ -8749,7 +8763,7 @@ def run_pipeline() -> None:
             # iter32: count fresh items in pool and initial selection
             def _bfp_is_fresh(it, _n=_bfp_now_ts, _h=_bfp_fresh_hrs):
                 try:
-                    _p = float(getattr(it, "published_at_ts", 0) or 0)
+                    _p = _bfp_parse_pub_ts(it)
                     return _p > 0 and (_n - _p) / 3600.0 <= _h
                 except Exception:
                     return False
@@ -8831,7 +8845,7 @@ def run_pipeline() -> None:
                         if _ft_len < 300:
                             continue
                         try:
-                            _pub_ts = float(getattr(_it, "published_at_ts", 0) or 0)
+                            _pub_ts = _bfp_parse_pub_ts(_it)
                         except Exception:
                             _pub_ts = 0.0
                         if _pub_ts and _pub_ts < (time.time() - 72 * 3600):
