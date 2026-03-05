@@ -3743,6 +3743,25 @@ Write-Output ("LAST_RUN_SUMMARY.txt written: status=OK  ai_selected_events={0}  
 Write-Output ""
 
 # ---------------------------------------------------------------------------
+# iter32: TIME_BUDGET hard-exit（Option A: 1800s = 硬上限）
+# 所有內容閘門 PASS 後，若總耗時仍超出 _voBudgetSec → NOT_READY + exit 1
+# 本輪採 Option A：PIPELINE_TIME_BUDGET_SEC（預設 1800s）= 硬上限，超時視同失敗。
+# ---------------------------------------------------------------------------
+$_iter32_elapsed = [int]$_voStopwatch.Elapsed.TotalSeconds
+Write-Output ("[iter32] TIME_BUDGET 硬上限方案（Option A）：硬上限={0}s  本次耗時={1}s" -f $_voBudgetSec, $_iter32_elapsed)
+if ($_iter32_elapsed -gt $_voBudgetSec) {
+    Write-Output ("[FAIL] TIME_BUDGET_EXCEEDED: {0}s > hard-cap {1}s → NOT_READY + exit 1" -f $_iter32_elapsed, $_voBudgetSec)
+    # 刪除成功產物，避免被誤認為有效輸出
+    foreach ($_i32del in @("outputs\latest_brief.md","outputs\executive_report.docx","outputs\executive_report.pptx")) {
+        $_i32delp = Join-Path $repoRoot $_i32del
+        if (Test-Path $_i32delp) { Remove-Item -LiteralPath $_i32delp -Force -ErrorAction SilentlyContinue }
+    }
+    Invoke-VerifyOnlineFailFast -Gate "TIME_BUDGET_EXCEEDED" `
+        -Reason ("TIME_BUDGET_EXCEEDED; total={0}s > hard-cap={1}s; Option-A hard-exit (iter32)" -f $_iter32_elapsed, $_voBudgetSec)
+}
+Write-Output ("[iter32] TIME_BUDGET 通過：{0}s ≤ {1}s" -f $_iter32_elapsed, $_voBudgetSec)
+
+# ---------------------------------------------------------------------------
 # iter29/31: 計時 — 成功路徑寫 timing meta + 追加 brief 末尾附錄（含分段耗時）
 # ---------------------------------------------------------------------------
 try {

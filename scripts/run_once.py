@@ -8695,6 +8695,12 @@ def run_pipeline() -> None:
             return (fs, _kw_boost, pub_ts)
         if _is_brief_mode and len(raw_items) > _bfp_limit:
             _bfp_before = len(raw_items)
+            # iter32: freshness-first sort — items published within NEWER_THAN_HOURS (72h in
+            # calibration mode) get is_fresh=1 and sort before stale items.  Within each
+            # freshness bucket the original (frontier_score, kw_boost, pub_ts) ordering is
+            # preserved so AI-relevance still wins among equally-fresh items.
+            _bfp_now_ts   = time.time()
+            _bfp_fresh_hrs = float(getattr(settings, "NEWER_THAN_HOURS", 72) or 72)
             def _bfp_score(it):
                 try:
                     fs = float(getattr(it, "frontier_score", 0) or 0)
@@ -8704,6 +8710,12 @@ def run_pipeline() -> None:
                     pub_ts = float(getattr(it, "published_at_ts", 0) or 0)
                 except Exception:
                     pub_ts = 0.0
+                # iter32: freshness bucket (1=fresh ≤72h, 0=stale) as primary sort key
+                try:
+                    _age_h  = (_bfp_now_ts - pub_ts) / 3600.0 if pub_ts > 0 else 99999.0
+                    _is_fresh = 1 if _age_h <= _bfp_fresh_hrs else 0
+                except Exception:
+                    _is_fresh = 0
                 _title = str(getattr(it, "title", "") or "")
                 _body = str(getattr(it, "body", "") or "")
                 _src = " ".join(
@@ -8731,14 +8743,41 @@ def run_pipeline() -> None:
                     )
                 ):
                     _kw_boost += 6
-                return (fs, _kw_boost, pub_ts)
+                return (_is_fresh, fs, _kw_boost, pub_ts)  # iter32: fresh-first
             _ranked_brief_items = sorted(raw_items, key=_bfp_score, reverse=True)
             _bfp_tiers = _build_bfp_tiers(len(_ranked_brief_items), _bfp_limit)
-            if _bfp_tiers:
-                raw_items = _ranked_brief_items[:_bfp_tiers[0]]
+            # iter32: count fresh items in pool and initial selection
+            def _bfp_is_fresh(it, _n=_bfp_now_ts, _h=_bfp_fresh_hrs):
+                try:
+                    _p = float(getattr(it, "published_at_ts", 0) or 0)
+                    return _p > 0 and (_n - _p) / 3600.0 <= _h
+                except Exception:
+                    return False
+            _bfp_pool_fresh = sum(1 for it in _ranked_brief_items if _bfp_is_fresh(it))
+            _bfp_tier0      = _bfp_tiers[0] if _bfp_tiers else len(_ranked_brief_items)
+            _bfp_selected   = list(_ranked_brief_items[:_bfp_tier0])
+            _bfp_sel_fresh  = sum(1 for it in _bfp_selected if _bfp_is_fresh(it))
+            # iter32: fresh guarantee — if pool has ≥7 fresh but selected <5, force-include
+            _bfp_fresh_min = 5
+            if _bfp_pool_fresh >= 7 and _bfp_sel_fresh < _bfp_fresh_min:
+                _bfp_extra  = [it for it in _ranked_brief_items[_bfp_tier0:] if _bfp_is_fresh(it)]
+                _bfp_needed = _bfp_fresh_min - _bfp_sel_fresh
+                _bfp_added  = _bfp_extra[:_bfp_needed]
+                if _bfp_added:
+                    _bfp_selected  = _bfp_selected + _bfp_added
+                    _bfp_sel_fresh += len(_bfp_added)
+                    import logging as _bfp_log
+                    _bfp_log.getLogger("ai_intel").warning(
+                        "PRESELECT_FRESH_GUARANTEE: forced +%d fresh items "
+                        "(pool_fresh=%d selected_fresh_prev=%d)",
+                        len(_bfp_added), _bfp_pool_fresh, _bfp_sel_fresh - len(_bfp_added),
+                    )
+            raw_items = _bfp_selected
             log.info(
-                "BRIEF_FAST_PRESELECT: %d → %d (limit=%d, budget=%ds)",
+                "BRIEF_FAST_PRESELECT: %d → %d (limit=%d, budget=%ds)"
+                " z0_pool_fresh_72h=%d preselect_fresh_72h=%d",
                 _bfp_before, len(raw_items), _bfp_limit, _pipeline_budget_sec,
+                _bfp_pool_fresh, _bfp_sel_fresh,
             )
         # Z0 mode: fulltext hydration (normally runs inside fetch_all_feeds; must run here too)
         _stg["z0_collect_end"] = time.time()   # iter31 stage timing
@@ -9869,6 +9908,22 @@ def run_pipeline() -> None:
             # Extended pool fallback: supplement before final selection and rewrite readiness
             # meta from the final selected AI card set. In manual mode this runs only when
             # final_cards are below the hard threshold.
+            # iter32: log whether DBE is triggered (evidence for PM)
+            _dbe_trigger_reason = (
+                "demo_mode" if _is_demo_mode_sr
+                else (f"primary_too_few:{len(_final_cards or [])}<{_sr_threshold}" if len(_final_cards or []) < _sr_threshold else "")
+            )
+            import logging as _dbe_trig_log
+            if _is_demo_mode_sr or (len(_final_cards or []) < _sr_threshold):
+                _dbe_trig_log.getLogger("ai_intel").info(
+                    "DBE_TRIGGERED: dbe_triggered=True reason=%s final_cards=%d threshold=%d",
+                    _dbe_trigger_reason, len(_final_cards or []), _sr_threshold,
+                )
+            else:
+                _dbe_trig_log.getLogger("ai_intel").info(
+                    "DBE_TRIGGERED: dbe_triggered=False final_cards=%d threshold=%d",
+                    len(_final_cards or []), _sr_threshold,
+                )
             if _is_demo_mode_sr or (len(_final_cards or []) < _sr_threshold):
                 try:
                     import json as _dbe_json
