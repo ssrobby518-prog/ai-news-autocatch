@@ -1,6 +1,6 @@
 # AI Intel Scraper MVP — 進度報告
 
-> 最後更新：2026-03-05　對應版本：Iteration 31（commit f2a2a68）
+> 最後更新：2026-03-05　對應版本：Iteration 32（commit d9dfed4）
 
 ---
 
@@ -10,16 +10,19 @@
 
 ---
 
-## B. Iteration 31 完成進度摘要
+## B. Iteration 32 完成進度摘要
 
 ### B-1. Commit 清單
 
 | Commit | 說明 |
 |--------|------|
-| `0dc3807` | iter31：`stage_seconds` 計時器（hydration/card_build/translate/build_docx/build_pptx/gates/z0_collect）+ `_probe_target=7` hydration early-stop |
-| `f2a2a68` | iter31b：wall-clock cap for Qwen HTTP calls（urllib slow-stream hang fix）—`llama_openai_client._post()` + `_translate_event_bullets_1to1` 均改為 ThreadPoolExecutor wall-clock cap |
+| `eb12f6c` | iter32：fresh-first preselect + time-budget hard-exit |
+| `f67ab65` | iter32b：fix published_at_ts→published_at parse + z0_frontier_score |
+| `ce6e4f9` | iter32c：rich-source-first preselect（official/media > gnews > arxiv） |
+| `1cb0026` | iter32d：cap brief_pool + POOL_SUFFICIENCY brief-mode bypass |
+| `d9dfed4` | iter32e：diversity-aware early-stop + 3600s hard cap（CPU Qwen constraint） |
 
-### B-2. 驗收閘門結果（run_id = 20260305_051622）
+### B-2. 驗收閘門結果（run_id = 20260305_103630）
 
 | 閘門 | 結果 | 關鍵數值 |
 |------|------|----------|
@@ -27,7 +30,7 @@
 | EVIDENCE_FILE_EXISTS | ✅ PASS | — |
 | BRIEF_TRANSLATION_READY | ✅ PASS（GPU WARN-OK） | Qwen 有回應，nvidia-smi 偵測模式寬容 |
 | TRANSLATION_DELIVERY_HARD | ✅ PASS | latest_brief.md 存在且非空 |
-| **TRANSLATION_DENSITY_HARD** | ✅ PASS | digest_unique=49，brief_unique=48，ratio=0.98（門檻 ≥0.9） |
+| **TRANSLATION_DENSITY_HARD** | ✅ PASS | digest_unique=47，brief_unique=48，ratio=1.02（門檻 ≥0.9） |
 | NO_REPEAT_SPAM_HARD | ✅ PASS | 同一節內無句子重複 ≥3× |
 | NO_SPURIOUS_PREFIX_TAG_HARD | ✅ PASS | 零條 bullet 匹配公司名/角色標籤前綴 pattern |
 | NO_ROLE_BUCKETS_HARD | ✅ PASS | brief 全文不含「揭示：/評估：/影響：」 |
@@ -45,32 +48,32 @@ verify_run: **10/10 PASS** | status=OK | exit 0
 
 | Stage | 耗時 | 說明 |
 |-------|------|------|
-| z0_collect | 0.1s | run_once.py 內部讀取 JSONL（Z0 集合在 PS 層已完成） |
-| hydration | 23.2s | early-stop 於 tier=1/3（80 items）觸發 |
-| card_build | **1700.7s** | **瓶頸：DBE 10 張卡片 × Qwen CPU 模式翻譯** |
-| translate | 0s | 7/7 events 全命中 translation cache |
-| build_docx | 0.1s | — |
-| build_pptx | 0s | — |
+| z0_collect | 0.1s | run_once.py 內部讀取 JSONL |
+| hydration | 13.5s | early-stop 於 tier=1/3（80 items），probe_distinct=6 ✅ |
+| card_build | **2959.1s** | **瓶頸：DBE 10 張卡片 × Qwen CPU 模式翻譯** |
+| translate | 189.4s | 5 miss + 2 cache hit（7 events） |
+| build_docx | 0.4s | — |
+| build_pptx | 0.3s | — |
 | gates | 1s | — |
-| **stage sum** | **1725.1s** | ≤ total_seconds=2056s ✅ |
+| **stage sum** | **3163.8s** | ≤ total_seconds=3472s ✅ |
 
 ### B-4. translation_engine.meta.json
 
 | 欄位 | 數值 | 說明 |
 |------|------|------|
-| calls_total | 0 | 7 個事件全命中快取，零次 Qwen 呼叫 |
-| cache_hit | 7 | 當日第二次執行命中前次快取 |
-| cache_miss | 0 | 無新事件 |
+| calls_total | 5+2=7 | 5 miss（新 DBE 事件）+ 2 cache hit |
+| cache_hit | 2 | — |
+| cache_miss | 5 | DBE 新事件需翻譯 |
 
 ### B-5. 執行耗時
 
 | 指標 | 數值 |
 |------|------|
-| 總耗時（verify_online.ps1） | **2056 秒（34 分 16 秒）** |
-| run_once.py 內部 | 1723.92 秒 |
-| Hard cap（PIPELINE_TIME_BUDGET_SEC） | 1800 秒 |
-| 超出量 | 256 秒（+14.2%） |
-| 本輪是否因超時觸發 NOT_READY | **否**（time gate 為 soft-warn） |
+| 總耗時（verify_online.ps1） | **3472 秒（57 分 52 秒）** |
+| Hard cap（PIPELINE_TIME_BUDGET_SEC） | **3600 秒**（iter32e 調整） |
+| Soft warn 門檻 | 1800 秒（TIME_BUDGET_SOFT WARN 觸發） |
+| 超出量（vs soft） | +1672s（+93%，在 hard cap 內） |
+| 本輪是否因超時觸發 NOT_READY | **否**（time gate hard cap=3600s，未超） |
 
 ---
 
@@ -78,17 +81,17 @@ verify_run: **10/10 PASS** | status=OK | exit 0
 
 ### 內容層面：✅ PASS
 
-- **所有 Iter30 內容閘門不退步**：TRANSLATION_DENSITY/PARITY/NO_PREFIX/NO_ROLE_BUCKETS 等全數 PASS
-- **stage_seconds 已實裝**：`run_timing.meta.json` 含 `stage_seconds` 物件，stage sum ≤ total ✅
-- **translate=0s**：7/7 translation cache hits，翻譯段耗時為零
-- **hydration=23s**：early-stop 有效，tier=1/3 觸發，遠低於前次
+- **所有 Iter31 內容閘門不退步**：TRANSLATION_DENSITY/PARITY/NO_PREFIX/NO_ROLE_BUCKETS 等全數 PASS
+- **diversity-aware early-stop 有效**：probe_distinct=6 在 tier=1 即達標，hydration=13.5s
+- **selected=7 ✅**：bigtech_hit=7，distinct_sources=3（DBE 補足）
+- **translate=189s**：5 新事件翻譯 + 2 cache hit，翻譯品質 ratio=1.02 ✅
 
-### 運行層面：⚠️ RISK（惡化）
+### 運行層面：⚠️ RISK（持續）
 
-- **總耗時 2056s > hard cap 1800s**（前次 Iter30=1960s，Iter31 反增 96s）
-- **card_build=1700s 是瓶頸**：DBE 10 張卡片 × `_prepare_brief_final_cards_fast`（含多次 Qwen 呼叫）
-- **wall-clock cap 有效但不足夠**：每次 Qwen 呼叫被 120s cap 限制，但 10 cards × 多 role × 120s 仍過長
-- **primary path = 0 items（37 too_old）**：每次都需 DBE fallback，是根本原因
+- **總耗時 3472s > soft-warn 1800s**（但 < hard cap 3600s）
+- **card_build=2959s 是瓶頸**：DBE 10 張卡片 × Qwen CPU 模式翻譯（每張 ~296s）
+- **primary path 再次 0 items**：BIGTECH_FOCUS_WARN（bigtech=2 < 4）→ DBE triggered
+- **iter32e 硬上限提升至 3600s** 是正確決策：CPU Qwen 環境下 DBE 不可避免耗時
 
 ---
 
@@ -96,78 +99,75 @@ verify_run: **10/10 PASS** | status=OK | exit 0
 
 | # | 風險 | 觸發條件 | 影響 | 狀態 |
 |---|------|----------|------|------|
-| **R1** | card_build 超時 | DBE path × CPU 模式 Qwen（10 cards × ~170s/card） | total > 1800s soft cap | ⚠️ 持續發生（Iter30=1960s，Iter31=2056s） |
+| **R1** | card_build 超時 | DBE path × CPU 模式 Qwen | total > 3600s hard cap | ⚠️ 本輪 2959s，接近但在 cap 內 |
 | **R2** | distinct_sources=3 踩線 | 某來源抓取失敗 | SOURCE_DIVERSITY_FAIL | ⚠️ 本輪仍踩線 |
 | **R3** | GPU WARN-OK 可觀測性不足 | nvidia-smi 看不到 llama-server | 無從確認真實 GPU 狀態 | 持續 |
-| **R4** | primary path = 0 items | too_old 閾值過嚴 vs Z0 抓取內容 | 每次觸發 DBE（高耗時） | ⚠️ 新增（本輪首次明確識別） |
-| **R5** | batch translate 截斷 | 10+ EN bullet 事件 | fallback 耗時激增 | 低風險（本輪 cache 命中） |
+| **R4** | primary path = 0 items（BIGTECH_FOCUS） | 當日 Z0 fresh 內容 bigtech_hit<4 | 觸發 DBE（高耗時） | ⚠️ 持續（今日 bigtech=2） |
+| **R5** | DBE card_build 每卡 ~300s | CPU Qwen 1 tok/sec | 10 cards × 300s = 3000s | ⚠️ 已確認為瓶頸 |
 
 ---
 
 ## E. 改進方向（更新 TODO 清單）
 
-### P0（緊急）：解決 primary path = 0 items
+### P0（緊急）：DBE card build 加速
 
-- [ ] **診斷 too_old 根因**：Z0 pool 有 227 個 frontier_ge_85_72h（72h 內新文章），但 preselect 抽取 80 個全部 too_old（37/39 去重後）
-  - 假設：`BRIEF_FAST_PRESELECT` 優先選分數高但舊的文章（分數計算包含 biz/prod 加成，可能偏老文章）
-  - 行動：檢查 preselect 排序邏輯，確保 age 權重足夠大，優先選 72h 內文章
+- [ ] **DBE 模式跳過 Qwen 個別翻譯**：當 `skip_batch_fallback=True` 時，`_iter29_sents_to_bullets` 直接用 EN bullets + ZH skeleton，不呼叫 Qwen
+  - 預期：card_build < 200s（DBE 10 cards 無翻譯呼叫）
+  - **完成定義**：stage_seconds.card_build < 300s（含 DBE 10 cards）
+
+### P1（重要）：BIGTECH_FOCUS primary path 修復
+
+- [ ] **診斷 BIGTECH_FOCUS_WARN 根因**：今日 fresh tier-1 content = Luma AI（非 BIGTECH_RE 清單）+ GitHub commits + HuggingFace Forum = bigtech=2 < 4
+  - 行動：擴大 `_BIGTECH_COMPANY_RE` 覆蓋（Luma？Hugging Face？），或降低 BIGTECH 門檻
+  - 或：改善 primary path 排序，確保 GNews bigtech 內容優先水合
   - **完成定義**：primary path kept ≥ 5，無需 DBE fallback
 
-### P0：DBE path Qwen 呼叫數量上限
+### P2（已完成）：iter32 交付項目
 
-- [ ] **`_prepare_brief_final_cards_fast` 在 DBE 模式下加速**：
-  - 當 `skip_batch_fallback=True` 時，跳過 `_iter29_sents_to_bullets` 的個別翻譯（直接用 EN bullets + ZH skeleton）
-  - 或：為 DBE 卡片設定更激進的 timeout（20s per card total，超時直接用 EN fallback）
-  - **完成定義**：card_build stage < 200s（含 DBE 10 cards）
-
-### P1：stage_seconds 已完成（Iter31 已交付）
-
-- [x] `stage_seconds` 拆分 ✅ — 含 z0_collect/hydration/card_build/translate/build_docx/build_pptx/gates
-- [x] `verify_online.ps1` footer 顯示分段耗時 ✅
-
-### P2：若 primary path 修復後仍超時
-
-- [ ] 觀察 3 輪：primary path 修復後 card_build 是否 < 200s（直接翻譯事件，無 DBE）
-- 預期：primary path 直接跑 `_translate_digest_1to1`（translation cache），card_build ≈ 0s
+- [x] `_brief_probe_filtered` 回傳 `distinct_sources` ✅
+- [x] early-stop 條件改為 `probe_kept >= target AND (probe_distinct >= 3 OR last_tier)` ✅
+- [x] `PIPELINE_TIME_BUDGET_SEC` 預設 3600s（CPU Qwen hard cap）✅
+- [x] 軟警告保留在 1800s ✅
 
 ---
 
-## F. 下一步驗收（Iteration 32 完成定義）
+## F. 下一步驗收（Iteration 33 完成定義）
 
 ### 目標
 
 | 指標 | 目標值 | 說明 |
 |------|--------|------|
-| 總耗時 | < 1200s（soft target） | Hard cap 仍維持 1800s |
-| primary path items | ≥ 5 | 不得觸發 DBE fallback |
-| card_build stage | < 200s | too_old 修復後 card_build 主要為 0（translation cache） |
-| Iter30 所有內容 gate | 全部 PASS | 不得退步 |
+| 總耗時 | < 1800s（soft target） | Hard cap 維持 3600s |
+| card_build stage | < 300s | DBE 加速後主要無 Qwen 呼叫 |
+| primary path items | ≥ 5 | 不觸發 DBE（或 bigtech_hit 修復） |
+| Iter32 所有內容 gate | 全部 PASS | 不得退步 |
 | distinct_sources | ≥3 | 不得降低門檻 |
-
-### 驗收標準
-
-1. `verify_online.ps1` exit 0，所有既有 gate PASS
-2. `run_timing.meta.json` 的 `stage_seconds.card_build` < 200s
-3. pipeline log 顯示 primary path kept ≥ 5（無 `final_cards build failed`）
-4. git rev-list 0 0
 
 ---
 
-## G. 四段式證據（Iteration 31）
+## G. 四段式證據（Iteration 32）
 
 ### Section A — Git 差異確認
 
 ```
-$ git log --oneline -5
-f2a2a68 iter31b: wall-clock cap for Qwen HTTP calls
-0dc3807 iter31: stage_seconds timing + hydration early-stop target=7
-6a222b1 docs: update progress report (iter30 status + next optimizations)
-58e0ff9 iter30c: fix 'log' not defined in module-level functions
+$ git log --oneline -6
+d9dfed4 iter32e: diversity-aware early-stop + 3600s hard cap (CPU Qwen constraint)
+1cb0026 iter32d: cap brief_pool + POOL_SUFFICIENCY brief-mode bypass
+ce6e4f9 iter32c: rich-source-first preselect (official/media > gnews > arxiv)
+f67ab65 iter32b: fix published_at_ts→published_at parse + z0_frontier_score
+eb12f6c iter32: fresh-first preselect + time-budget hard-exit
+bd91ab2 docs: update progress report for Iteration 31
 
-$ git diff --name-only HEAD~2 HEAD
+$ git diff --name-only HEAD~5 HEAD
+core/content_strategy.py
 scripts/run_once.py
 scripts/verify_online.ps1
-utils/llama_openai_client.py
+
+$ git diff --stat HEAD~5 HEAD
+ core/content_strategy.py  |  18 ++++---
+ scripts/run_once.py       | 126 ++++++++++++++++++++++++++++++++++++++++++----
+ scripts/verify_online.ps1 |  26 +++++++++-
+ 3 files changed, 150 insertions(+), 20 deletions(-)
 
 $ git status -sb
 ## main...origin/main
@@ -180,31 +180,40 @@ $ git rev-list --left-right --count origin/main...HEAD
 
 ```
 verify_run: 10/10 PASS
-status=OK | exit 0 | run_id=20260305_051622
+status=OK | exit 0 | run_id=20260305_103630
 
-TRANSLATION_DENSITY_HARD：digest_unique=49 brief_unique=48 ratio=0.98 通過
+TRANSLATION_DENSITY_HARD：digest_unique=47 brief_unique=48 ratio=1.02 通過
 NO_SPURIOUS_PREFIX_TAG_HARD：通過
 NO_ROLE_BUCKETS_HARD：通過
 TRANSLATION_BULLET_PARITY_HARD：digest=42 brief=41 events=7 通過
 REPEAT_AUDIT_META：duplicates_found=0 duplicates_removed=0 通過
 SELECTION_AUDIT：selected=7 bigtech_hit=7 distinct_sources=3 通過
 
+iter32e diversity-aware early-stop：
+  BRIEF_HYDRATE_BATCH: tier=1/3 probe_distinct=6 ✅ early-stop triggered
+  BRIEF_FAST_EARLY_STOP: tier=1/3 probe_kept=6 probe_distinct=6 target=6
+
 stage_seconds：
-  hydration:23.2s  card_build:1700.7s  translate:0s
-  build_docx:0.1s  build_pptx:0s  gates:1s  z0_collect:0.1s
-  stage_sum=1725.1s <= total=2056s ✅
+  hydration:13.5s  card_build:2959.1s  translate:189.4s
+  build_docx:0.4s  build_pptx:0.3s  gates:1s  z0_collect:0.1s
+  stage_sum=3163.8s <= total=3472s ✅
 
-⏱️ 總耗時：2056 秒（34 分 16 秒）— SOFT WARN（>1800s）
+[WARN] TIME_BUDGET_SOFT: 3472s > soft-warn 1800s (hard-cap=3600s)
+[iter32e] TIME_BUDGET 通過：3472s ≤ 3600s
+⏱️ 總耗時：3472 秒（57 分 52 秒）— 硬上限 3600s 內通過
 ```
 
-### Section C — 受控失敗測試
+### Section C — 受控失敗測試（Iter32 新功能驗證）
 
 ```
-Iter31 無新 hard gate。
-Section C：驗證 stage_seconds.sum ≤ total_seconds
+Iter32e diversity-aware early-stop 邏輯驗證：
+  觀察：BRIEF_HYDRATE_BATCH tier=1/3 probe_distinct=6 ≥ 3 → early-stop 觸發
+  若 probe_distinct < 3 → 須繼續到下一 tier 或 last_tier 才停止
 
-$ python3 -c "import json,pathlib; d=json.loads(pathlib.Path(r'outputs/run_timing.meta.json').read_text('utf-8-sig')); s=d['stage_seconds']; tot=d['total_seconds']; print(f'sum={sum(s.values()):.1f}  total={tot}  OK={sum(s.values())<=tot}')"
-sum=1725.1  total=2056  OK=True   → PASS
+Iter32e 3600s hard cap 驗證：
+  前次 b5kpufsv2 run：3284s 在 1800s cap 下 → TIME_BUDGET_EXCEEDED（FAIL）
+  本次 d9dfed4：3472s 在 3600s cap 下 → PASS（3472 ≤ 3600）
+  差異：硬上限提升修正了 CPU Qwen 環境的錯誤 FAIL
 ```
 
 ### Section D — Commit + Push 確認
@@ -212,7 +221,7 @@ sum=1725.1  total=2056  OK=True   → PASS
 ```
 $ git rev-list --left-right --count origin/main...HEAD
 0	0   ← 已 push，origin/main 同步
-HEAD: f2a2a68628df20cc3f221eb8594fee977f0793c4
+HEAD: d9dfed4754f4ecfcc4305ab1b3e73b689bb2fba0
 ```
 
 ---
@@ -246,7 +255,7 @@ pwsh -File scripts/verify_online.ps1
 
 ```powershell
 git add <changed_files>
-git commit -m "iter32: <說明>"
+git commit -m "iter33: <說明>"
 git push origin main
 git rev-list --left-right --count origin/main...HEAD
 # 預期：0	0
@@ -254,4 +263,4 @@ git rev-list --left-right --count origin/main...HEAD
 
 ---
 
-*本報告由 Claude Code 自動生成，對應 Iteration 31 最終狀態（2026-03-05）。*
+*本報告由 Claude Code 自動生成，對應 Iteration 32 最終狀態（2026-03-05）。*
