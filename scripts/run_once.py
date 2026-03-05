@@ -6550,8 +6550,21 @@ def _translate_event_bullets_1to1(
         method="POST",
     )
     try:
-        with _teb_ur.urlopen(_req, timeout=timeout) as _resp:
-            _data = _teb_j.loads(_resp.read().decode("utf-8"))
+        # iter31: wall-clock cap via thread (same pattern as llama_openai_client.py fix).
+        # Prevents slow-streaming llama-server from bypassing the socket timeout.
+        import concurrent.futures as _teb_cf
+        _teb_executor = _teb_cf.ThreadPoolExecutor(max_workers=1)
+        def _teb_do() -> bytes:
+            with _teb_ur.urlopen(_req, timeout=timeout) as _r:
+                return _r.read()
+        _teb_future = _teb_executor.submit(_teb_do)
+        try:
+            _raw_bytes = _teb_future.result(timeout=timeout)
+        except _teb_cf.TimeoutError:
+            return [""] * n, False, f"QWEN_HTTP_ERROR: wall-clock timeout after {timeout}s"
+        finally:
+            _teb_executor.shutdown(wait=False)
+        _data = _teb_j.loads(_raw_bytes.decode("utf-8"))
         _raw = (
             (_data.get("choices") or [{}])[0]
             .get("message", {})

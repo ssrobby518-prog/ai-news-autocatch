@@ -45,17 +45,39 @@ if not LLAMA_HOST.startswith(("http://", "https://")):
 # ---------------------------------------------------------------------------
 
 def _post(path: str, payload: dict, timeout: int) -> dict:
+    """POST with wall-clock timeout cap.
+
+    iter31: wraps urllib in a thread so that slow-streaming Qwen responses
+    (1 tok/sec) don't bypass the socket timeout — each streaming byte resets
+    the per-read timer, but concurrent.futures.Future.result(timeout=X) is a
+    true wall-clock cap regardless of streaming behaviour.
+    Uses executor.shutdown(wait=False) (same pattern as fulltext_hydrator.py
+    Iter26 fix) to avoid hanging when the stuck thread is still in resp.read().
+    """
+    import concurrent.futures as _lc_cf
+
     url  = f"{LLAMA_HOST}{path}"
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req  = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read()
-    return json.loads(raw)
+
+    def _do() -> dict:
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+        return json.loads(raw)
+
+    executor = _lc_cf.ThreadPoolExecutor(max_workers=1)
+    future   = executor.submit(_do)
+    try:
+        return future.result(timeout=timeout)
+    except _lc_cf.TimeoutError:
+        raise TimeoutError(f"llama_openai_client wall-clock timeout after {timeout}s")
+    finally:
+        executor.shutdown(wait=False)
 
 
 def _get(path: str, timeout: int = 10) -> dict:
