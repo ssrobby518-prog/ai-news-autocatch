@@ -8757,7 +8757,21 @@ def run_pipeline() -> None:
                     )
                 ):
                     _kw_boost += 6
-                return (_is_fresh, fs, _kw_boost, pub_ts)  # iter32: fresh-first
+                # iter32b: source-tier (2=official/media, 1=gnews, 0=thin/academic)
+                # ensures rich-content sources (TechCrunch, official blogs) precede
+                # arXiv/Reddit/GitHub in preselect, so strict_fulltext_ok ≥ 4 is reachable.
+                try:
+                    _z0_plat = str(getattr(it, "z0_platform", "") or "").lower()
+                    _rich = _z0_plat in (
+                        "openai", "anthropic", "google", "microsoft", "huggingface",
+                        "techcrunch", "bloomberg", "aws", "nvidia", "ithome",
+                        "technews", "inside", "mittr", "cna",
+                    )
+                    _thin = _z0_plat in ("arxiv", "reddit", "youtube")
+                    _src_tier = 2 if _rich else (0 if _thin else 1)
+                except Exception:
+                    _src_tier = 1
+                return (_is_fresh, _src_tier, fs, _kw_boost, pub_ts)  # iter32b: rich-source-first
             _ranked_brief_items = sorted(raw_items, key=_bfp_score, reverse=True)
             _bfp_tiers = _build_bfp_tiers(len(_ranked_brief_items), _bfp_limit)
             # iter32: count fresh items in pool and initial selection
