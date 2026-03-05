@@ -9728,6 +9728,11 @@ def run_pipeline() -> None:
                     # B3) Quota: collect up to 10 candidates, then enforce official/media ≥4,
                     # paper ≤1, social/code ≤1 to prevent PH_SUPP/social from filling all slots.
                     _quota_brief_cap = min(10, _brief_max_events + 3)
+                    # iter32d: cap pool to quota_cap BEFORE card-build to prevent O(pool_size)
+                    # Qwen calls. Without this, _prepare_brief_final_cards_fast processes
+                    # all ~20 exec-pool items (each 3 roles × 40s cap = 2400s). With cap,
+                    # only top-10 items by _brief_candidate_priority are translated (≤1200s).
+                    _brief_pool = _brief_pool[:_quota_brief_cap]
                     _brief_candidates, _brief_diag = _prepare_brief_final_cards_fast(
                         _brief_pool,
                         max_events=_quota_brief_cap,

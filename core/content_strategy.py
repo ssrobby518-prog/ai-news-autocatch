@@ -4018,18 +4018,20 @@ def get_event_cards_for_deck(
         if _final_sel < 6 or _strict_ok < 4:
             import os as _os_ps
             _is_demo_ps = _os_ps.environ.get("PIPELINE_MODE", "manual") == "demo"
-            if _is_demo_ps:
-                # In demo mode: POOL_SUFFICIENCY is downgraded to WARN — DEMO_EXTENDED_POOL
-                # in run_once.py will inject historical cards and rebuild final_cards.
-                # SHOWCASE_READY_HARD remains the authoritative gate for the demo deck.
+            _is_brief_ps = _os_ps.environ.get("REPORT_MODE", "") == "brief"  # iter32d
+            if _is_demo_ps or _is_brief_ps:
+                # In demo/brief mode: POOL_SUFFICIENCY is downgraded to WARN.
+                # Demo: DEMO_EXTENDED_POOL will supplement.
+                # Brief: primary path items may have thin fulltext (paywall/RSS) but
+                #        brief quality gates (TRANSLATION_DENSITY/PARITY/etc.) remain hard.
                 import logging as _lg_ps
                 _lg_ps.getLogger("ai_intel").warning(
-                    "POOL_SUFFICIENCY_FAIL suppressed in demo mode "
-                    "(final_selected=%d strict_fulltext_ok=%d); "
-                    "DEMO_EXTENDED_POOL will supplement",
+                    "POOL_SUFFICIENCY_FAIL suppressed in %s mode "
+                    "(final_selected=%d strict_fulltext_ok=%d)",
+                    "brief" if _is_brief_ps else "demo",
                     _final_sel, _strict_ok,
                 )
-                # Return selected even if partial — DEMO_EXTENDED_POOL will merge and reselect
+                # Return selected even if partial
                 return selected if selected else event_cards
             raise RuntimeError(
                 f"POOL_SUFFICIENCY_FAIL: final_selected={_final_sel} strict_fulltext_ok={_strict_ok} "
