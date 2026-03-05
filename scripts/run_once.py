@@ -8877,10 +8877,17 @@ def run_pipeline() -> None:
                 def _brief_probe_filtered(items: list) -> dict[str, int]:
                     _probe_deduped = dedup_items(list(items), existing_ids)
                     _probe_filtered, _probe_summary = filter_items(_probe_deduped)
+                    # iter32e: track distinct source_name for diversity-aware early-stop
+                    _probe_distinct = len(set(
+                        str(getattr(_it, "source_name", "") or "").strip()
+                        for _it in _probe_filtered
+                        if str(getattr(_it, "source_name", "") or "").strip()
+                    ))
                     return {
                         "deduped": len(_probe_deduped),
                         "kept": len(_probe_filtered),
                         "signal_pool": len(_probe_summary.signal_pool or []),
+                        "distinct_sources": _probe_distinct,  # iter32e
                     }
 
                 _prev_limit = 0
@@ -8907,7 +8914,7 @@ def run_pipeline() -> None:
                             log.warning("BRIEF_FILTER_PROBE failed (non-fatal): %s", _probe_exc)
                         log.info(
                             "BRIEF_HYDRATE_BATCH: tier=%d/%d hydrated=%d/%d probe_deduped=%d "
-                            "probe_kept=%d probe_signal=%d heuristic_ready=%d target=%d batch_size=%d",
+                            "probe_kept=%d probe_signal=%d probe_distinct=%d heuristic_ready=%d target=%d batch_size=%d",
                             _tier_idx,
                             len(_bfp_tiers),
                             len(_hydrated_accum),
@@ -8915,6 +8922,7 @@ def run_pipeline() -> None:
                             int(_last_probe.get("deduped", 0) or 0),
                             int(_last_probe.get("kept", 0) or 0),
                             int(_last_probe.get("signal_pool", 0) or 0),
+                            int(_last_probe.get("distinct_sources", 0) or 0),
                             _ready_now,
                             _probe_target,
                             _batch_size,
@@ -8923,8 +8931,15 @@ def run_pipeline() -> None:
                         _stop_reason = ""
                         _stop_value = 0
                         if int(_last_probe.get("kept", 0) or 0) >= _probe_target:
-                            _stop_reason = "probe_kept"
-                            _stop_value = int(_last_probe.get("kept", 0) or 0)
+                            # iter32e: also require ≥3 distinct sources before early-stop.
+                            # On TechCrunch-heavy days, tier 1 may have kept≥target but distinct=2.
+                            # Continuing to tier 2 finds additional sources (AWS, Google, etc.)
+                            # and avoids 1700s DBE triggered by SOURCE_DIVERSITY_WARN.
+                            # Exception: last tier — stop regardless to avoid hydrating full 600-item pool.
+                            _probe_distinct_now = int(_last_probe.get("distinct_sources", 0) or 0)
+                            if _probe_distinct_now >= 3 or _tier_idx >= len(_bfp_tiers):
+                                _stop_reason = "probe_kept"
+                                _stop_value = int(_last_probe.get("kept", 0) or 0)
                         elif (
                             int(_last_probe.get("signal_pool", 0) or 0) >= _probe_target
                             and len(_hydrated_accum) >= max(_batch_size, 120)
@@ -8943,7 +8958,7 @@ def run_pipeline() -> None:
                             _early_stop_hit = True
                             log.info(
                                 "BRIEF_FAST_EARLY_STOP: tier=%d/%d hydrated=%d/%d stop_reason=%s "
-                                "value=%d target=%d probe_kept=%d probe_signal=%d heuristic_ready=%d",
+                                "value=%d target=%d probe_kept=%d probe_signal=%d probe_distinct=%d heuristic_ready=%d",
                                 _tier_idx,
                                 len(_bfp_tiers),
                                 len(raw_items),
@@ -8953,6 +8968,7 @@ def run_pipeline() -> None:
                                 _probe_target,
                                 int(_last_probe.get("kept", 0) or 0),
                                 int(_last_probe.get("signal_pool", 0) or 0),
+                                int(_last_probe.get("distinct_sources", 0) or 0),
                                 _ready_now,
                             )
                             break
