@@ -6191,7 +6191,8 @@ def _assemble_zh_brief_from_cards(
                 )
                 if _ab_ok:
                     return True, _ab_zh, _ab_pc, _ab_oc, _ab_stats
-                log.warning(
+                import logging as _ab_log_w
+                _ab_log_w.getLogger("ai_intel").warning(
                     "_assemble_zh_brief_from_cards: 1:1 translate failed (%s), "
                     "falling back to card-bullet assembly", _ab_zh
                 )
@@ -6629,7 +6630,7 @@ def _translate_digest_1to1(
         if _cache_key in _cache:
             _zh_bullets = _cache[_cache_key]
             _stats["cache_hit"] += 1
-            log.info("iter30 1:1 translate: event %d CACHE HIT (key=%s)", _ei, _cache_key)
+            import logging as _td1_log; _td1_log.getLogger("ai_intel").info("iter30 1:1 translate: event %d CACHE HIT (key=%s)", _ei, _cache_key)
         else:
             _stats["cache_miss"] += 1
             _stats["calls_total"] += 1
@@ -6647,7 +6648,7 @@ def _translate_digest_1to1(
                 _cache[_cache_key] = _zh_bullets
                 _save_translation_cache(cache_path, _cache)
             else:
-                log.warning("iter30 1:1 translate: event %d FAIL (%s) — using EN fallback", _ei, _err)
+                import logging as _td1_log2; _td1_log2.getLogger("ai_intel").warning("iter30 1:1 translate: event %d FAIL (%s) — using EN fallback", _ei, _err)
                 # Use English bullets as fallback
                 _zh_bullets = list(_bullets_en)
 
@@ -6673,7 +6674,7 @@ def _translate_digest_1to1(
                 continue
             _bc_norm = _normalize_bullet_for_dedup(_bc)
             if _bc_norm in _seen_zh_norms:
-                log.debug("iter30 dedup: dropped duplicate ZH translation: %s", _bc[:60])
+                import logging as _td1_log3; _td1_log3.getLogger("ai_intel").debug("iter30 dedup: dropped duplicate ZH translation: %s", _bc[:60])
                 continue
             _seen_zh_norms.add(_bc_norm)
             _lines.append(f"- {_bc}")
