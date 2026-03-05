@@ -4608,9 +4608,16 @@ def _prepare_brief_final_cards_fast(
             def _iter29_sents_to_bullets(
                 role: str, target: int, seed_fallback: list,
             ) -> list:
+                import time as _time29
+                _t29_start = _time29.monotonic()
+                _iter29_wall_sec = 40  # iter29d: 40s wall-clock cap per role per event.
+                # At 1 tok/sec GPU: allows ~0-1 individual calls before bailing to seeds.
+                # At 30 tok/sec GPU (normal): allows ~10 calls → 10 unique bullets.
                 out: list = []
                 seen_n: set = set()
                 for _s in _fp_all:
+                    if _time29.monotonic() - _t29_start > _iter29_wall_sec:
+                        break  # iter29d: wall-clock exceeded → use what we have
                     _zh = _brief_translate_fact_sentence_to_bullet(
                         sentence_en=_s, title=title, actor=actor,
                         anchors=anchors_out, role=role,
