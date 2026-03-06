@@ -7750,7 +7750,7 @@ def _extract_docx_text(docx_path: Path) -> str:
 
 
 def _extract_pptx_text(pptx_path: Path) -> str:
-    if not pptx_path.exists():
+    if pptx_path is None or not pptx_path.exists():  # iter33: guard against None (PPTX discontinued)
         return ""
     try:
         from pptx import Presentation
@@ -8832,8 +8832,9 @@ def run_pipeline() -> None:
         try:
             from utils.fulltext_hydrator import hydrate_items_batch
             if _is_brief_mode and raw_items:
-                # iter33: targeted hydration — pre-select top (max_events*2) by score,
-                # hydrate ONLY those to achieve ≤14 items hydrated vs prior ~80.
+                # iter33: targeted hydration — pre-select top items by score,
+                # hydrate ONLY those. Pool = max(probe_target*4, 30) to ensure
+                # enough items pass content filter without relying on z0_extra card_build.
                 _probe_target = max(
                     1,
                     max(
@@ -8841,12 +8842,12 @@ def run_pipeline() -> None:
                         int(os.environ.get("BRIEF_MAX_EVENTS", "7") or "7"),
                     ),
                 )
-                _hydrate_n = min(_probe_target * 2, len(raw_items))
+                _hydrate_n = min(max(_probe_target * 4, 30), len(raw_items))
                 _targeted_pool = raw_items[:_hydrate_n]  # already sorted by _bfp_score
                 _hydrated = hydrate_items_batch(_targeted_pool) or _targeted_pool
                 raw_items = _hydrated
                 log.info(
-                    "Z0 targeted hydration (iter33): hydrated=%d (top %d by bfp_score, probe_target=%d)",
+                    "Z0 targeted hydration (iter33b): hydrated=%d (top %d by bfp_score, probe_target=%d)",
                     len(raw_items), _hydrate_n, _probe_target,
                 )
             else:
