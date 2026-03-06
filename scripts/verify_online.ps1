@@ -26,20 +26,30 @@ $_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 600 }  # iter33: reduced hard cap to 600s (soft-warn 480s below)
 $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
 
+# iter39: FAST_300_MODE — hard cap 300s, auto-enables FAST_600_MODE
+$_fast300Mode = ($env:FAST_300_MODE -eq "1")
+if ($_fast300Mode) {
+    if (-not $env:PIPELINE_TIME_BUDGET_SEC) { $_voBudgetSec = 300; $env:PIPELINE_TIME_BUDGET_SEC = "300" }
+    $env:FAST_600_MODE = "1"
+    Write-Output "FAST_300_MODE=1（硬上限=300s，自動啟用 FAST_600_MODE）"
+}
+
 # iter37: FAST_600_MODE — activated when budget<=600 OR FAST_600_MODE="1"
 # Disables card_build + DBE rebuild in run_once.py; runs direct hydration→digest→translate path.
 $_fast600Mode = ($env:FAST_600_MODE -eq "1") -or ($_voBudgetSec -le 600)
 if ($_fast600Mode) {
     $env:FAST_600_MODE = "1"
-    Write-Output "FAST_600_MODE=1（禁用 card_build/DBE，預算=${_voBudgetSec}s）"
+    if (-not $_fast300Mode) {
+        Write-Output "FAST_600_MODE=1（禁用 card_build/DBE，預算=${_voBudgetSec}s）"
+    }
 } else {
     $env:FAST_600_MODE = "0"
 }
 
-# iter38: soft target — WARN-only, never FAIL
+# iter39: soft target — FAST_300_MODE default 270s; FAST_600_MODE default 300s
 $_voSoftTargetSec = if ($env:PIPELINE_SOFT_TARGET_SEC -and $env:PIPELINE_SOFT_TARGET_SEC -ne "") {
     [int]$env:PIPELINE_SOFT_TARGET_SEC
-} elseif ($_fast600Mode) { 300 } else { 0 }
+} elseif ($_fast300Mode) { 270 } elseif ($_fast600Mode) { 300 } else { 0 }
 if ($_voSoftTargetSec -gt 0) {
     Write-Output ("soft_target={0}s（超過只警告，不 FAIL）" -f $_voSoftTargetSec)
 }
@@ -73,7 +83,7 @@ function Append-TimingFooterToMd {
     # iter31: stage breakdown (if available)
     if ($StageSec -and $StageSec.Count -gt 0) {
         $footer.Add("- 分段耗時：")
-        foreach ($k in @("z0_collect","hydrate","card_build","translate","build_docx","gates")) {  # iter33: hydration→hydrate, no build_pptx; iter37: card_build absent in FAST_600_MODE
+        foreach ($k in @("z0_collect_online","z0_collect","hydrate","digest_write","card_build","translate","build_docx","gates","other_seconds")) {  # iter39: added z0_collect_online + digest_write + other_seconds
             if ($StageSec.ContainsKey($k)) {
                 $footer.Add(("  - {0}：{1} 秒" -f $k, $StageSec[$k]))
             }
@@ -139,7 +149,7 @@ function Read-StageTiming {
 $env:PIPELINE_REPORT_MODE    = "brief"
 $env:BRIEF_ONLY              = "1"
 $env:BRIEF_MIN_EVENTS_HARD   = "5"
-$env:BRIEF_MAX_EVENTS        = "6"
+$env:BRIEF_MAX_EVENTS        = "8"
 $env:EXEC_MIN_EVENTS         = "5"
 $env:BRIEF_FORCE_QWEN_ONLY   = "1"
 $env:SKIP_DEEP_ANALYSIS      = "1"
@@ -764,7 +774,9 @@ if (-not $SkipPipeline) {
     $_forceZ0Fail = ($env:FORCE_Z0_FAIL -eq "1")
 
     if (-not $_forceZ0Fail) {
+        $_z0OnlineStart = $_voStopwatch.Elapsed.TotalSeconds
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
+        $script:_z0OnlineSec = [int]([Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart))
         if ($LASTEXITCODE -ne 0) {
             Write-Output "[verify_online] Z0 collect FAILED (exit $LASTEXITCODE). Aborting."
             exit 1
@@ -1547,9 +1559,9 @@ if (Test-Path $poolSuffPath) {
         Write-Output ("  backfill_hydrated_ok(>=800): {0}" -f $psBfOk)
         Write-Output ("  pipeline_status            : {0}" -f $psPipeStatus)
 
-        # iter38: FAST_600_MODE targets 5 events; normal pipeline targets 6+
-        $psMinFinal  = if ($_fast600Mode) { 5 } else { 6 }
-        $psMinStrict = if ($_fast600Mode) { 3 } else { 4 }
+        # iter39: FAST_300_MODE/FAST_600_MODE targets 7 events (>=6/>=4); normal pipeline 6/4
+        $psMinFinal  = 6
+        $psMinStrict = 4
         if ($psFinal -ge $psMinFinal -and $psStrict -ge $psMinStrict) {
             Write-Output "  => POOL_SUFFICIENCY_HARD: PASS"
         } else {
@@ -4042,12 +4054,23 @@ if ($_iter32_elapsed -gt $_voBudgetSec) {
 }
 Write-Output ("[iter32e] TIME_BUDGET 通過：{0}s ≤ {1}s" -f $_iter32_elapsed, $_voBudgetSec)
 
-# iter38: soft target WARN (never FAIL)
+# iter39: FAST_300_HARD_EXCEEDED — hard FAIL if FAST_300_MODE and total > 300
+if ($_fast300Mode -and $_iter32_elapsed -gt 300) {
+    Write-Output ("[FAIL] FAST_300_HARD_EXCEEDED: total={0}s > 300s" -f $_iter32_elapsed)
+    foreach ($_f3del in @("outputs\latest_brief.md","outputs\executive_report.docx")) {
+        $_f3delp = Join-Path $repoRoot $_f3del
+        if (Test-Path $_f3delp) { Remove-Item -LiteralPath $_f3delp -Force -ErrorAction SilentlyContinue }
+    }
+    Invoke-VerifyOnlineFailFast -Gate "FAST_300_HARD_EXCEEDED" `
+        -Reason ("FAST_300_HARD_EXCEEDED: total={0}s > 300s" -f $_iter32_elapsed)
+}
+
+# iter39: soft target WARN (never FAIL)
 if ($_voSoftTargetSec -gt 0) {
     if ($_iter32_elapsed -gt $_voSoftTargetSec) {
         Write-Output ("[WARN] soft_target_exceeded: {0}s > soft_target {1}s — 警告僅供參考，不影響 PASS/FAIL" -f $_iter32_elapsed, $_voSoftTargetSec)
     } else {
-        Write-Output ("[iter38] soft_target 達標：{0}s ≤ {1}s" -f $_iter32_elapsed, $_voSoftTargetSec)
+        Write-Output ("[iter39] soft_target 達標：{0}s ≤ {1}s" -f $_iter32_elapsed, $_voSoftTargetSec)
     }
 }
 
@@ -4061,6 +4084,15 @@ try {
     # iter31: compute gates stage seconds and read pipeline stage_seconds from meta
     $_stgGatesSec = [int]([Math]::Max(0, $_voStopwatch.Elapsed.TotalSeconds - $_stgGatesStart))
     $_stgHt = Read-StageTiming -RepoRoot $repoRoot -GateSec $_stgGatesSec
+    # iter39 (D): inject z0_collect_online timing from verify_online.ps1
+    if ($script:_z0OnlineSec -and $script:_z0OnlineSec -gt 0) {
+        $_stgHt["z0_collect_online"] = [double]$script:_z0OnlineSec
+    }
+    # iter39 (D): compute other_seconds before writing meta so it's included
+    if ($_stgHt -and $_stgHt.Count -gt 0) {
+        $_stgSumPre = ($_stgHt.Values | Measure-Object -Sum).Sum
+        $_stgHt["other_seconds"] = [int][Math]::Max(0, $_sSecTot - $_stgSumPre)
+    }
     Write-RunTimingMeta `
         -OutPath  (Join-Path $repoRoot "outputs\run_timing.meta.json") `
         -RunId    $_voRunId `
@@ -4079,9 +4111,14 @@ try {
         -StageSec $_stgHt
     $__sm = [int]([Math]::Floor($_sSecTot / 60)); $__ss = [int]($_sSecTot % 60)
     Write-Output ("⏱️ 總耗時：{0} 秒（{1} 分 {2} 秒）— run_timing.meta.json 已寫入" -f $_sSecTot, $__sm, $__ss)
+    # iter39 (D): display stage_seconds with other_seconds and TIMING_GAP_LARGE warning
     if ($_stgHt -and $_stgHt.Count -gt 0) {
         $_stgLine = ($_stgHt.Keys | ForEach-Object { "{0}:{1}s" -f $_, [int]$_stgHt[$_] }) -join "  "
         Write-Output ("  stage_seconds: {0}" -f $_stgLine)
+        $_otherSec = if ($_stgHt.Contains("other_seconds")) { [int]$_stgHt["other_seconds"] } else { 0 }
+        if ($_otherSec -gt 30) {
+            Write-Output ("  [WARN] TIMING_GAP_LARGE: other_seconds={0}s > 30s（未計時區段偏大）" -f $_otherSec)
+        }
     }
     # TIMING_SANITY_HARD (iter36): total_seconds >= every stage_seconds (±5s tolerance)
     if ($_stgHt -and $_stgHt.Count -gt 0) {
@@ -4152,6 +4189,12 @@ if (Test-Path $_teMetaPatchPath) {
         $_runOnceFallback = [bool]$_teObj["cpu_fallback_detected"]
         $_teObj["cpu_fallback_detected"] = ((Test-Path $_gpuFallbackFlag) -or $_runOnceFallback)
         $_teObj["gpu_required"] = $true
+        # iter39 (E): compute est_total_seconds_if_all_miss = (total - translate_seconds) + est_translate_seconds_if_all_miss
+        $_teXlatSec = if ($_teObj.Contains("translate_seconds")) { [double]$_teObj["translate_seconds"] } else { 0 }
+        $_teEstMiss = if ($_teObj.Contains("est_translate_seconds_if_all_miss")) { [double]$_teObj["est_translate_seconds_if_all_miss"] } else { 0 }
+        if ($_teEstMiss -gt 0) {
+            $_teObj["est_total_seconds_if_all_miss"] = [int][Math]::Round(($_sSecTot - $_teXlatSec + $_teEstMiss), 0)
+        }
         $_teObj | ConvertTo-Json -Depth 5 -Compress | Set-Content $_teMetaPatchPath -Encoding UTF8
         Write-Output ("  [iter35] translation_engine.meta.json 已更新 tok_per_sec_est={0:F1}  calls_tok_s_count={1}  cpu_fallback={2}" `
             -f $_gpuTokPerSec, @($_teObj["calls_tok_s"]).Count, $_teObj["cpu_fallback_detected"])

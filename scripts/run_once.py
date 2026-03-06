@@ -6409,6 +6409,9 @@ def _write_translation_engine_meta(
     cache_miss: int = 0,
     tok_per_sec_est: float = 0.0,
     gpu_process_found: bool = False,
+    translate_seconds: float = 0.0,
+    workload_chars_total: int = 0,
+    workload_bullets_total: int = 0,
 ) -> None:
     """Write outputs/translation_engine.meta.json — PM-required Qwen call evidence."""
     import json as _tem_j
@@ -6467,6 +6470,27 @@ def _write_translation_engine_meta(
     # iter38 (C-2): when all translations came from cache, annotate why translate=0
     if int(cache_hit) > 0 and int(cache_miss) == 0:
         _meta["translate_skipped_reason"] = "all_cache_hit"
+    # iter39 (E): translate timing + all-miss risk estimation
+    _meta["translate_seconds"] = round(float(translate_seconds), 2)
+    _meta["workload_chars_total"] = int(workload_chars_total)
+    _meta["workload_bullets_total"] = int(workload_bullets_total)
+    # Read authoritative tok/s from gpu_probe for estimation
+    _est_tps = float(tok_per_sec_est) if tok_per_sec_est > 0 else 0.0
+    try:
+        import json as _est_gj
+        _est_gp = Path(settings.PROJECT_ROOT) / "outputs" / "gpu_probe.meta.json"
+        if _est_gp.exists():
+            _est_gdata = _est_gj.loads(_est_gp.read_text(encoding="utf-8-sig"))
+            _est_probe_tps = float(_est_gdata.get("tok_per_sec_est", 0) or 0)
+            if _est_probe_tps > 0:
+                _est_tps = _est_probe_tps
+    except Exception:
+        pass
+    if _est_tps > 0 and int(workload_chars_total) > 0:
+        import math as _est_math
+        _est_tokens = _est_math.ceil(int(workload_chars_total) / 4.0)
+        _est_xlat_sec = round(_est_tokens / _est_tps, 1)
+        _meta["est_translate_seconds_if_all_miss"] = _est_xlat_sec
     _out.write_text(_tem_j.dumps(_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -6625,11 +6649,12 @@ def _write_stage_timing_meta_f600(run_id: str, stg: dict) -> None:
         return round(e - s, 1) if s > 0 and e >= s else 0.0
 
     _stage_secs = {
-        "z0_collect": _dur("z0_collect_start", "z0_collect_end"),
-        "hydrate":    _dur("hydration_start",  "hydration_end"),
+        "z0_collect":   _dur("z0_collect_start", "z0_collect_end"),
+        "hydrate":      _dur("hydration_start",  "hydration_end"),
         # card_build intentionally absent: FAST_600_MODE bypasses it
-        "translate":  _dur("translate_start",   "translate_end"),
-        "build_docx": _dur("build_docx_start",  "build_docx_end"),
+        "digest_write": _dur("digest_write_start", "digest_write_end"),
+        "translate":    _dur("translate_start",   "translate_end"),
+        "build_docx":   _dur("build_docx_start",  "build_docx_end"),
     }
     # iter38: include before_translation_seconds for guard evidence
     _bt = stg.get("before_translation_seconds")
@@ -6680,9 +6705,9 @@ def _f600_run_fast_path(
 
     _log.info("FAST_600_MODE: fast path entered (budget=%ds raw_items=%d)", budget_sec, len(raw_items))
 
-    # --- Step 1: fast select top 5 hydrated items ---
-    _f6_target = 5
-    _max_events = 5
+    # --- Step 1: fast select top 7 hydrated items (iter39: raised from 5 to 7) ---
+    _f6_target = 7
+    _max_events = 7
 
     def _f6_bfp(it) -> float:
         return float(getattr(it, "_bfp_score", 0) or 0) + float(getattr(it, "bfp_score", 0) or 0)
@@ -6753,7 +6778,9 @@ def _f600_run_fast_path(
         )
 
     # --- Step 4: build digest.md from card dicts ---
+    stg["digest_write_start"] = time.time()
     _digest_path = _generate_digest_md(_card_dicts, _run_id)
+    stg["digest_write_end"] = time.time()
     if not _digest_path:
         _f6_fail("HYDRATION_TOO_THIN", "digest.md generation failed")
 
@@ -6772,7 +6799,8 @@ def _f600_run_fast_path(
     # If thin events exist, swap them with denser candidates (up to 2 rounds).
     # Use index-based matching: events in digest meta are in same order as _selected.
     _dd_swap_pool = [it for it in _f6_tier(1200) if it not in _selected]
-    for _dd_round in range(2):
+    _dd_swap_pool += [it for it in _f6_tier(800) if it not in _selected and it not in _dd_swap_pool]
+    for _dd_round in range(3):
         if _dd_ok or not _dd_meta.get("thin_events_count"):
             break
         if not _dd_swap_pool:
@@ -6883,6 +6911,18 @@ def _f600_run_fast_path(
     stg["build_docx_end"] = time.time()
 
     # --- Step 10: write translation meta ---
+    # iter39 (E): compute workload stats for all-miss estimation
+    _wl_chars = 0
+    _wl_bullets = 0
+    try:
+        for _wl_line in Path(_digest_path).read_text(encoding="utf-8").splitlines():
+            if _wl_line.startswith("- "):
+                _wl_bullets += 1
+                import re as _wl_re
+                _wl_chars += len(_wl_re.sub(r"https?://\S+", "", _wl_line[2:]).strip())
+    except Exception:
+        pass
+    _translate_sec = round(float(stg.get("translate_end", 0) or 0) - float(stg.get("translate_start", 0) or 0), 2)
     _write_translation_meta(run_id=_run_id, success=True, fail_reason="")
     _write_translation_engine_meta(
         run_id=_run_id, endpoint=_tfd_endpoint, response_model=_tfd_model,
@@ -6892,12 +6932,15 @@ def _f600_run_fast_path(
         calls_retry=_xlat_stats.get("calls_retry", 0),
         cache_hit=_xlat_stats.get("cache_hit", 0),
         cache_miss=_xlat_stats.get("cache_miss", 0),
+        translate_seconds=_translate_sec,
+        workload_chars_total=_wl_chars,
+        workload_bullets_total=_wl_bullets,
     )
 
     # --- Step 11: write pool_sufficiency.meta.json ---
-    # iter38: threshold adjusted for fixed 5 events (was 6/4, now 5/3)
+    # iter39: threshold adjusted for fixed 7 events (need >=6 and >=4)
     _strict_ok = sum(1 for it in _selected if int(getattr(it, "fulltext_len", 0) or 0) >= 800)
-    _pool_status = "OK" if (len(_selected) >= 5 and _strict_ok >= 3) else "DEGRADED"
+    _pool_status = "OK" if (len(_selected) >= 6 and _strict_ok >= 4) else "DEGRADED"
     try:
         (_outputs / "pool_sufficiency.meta.json").write_text(
             _f6_j.dumps({
@@ -6976,7 +7019,7 @@ def _f600_run_fast_path(
     if _pool_status != "OK":
         _f6_fail(
             "POOL_SUFFICIENCY_HARD",
-            f"final_selected={len(_selected)} strict_fulltext_ok={_strict_ok} (need >=5 and >=3)",
+            f"final_selected={len(_selected)} strict_fulltext_ok={_strict_ok} (need >=6 and >=4)",
         )
 
     # --- Step 16: write stage timing (without card_build) ---
