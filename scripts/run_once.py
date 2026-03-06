@@ -2173,6 +2173,10 @@ def _brief_fact_tokens_for_bullet(sentence: str, anchors: list[str]) -> list[str
 # Translation stats accumulator — reset at start of each _prepare_brief_final_cards call.
 _brief_trans_stats: dict = {"attempts": 0, "rule_success": 0, "qwen_success": 0, "empty": 0, "error": 0}
 
+# iter35: per-call tok/s accumulator for GPU_CONTINUOUS_ENFORCEMENT_HARD.
+# Appended by _translate_event_bullets_1to1 on every successful llama-server call.
+_i35_percall_toks: list = []  # list[float]
+
 
 def _brief_translate_fact_sentence_to_bullet(
     *,
@@ -6424,6 +6428,13 @@ def _write_translation_engine_meta(
                 gpu_process_found = bool(_gdata.get("gpu_process_found", False))
         except Exception:
             pass
+    # iter35: per-call tok/s from GPU_CONTINUOUS_ENFORCEMENT_HARD accumulator
+    _tem_percall = list(_i35_percall_toks)  # snapshot of module-level accumulator
+    _tem_valid = [x for x in _tem_percall if x > 0]
+    _tem_tok_min: "float | None" = round(min(_tem_valid), 2) if _tem_valid else None
+    _tem_tok_avg: "float | None" = round(sum(_tem_valid) / len(_tem_valid), 2) if _tem_valid else None
+    _tem_tok_max: "float | None" = round(max(_tem_valid), 2) if _tem_valid else None
+    _tem_cpu_fallback = any(0 < x < 12 for x in _tem_percall)
     _out = Path(settings.PROJECT_ROOT) / "outputs" / "translation_engine.meta.json"
     _out.parent.mkdir(parents=True, exist_ok=True)
     _meta = {
@@ -6444,6 +6455,13 @@ def _write_translation_engine_meta(
         "cache_miss": int(cache_miss),
         "tok_per_sec_est": float(tok_per_sec_est),
         "gpu_process_found": bool(gpu_process_found),
+        # iter35: GPU_CONTINUOUS_ENFORCEMENT_HARD per-call tok/s
+        "calls_tok_s": _tem_percall,
+        "tok_s_min": _tem_tok_min,
+        "tok_s_avg": _tem_tok_avg,
+        "tok_s_max": _tem_tok_max,
+        "cpu_fallback_detected": _tem_cpu_fallback,
+        "gpu_required": True,
     }
     _out.write_text(_tem_j.dumps(_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -6572,11 +6590,12 @@ def _translate_event_bullets_1to1(
     try:
         # iter31: wall-clock cap via thread (same pattern as llama_openai_client.py fix).
         # Prevents slow-streaming llama-server from bypassing the socket timeout.
-        import concurrent.futures as _teb_cf
+        import concurrent.futures as _teb_cf, time as _teb_tm
         _teb_executor = _teb_cf.ThreadPoolExecutor(max_workers=1)
         def _teb_do() -> bytes:
             with _teb_ur.urlopen(_req, timeout=timeout) as _r:
                 return _r.read()
+        _teb_t0 = _teb_tm.monotonic()  # iter35: per-call wall-clock start
         _teb_future = _teb_executor.submit(_teb_do)
         try:
             _raw_bytes = _teb_future.result(timeout=timeout)
@@ -6584,6 +6603,7 @@ def _translate_event_bullets_1to1(
             return [""] * n, False, f"QWEN_HTTP_ERROR: wall-clock timeout after {timeout}s"
         finally:
             _teb_executor.shutdown(wait=False)
+        _teb_elapsed = _teb_tm.monotonic() - _teb_t0  # iter35
         _data = _teb_j.loads(_raw_bytes.decode("utf-8"))
         _raw = (
             (_data.get("choices") or [{}])[0]
@@ -6591,6 +6611,27 @@ def _translate_event_bullets_1to1(
             .get("content", "")
             or ""
         )
+        # iter35: GPU_CONTINUOUS_ENFORCEMENT_HARD — per-call tok/s
+        _teb_ctoks = int((_data.get("usage") or {}).get("completion_tokens") or 0)
+        if _teb_ctoks == 0:
+            _teb_ctoks = max(1, len(_raw) // 4)  # rough fallback: 4 chars ≈ 1 tok
+        _teb_tok_s = round(_teb_ctoks / _teb_elapsed, 2) if _teb_elapsed > 0.1 else 0.0
+        _i35_percall_toks.append(_teb_tok_s)
+        if 0 < _teb_tok_s < 12:
+            # CPU fallback detected — write flag file and abort immediately
+            try:
+                _fl = Path(settings.PROJECT_ROOT) / "outputs" / "_gpu_fallback_detected.flag"
+                _fl.parent.mkdir(parents=True, exist_ok=True)
+                _fl.write_text(
+                    f"tok_per_sec={_teb_tok_s} via_run_once=1", encoding="utf-8"
+                )
+            except Exception:
+                pass
+            return (
+                [""] * n,
+                False,
+                f"GPU_FALLBACK_DETECTED: call_tok_s={_teb_tok_s} < 12",
+            )
     except (_teb_ue.URLError, OSError, Exception) as _e:
         return [""] * n, False, f"QWEN_HTTP_ERROR: {_e}"
 
@@ -6707,12 +6748,17 @@ def _translate_digest_1to1(
                 _bullets_en, _title, _url, endpoint, model_id, timeout=timeout
             )
             if not _ok:
+                # iter35: GPU_FALLBACK_DETECTED must abort immediately — no retry
+                if _err.startswith("GPU_FALLBACK_DETECTED"):
+                    return False, _err, _prompt_chars, _output_chars_total, _stats
                 # Retry once
                 _stats["calls_retry"] += 1
                 _stats["calls_total"] += 1
                 _zh_bullets, _ok, _err = _translate_event_bullets_1to1(
                     _bullets_en, _title, _url, endpoint, model_id, timeout=timeout
                 )
+                if not _ok and _err.startswith("GPU_FALLBACK_DETECTED"):  # iter35
+                    return False, _err, _prompt_chars, _output_chars_total, _stats
             if _ok:
                 _cache[_cache_key] = _zh_bullets
                 _save_translation_cache(cache_path, _cache)

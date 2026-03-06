@@ -522,7 +522,7 @@ Write-Output ""
 
 
 # GPU_CONTINUOUS_ENFORCEMENT_HARD: start periodic tok/s probe job (iter35)
-$_gpuCeInterval     = 60   # seconds between probes
+$_gpuCeInterval     = 120  # seconds between probes (spec: 每120秒一次)
 $_gpuCeFallbackTh   = 12   # tok/s below this = suspected CPU fallback
 $_gpuProbeHistPath  = Join-Path $repoRoot "outputs\gpu_probe_history.meta.json"
 $_gpuFallbackFlag   = Join-Path $repoRoot "outputs\_gpu_fallback_detected.flag"
@@ -564,7 +564,7 @@ $_gpuCeJob = Start-Job -ScriptBlock {
     }
 } -ArgumentList $_gpuCompUrl, $_gpuProbeHistPath, $_gpuFallbackFlag, $_voRunId, $_gpuCeInterval, $_gpuCeFallbackTh
 
-Write-Output ("  [GPU_CONTINUOUS_ENFORCEMENT_HARD] ????ａ?撌脣???(??={0}s  CPU??瑼?{1} tok/s)" -f $_gpuCeInterval, $_gpuCeFallbackTh)
+Write-Output ("  [GPU_CONTINUOUS_ENFORCEMENT_HARD] 持續GPU探針已啟動（間隔={0}s  CPU判定閾值={1} tok/s）" -f $_gpuCeInterval, $_gpuCeFallbackTh)
 Write-Output ""
 # ---- Step 1: Z0 online collection + supply fallback ----
 $_z0Dir          = Join-Path $repoRoot "data\raw\z0"
@@ -3888,26 +3888,37 @@ if (Test-Path $_teMetaPatchPath) {
         if (-not $_teObj.ContainsKey("run_id") -or [string]$_teObj["run_id"] -ne $_voRunId) {
             $_teObj["run_id"] = $_voRunId
         }
-        # iter35: add continuous probe tok/s data
+        # iter35: per-call tok/s — prefer data from run_once.py (already written);
+        # add probe history as separate field (periodic probes differ from per-call)
+        $_existingCalls = @($($_teObj["calls_tok_s"]))
+        if ($_existingCalls.Count -eq 0) {
+            # run_once.py did not write calls_tok_s (e.g. pipeline aborted early)
+            if (Test-Path $_gpuProbeHistPath) {
+                try {
+                    $_phData  = Get-Content $_gpuProbeHistPath -Raw -ErrorAction Stop | ConvertFrom-Json
+                    $_tokSArr = @($_phData.probes | ForEach-Object { $_.tok_per_sec } | Where-Object { $_ -gt 0 })
+                    if ($_tokSArr.Count -gt 0) {
+                        $_teObj["calls_tok_s"] = $_tokSArr
+                        $_teObj["tok_s_min"]   = [math]::Round(($_tokSArr | Measure-Object -Minimum).Minimum, 2)
+                        $_teObj["tok_s_avg"]   = [math]::Round(($_tokSArr | Measure-Object -Average).Average, 2)
+                        $_teObj["tok_s_max"]   = [math]::Round(($_tokSArr | Measure-Object -Maximum).Maximum, 2)
+                    }
+                } catch {}
+            }
+        }
+        # Always write probe history under its own key (periodic spot-checks)
         if (Test-Path $_gpuProbeHistPath) {
             try {
-                $_phData  = Get-Content $_gpuProbeHistPath -Raw -ErrorAction Stop | ConvertFrom-Json
-                $_tokSArr = @($_phData.probes | ForEach-Object { $_.tok_per_sec } | Where-Object { $_ -gt 0 })
-                if ($_tokSArr.Count -gt 0) {
-                    $_teObj["calls_tok_s"] = $_tokSArr
-                    $_teObj["tok_s_min"]   = [math]::Round(($_tokSArr | Measure-Object -Minimum).Minimum, 2)
-                    $_teObj["tok_s_avg"]   = [math]::Round(($_tokSArr | Measure-Object -Average).Average, 2)
-                    $_teObj["tok_s_max"]   = [math]::Round(($_tokSArr | Measure-Object -Maximum).Maximum, 2)
-                } else {
-                    $_teObj["calls_tok_s"] = @(); $_teObj["tok_s_min"] = $null; $_teObj["tok_s_avg"] = $null; $_teObj["tok_s_max"] = $null
-                }
-            } catch { $_teObj["calls_tok_s"] = @() }
-        } else {
-            $_teObj["calls_tok_s"] = @(); $_teObj["tok_s_min"] = $null; $_teObj["tok_s_avg"] = $null; $_teObj["tok_s_max"] = $null
+                $_phData2 = Get-Content $_gpuProbeHistPath -Raw -ErrorAction Stop | ConvertFrom-Json
+                $_teObj["probe_tok_s_history"] = @($_phData2.probes | ForEach-Object { $_.tok_per_sec })
+            } catch {}
         }
-        $_teObj["cpu_fallback_detected"] = (Test-Path $_gpuFallbackFlag)
+        # cpu_fallback_detected: OR of flag file (probe job) + run_once.py per-call check
+        $_runOnceFallback = [bool]$_teObj["cpu_fallback_detected"]
+        $_teObj["cpu_fallback_detected"] = ((Test-Path $_gpuFallbackFlag) -or $_runOnceFallback)
+        $_teObj["gpu_required"] = $true
         $_teObj | ConvertTo-Json -Depth 5 -Compress | Set-Content $_teMetaPatchPath -Encoding UTF8
-        Write-Output ("  [iter35] translation_engine.meta.json 撌脫?? tok_per_sec_est={0:F1}  calls_tok_s_count={1}  cpu_fallback={2}" `
+        Write-Output ("  [iter35] translation_engine.meta.json 已更新 tok_per_sec_est={0:F1}  calls_tok_s_count={1}  cpu_fallback={2}" `
             -f $_gpuTokPerSec, @($_teObj["calls_tok_s"]).Count, $_teObj["cpu_fallback_detected"])
     } catch {
         Write-Output ("  [WARN] translation_engine.meta.json patch 失敗: {0}" -f $_)
