@@ -6550,9 +6550,22 @@ def _write_translation_engine_meta(
         "cpu_fallback_detected": _tem_cpu_fallback,
         "gpu_required": True,
     }
-    # iter38 (C-2): when all translations came from cache, annotate why translate=0
+    # iter41: events_total + translate_mode + calls_expected_if_all_miss
+    _events_total = int(cache_hit) + int(cache_miss) if (int(cache_hit) + int(cache_miss)) > 0 else int(calls_total)
+    if _events_total == 0:
+        # fallback: count from workload_bullets_total / ~5 bullets per event
+        _events_total = max(1, int(workload_bullets_total) // 5) if int(workload_bullets_total) > 0 else 0
+    _meta["events_total"] = _events_total
+    _meta["calls_expected_if_all_miss"] = _events_total
     if int(cache_hit) > 0 and int(cache_miss) == 0:
+        _meta["translate_mode"] = "all_cache_hit"
         _meta["translate_skipped_reason"] = "all_cache_hit"
+    elif int(cache_miss) > 0 and int(cache_hit) == 0:
+        _meta["translate_mode"] = "all_miss"
+    elif int(cache_miss) > 0:
+        _meta["translate_mode"] = "partial_miss"
+    else:
+        _meta["translate_mode"] = "unknown"
     # iter39 (E): translate timing + all-miss risk estimation
     _meta["translate_seconds"] = round(float(translate_seconds), 2)
     _meta["workload_chars_total"] = int(workload_chars_total)
@@ -6868,8 +6881,8 @@ def _f600_run_fast_path(
                 _selected.append(it)
                 if len(_selected) >= _max_events:
                     break
-    # Last resort: dev noise (max 1)
-    if len(_selected) < _max_events and _devnoise_pool:
+    # Last resort: dev noise (DAILY: never; non-daily: max 1)
+    if not _is_daily and len(_selected) < _max_events and _devnoise_pool:
         _selected.append(_devnoise_pool[0])
     # Absolute fallback
     if not _selected:
@@ -6921,7 +6934,15 @@ def _f600_run_fast_path(
             f"distinct_sources={_f6_distinct} < 3 (FAST_600_MODE: DBE rebuild disabled)",
         )
 
-    # --- Step 3b: iter40 BIGTECH_DOMINANCE_HARD + DEV_NOISE_CAP_HARD ---
+    # --- Step 3b: iter41 BIGTECH_DOMINANCE_HARD + DEV_NOISE_CAP_HARD ---
+    # iter41: compute dev_forum_count from card_dicts (DAILY requires =0)
+    _f6_df_count = sum(
+        1 for fc in _card_dicts
+        if _classify_source_type(
+            str(fc.get("source_name", "") or ""),
+            str(fc.get("final_url", "") or "")
+        ) in ("dev_forum", "code_release", "social", "code")
+    )
     if _is_daily or os.environ.get("BIGTECH_GATES_ENFORCE", "0") == "1":
         if _f6_bigtech < 5:
             _write_not_ready_report_md(
@@ -6949,7 +6970,21 @@ def _f600_run_fast_path(
                 "BIGTECH_DOMINANCE_HARD",
                 f"BIGTECH_DOMINANCE_HARD_FAIL: bigtech_hit={_f6_bigtech} official_or_media={_f6_om}",
             )
-        if _f6_devnoise_count > 1:
+        # iter41: DAILY requires dev_forum_count=0 (zero tolerance)
+        if _is_daily and _f6_df_count > 0:
+            _write_not_ready_report_md(
+                "DEV_NOISE_CAP_HARD_FAIL",
+                f"dev_forum_count={_f6_df_count} > 0 (DAILY requires 0)",
+                run_id=_run_id, selected_items_count=len(_selected),
+                selected_sources_distinct=_f6_distinct,
+                bigtech_hit_count=_f6_bigtech,
+                official_or_media_count=_f6_om,
+            )
+            _f6_fail(
+                "DEV_NOISE_CAP_HARD",
+                f"DEV_NOISE_CAP_HARD_FAIL: dev_forum_count={_f6_df_count}",
+            )
+        elif _f6_devnoise_count > 1:
             _write_not_ready_report_md(
                 "DEV_NOISE_CAP_HARD_FAIL",
                 f"non_bigtech_dev_noise={_f6_devnoise_count} > 1",
@@ -6962,6 +6997,69 @@ def _f600_run_fast_path(
                 "DEV_NOISE_CAP_HARD",
                 f"DEV_NOISE_CAP_HARD_FAIL: non_bigtech_dev_noise={_f6_devnoise_count}",
             )
+
+    # --- Step 3c: iter41 daily cross-day dedup (overlap_with_prev_daily <= 2) ---
+    _overlap_count = 0
+    _replacements_made = 0
+    _prev_daily_file = ""
+    if _is_daily:
+        try:
+            import hashlib as _dd_hash
+            _state_dir = _outputs / "state"
+            _state_dir.mkdir(parents=True, exist_ok=True)
+            _prev_file = _state_dir / "daily_last_ids.json"
+            _prev_daily_file = str(_prev_file)
+            _prev_ids: set = set()
+            if _prev_file.exists():
+                _prev_data = _f6_j.loads(_prev_file.read_text(encoding="utf-8"))
+                _prev_ids = set(_prev_data.get("ids", []))
+            def _item_hash(it) -> str:
+                u = str(getattr(it, "url", "") or getattr(it, "link", "") or "")
+                return _dd_hash.md5(u.encode()).hexdigest() if u else ""
+            _cur_hashes = [_item_hash(it) for it in _selected]
+            _overlap_items = [(i, h) for i, h in enumerate(_cur_hashes) if h and h in _prev_ids]
+            _overlap_count = len(_overlap_items)
+            if _overlap_count > 2:
+                _backup_pool = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)]
+                _backup_pool.sort(key=_f6_sort_key, reverse=True)
+                for _oi, _oh in sorted(_overlap_items[2:], key=lambda x: _f6_bfp(_selected[x[0]])):
+                    if not _backup_pool:
+                        break
+                    _repl = _backup_pool.pop(0)
+                    _selected[_oi] = _repl
+                    _replacements_made += 1
+                _cur_hashes = [_item_hash(it) for it in _selected]
+                _overlap_count = sum(1 for h in _cur_hashes if h and h in _prev_ids)
+            if _overlap_count > 2:
+                _f6_fail("DAILY_DUP_OVER_CAP", f"overlap_with_prev_daily={_overlap_count} > 2")
+            # Save current IDs for next daily run
+            _cur_ids = [h for h in _cur_hashes if h]
+            _prev_file.write_text(
+                _f6_j.dumps({"run_id": _run_id, "ids": _cur_ids}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            # Rebuild card_dicts after possible replacements
+            if _replacements_made > 0:
+                _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+                _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id)
+                _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+        except SystemExit:
+            raise
+        except Exception as _dde:
+            _log.warning("daily cross-day dedup failed (non-fatal): %s", _dde)
+
+    # iter41: patch selection_audit.meta.json with overlap fields
+    try:
+        _sa_path = _outputs / "selection_audit.meta.json"
+        if _sa_path.exists():
+            _sa_data = _f6_j.loads(_sa_path.read_text(encoding="utf-8"))
+            _sa_data["overlap_with_prev_daily"] = _overlap_count
+            _sa_data["replacements_made"] = _replacements_made
+            _sa_data["prev_daily_file_used"] = _prev_daily_file
+            _sa_path.write_text(_f6_j.dumps(_sa_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
     # --- Step 4: build digest.md from card dicts ---
     stg["digest_write_start"] = time.time()

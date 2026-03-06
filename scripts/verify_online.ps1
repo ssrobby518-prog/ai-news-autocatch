@@ -25,7 +25,15 @@ $_startedAt  = Get-Date
 $_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 600 }  # iter33: reduced hard cap to 600s (soft-warn 480s below)
 $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
+# iter41: z0 deadline vars (initialized here; set in z0 collect block for DAILY)
+$script:_z0DeadlineSoftSec = $null
+$script:_z0DeadlineHardSec = $null
+$script:_z0StopReason      = $null
 
+# iter41: -Mode daily activates FAST_300_DAILY automatically
+if ($Mode -eq "daily") {
+    $env:FAST_300_DAILY = "1"
+}
 # iter40: FAST_300_DAILY — online collect + bigtech gates + 300s hard cap
 $_fast300Daily = ($env:FAST_300_DAILY -eq "1")
 # iter39: FAST_300_MODE — hard cap 300s, auto-enables FAST_600_MODE
@@ -54,10 +62,10 @@ if ($_fast600Mode) {
     $env:FAST_600_MODE = "0"
 }
 
-# iter39: soft target — FAST_300_MODE default 270s; FAST_600_MODE default 300s
+# iter41: soft target — DAILY default 200s; FAST_300_MODE default 270s; FAST_600_MODE default 300s
 $_voSoftTargetSec = if ($env:PIPELINE_SOFT_TARGET_SEC -and $env:PIPELINE_SOFT_TARGET_SEC -ne "") {
     [int]$env:PIPELINE_SOFT_TARGET_SEC
-} elseif ($_fast300Mode) { 270 } elseif ($_fast600Mode) { 300 } else { 0 }
+} elseif ($_fast300Daily) { 200 } elseif ($_fast300Mode) { 270 } elseif ($_fast600Mode) { 300 } else { 0 }
 if ($_voSoftTargetSec -gt 0) {
     Write-Output ("soft_target={0}s（超過只警告，不 FAIL）" -f $_voSoftTargetSec)
 }
@@ -123,6 +131,15 @@ function Write-RunTimingMeta {
     if ($SoftTargetSec -gt 0) {
         $meta["soft_target_seconds"]  = $SoftTargetSec
         $meta["soft_target_exceeded"] = ($TotalSec -gt $SoftTargetSec)
+    }
+    # iter41: z0 deadline fields for FAST_300_DAILY
+    if ($script:_z0DeadlineSoftSec) {
+        $meta["z0_deadline_soft_sec"]       = [int]$script:_z0DeadlineSoftSec
+        $meta["z0_deadline_hard_sec"]       = [int]$script:_z0DeadlineHardSec
+        $meta["z0_stop_reason"]             = [string]$script:_z0StopReason
+    }
+    if ($script:_z0OnlineSec -ne $null) {
+        $meta["z0_collect_online_seconds"] = [int]$script:_z0OnlineSec
     }
     # iter31: include stage_seconds if available
     if ($StageSec -and $StageSec.Count -gt 0) {
@@ -796,23 +813,38 @@ if (-not $SkipPipeline) {
         Write-Output "  [FAST_300_BENCH] z0_collect_online 已略過（使用快取 z0 資料）"
     } elseif (-not $_forceZ0Fail) {
         $_z0OnlineStart = $_voStopwatch.Elapsed.TotalSeconds
-        # iter40: FAST_300_DAILY — z0_deadline_sec=60 hard timeout on z0_collect
+        # iter41: FAST_300_DAILY — z0 soft/hard two-stage deadline
         if ($_fast300Daily) {
-            $_z0DeadlineSec = 60
-            Write-Output ("  [FAST_300_DAILY] z0_collect 硬 deadline={0}s" -f $_z0DeadlineSec)
+            $script:_z0DeadlineSoftSec = 60
+            $script:_z0DeadlineHardSec = 90
+            $script:_z0StopReason = "unknown"
+            Write-Output ("  [FAST_300_DAILY] Z0 軟截止={0}s / 硬截止={1}s" -f $script:_z0DeadlineSoftSec, $script:_z0DeadlineHardSec)
             $_z0Job = Start-Job -ScriptBlock {
                 param($scriptPath)
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath
                 $LASTEXITCODE
             } -ArgumentList (Join-Path $PSScriptRoot "z0_collect.ps1")
-            $_z0Done = Wait-Job -Job $_z0Job -Timeout $_z0DeadlineSec
-            if (-not $_z0Done) {
-                Write-Output ("  [FAST_300_DAILY] z0_collect 超時（>{0}s），使用已有資料" -f $_z0DeadlineSec)
-                Stop-Job -Job $_z0Job -ErrorAction SilentlyContinue
-            } else {
+            # Wait for soft deadline first
+            $_z0Done = Wait-Job -Job $_z0Job -Timeout $script:_z0DeadlineSoftSec
+            if ($_z0Done) {
+                $script:_z0StopReason = "quota_met"
                 $_z0Exit = Receive-Job -Job $_z0Job
+            } else {
+                # Soft deadline exceeded — wait for hard deadline
+                $_z0Remaining = $script:_z0DeadlineHardSec - $script:_z0DeadlineSoftSec
+                Write-Output ("  [FAST_300_DAILY] 軟截止已過（>{0}s），等待硬截止（再{1}s）" -f $script:_z0DeadlineSoftSec, $_z0Remaining)
+                $_z0Done2 = Wait-Job -Job $_z0Job -Timeout $_z0Remaining
+                if ($_z0Done2) {
+                    $script:_z0StopReason = "quota_met"
+                    $_z0Exit = Receive-Job -Job $_z0Job
+                } else {
+                    $script:_z0StopReason = "hard_deadline"
+                    Write-Output ("  [FAST_300_DAILY] 硬截止到期（>{0}s），使用已有資料" -f $script:_z0DeadlineHardSec)
+                    Stop-Job -Job $_z0Job -ErrorAction SilentlyContinue
+                }
             }
             Remove-Job -Job $_z0Job -Force -ErrorAction SilentlyContinue
+            Write-Output ("  [FAST_300_DAILY] Z0 stop_reason={0}" -f $script:_z0StopReason)
         } else {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
             if ($LASTEXITCODE -ne 0) {
@@ -1676,9 +1708,13 @@ if ($_btGatesEnforce -and (Test-Path $_saMetaPath)) {
         $_btHitCount = if ($_saMeta.PSObject.Properties['bigtech_hit_count']) { [int]$_saMeta.bigtech_hit_count } else { 0 }
         $_omCount    = if ($_saMeta.PSObject.Properties['official_or_media_count']) { [int]$_saMeta.official_or_media_count } else { 0 }
         $_dnCount    = if ($_saMeta.PSObject.Properties['non_bigtech_dev_noise_count']) { [int]$_saMeta.non_bigtech_dev_noise_count } else { 0 }
+        $_dfCount    = if ($_saMeta.PSObject.Properties['dev_forum_count']) { [int]$_saMeta.dev_forum_count } else { 0 }
+        $_overlapPrev = if ($_saMeta.PSObject.Properties['overlap_with_prev_daily']) { [int]$_saMeta.overlap_with_prev_daily } else { 0 }
         Write-Output ("  bigtech_hit_count            : {0}" -f $_btHitCount)
         Write-Output ("  official_or_media_count      : {0}" -f $_omCount)
+        Write-Output ("  dev_forum_count              : {0}" -f $_dfCount)
         Write-Output ("  non_bigtech_dev_noise_count  : {0}" -f $_dnCount)
+        Write-Output ("  overlap_with_prev_daily      : {0}" -f $_overlapPrev)
         # BIGTECH_DOMINANCE_HARD: bigtech>=5 AND official_or_media>=4
         if ($_btHitCount -lt 5 -or $_omCount -lt 4) {
             $_btFailReason = ("BIGTECH_DOMINANCE_HARD_FAIL: bigtech_hit={0} official_or_media={1}" -f $_btHitCount, $_omCount)
@@ -1686,8 +1722,12 @@ if ($_btGatesEnforce -and (Test-Path $_saMetaPath)) {
             Invoke-VerifyOnlineFailFast -Gate "BIGTECH_DOMINANCE_HARD" -Reason $_btFailReason
         }
         Write-Output "  => BIGTECH_DOMINANCE_HARD: PASS"
-        # DEV_NOISE_CAP_HARD: non_bigtech_dev_noise <= 1
-        if ($_dnCount -gt 1) {
+        # iter41: DEV_NOISE_CAP_HARD: DAILY requires dev_forum_count=0
+        if ($_fast300Daily -and $_dfCount -gt 0) {
+            $_dnFailReason = ("DEV_NOISE_CAP_HARD_FAIL: dev_forum_count={0} (DAILY requires 0)" -f $_dfCount)
+            Write-Output ("  => FAIL: {0}" -f $_dnFailReason)
+            Invoke-VerifyOnlineFailFast -Gate "DEV_NOISE_CAP_HARD" -Reason $_dnFailReason
+        } elseif ($_dnCount -gt 1) {
             $_dnFailReason = ("DEV_NOISE_CAP_HARD_FAIL: non_bigtech_dev_noise={0}" -f $_dnCount)
             Write-Output ("  => FAIL: {0}" -f $_dnFailReason)
             Invoke-VerifyOnlineFailFast -Gate "DEV_NOISE_CAP_HARD" -Reason $_dnFailReason
