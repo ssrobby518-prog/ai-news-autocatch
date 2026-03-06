@@ -851,8 +851,8 @@ if (-not $SkipPipeline) {
         $_z0OnlineStart = $_voStopwatch.Elapsed.TotalSeconds
         # iter41: FAST_300_DAILY — z0 soft/hard two-stage deadline
         if ($_fast300Daily) {
-            $script:_z0DeadlineSoftSec = 45
-            $script:_z0DeadlineHardSec = 70
+            $script:_z0DeadlineSoftSec = 35
+            $script:_z0DeadlineHardSec = 50
             $script:_z0StopReason = "unknown"
             Write-Output ("  [FAST_300_DAILY] Z0 軟截止={0}s / 硬截止={1}s  z0_data_source=online" -f $script:_z0DeadlineSoftSec, $script:_z0DeadlineHardSec)
             $_z0Job = Start-Job -ScriptBlock {
