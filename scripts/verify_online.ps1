@@ -319,42 +319,132 @@ if ($false -and $SkipPipeline) {
     }
     Write-Output ("  => BRIEF_TRANSLATION_READY=1  PIPELINE_RUN_ID={0}" -f $_voRunId)
 } else {
-    # Normal run: probe Qwen; auto-start llama_server.ps1 if down.
+    # iter36b: robust llama-server preflight
+    # A) Determine boot mode parameters
+    $_isBudget600   = ($_voBudgetSec -le 600)
+    $_llBootMaxWait = if ($env:LLAMA_BOOT_MAX_WAIT_SEC -and $env:LLAMA_BOOT_MAX_WAIT_SEC -ne "") {
+                         [int]$env:LLAMA_BOOT_MAX_WAIT_SEC
+                     } elseif ($_isBudget600) { 5 } else { 180 }
+    $_llAutoStart   = if ($env:LLAMA_AUTOSTART -and $env:LLAMA_AUTOSTART -ne "") {
+                         [int]$env:LLAMA_AUTOSTART
+                     } elseif ($_isBudget600) { 0 } else { 1 }
+
+    Write-Output ("  boot params: budget={0}s  LLAMA_AUTOSTART={1}  LLAMA_BOOT_MAX_WAIT_SEC={2}" `
+        -f $_voBudgetSec, $_llAutoStart, $_llBootMaxWait)
+
+    # Prepare bootstrap meta + log paths
+    $_bsMetaPath = Join-Path $repoRoot "outputs\llama_server_bootstrap.meta.json"
+    $_bsLogPath  = Join-Path $repoRoot "outputs\llama_server_bootstrap.log"
+    New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "outputs") -ErrorAction SilentlyContinue | Out-Null
+    $_bsMeta = [ordered]@{
+        run_id       = $_voRunId
+        mode         = if ($_isBudget600) { "budget600_no_autostart" } else { "extended_autostart" }
+        autostart    = [bool]($_llAutoStart -eq 1)
+        max_wait_sec = $_llBootMaxWait
+        ready        = $false
+        ready_at     = $null
+        wait_sec     = 0
+        pid          = $null
+        http_status  = $null
+        last_error   = ""
+        log_tail     = ""
+    }
+
+    function _Bs-Log { param([string]$Msg)
+        $ts = (Get-Date -Format "yyyy-MM-ddTHH:mm:ss")
+        $line = "[$ts] $Msg"
+        Write-Output "  $line"
+        try { Add-Content -LiteralPath $_bsLogPath -Value $line -Encoding utf8 -ErrorAction SilentlyContinue } catch {}
+    }
+
+    # B) First immediate probe (timeout 3s)
+    _Bs-Log ("probing {0} ..." -f $_qwenUrl)
     try {
-        $null = Invoke-WebRequest -Uri $_qwenUrl -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+        $_quickResp = Invoke-WebRequest -Uri $_qwenUrl -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop
         $_qwenReady = $true
-        Write-Output "  Qwen: already running (llama-server OK)"
+        $_bsMeta["ready"]       = $true
+        $_bsMeta["ready_at"]    = (Get-Date -Format "o")
+        $_bsMeta["wait_sec"]    = 0
+        $_bsMeta["http_status"] = [int]$_quickResp.StatusCode
+        _Bs-Log "llama-server: already running (immediate probe OK)"
     } catch {
-        Write-Output "  Qwen: not responding — attempting to start scripts\llama_server.ps1 ..."
+        _Bs-Log ("not responding: {0}" -f ($_.Exception.Message -replace "\r?\n"," "))
+    }
+
+    # C) If not ready and LLAMA_AUTOSTART=1, launch llama_server.ps1
+    if (-not $_qwenReady -and $_llAutoStart -eq 1) {
         $_lsScript = Join-Path $PSScriptRoot "llama_server.ps1"
         if (Test-Path $_lsScript) {
-            Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$_lsScript`"" -WindowStyle Hidden
-            $_waitSecs = 60; $_elapsed = 0
-            while ($_elapsed -lt $_waitSecs) {
-                Start-Sleep -Seconds 3; $_elapsed += 3
-                try {
-                    $null = Invoke-WebRequest -Uri $_qwenUrl -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
-                    $_qwenReady = $true
-                    Write-Output ("  Qwen: ready after {0}s" -f $_elapsed)
-                    break
-                } catch {}
-            }
-            if (-not $_qwenReady) {
-                Write-Output ("  Qwen: not ready after {0}s" -f $_waitSecs)
+            _Bs-Log ("LLAMA_AUTOSTART=1: launching {0}" -f $_lsScript)
+            try {
+                $_bsProc = Start-Process powershell `
+                    -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$_lsScript`"" `
+                    -WindowStyle Hidden -PassThru -ErrorAction Stop
+                $_bsPid = if ($_bsProc) { [int]$_bsProc.Id } else { $null }
+                $_bsMeta["pid"] = $_bsPid
+                _Bs-Log ("launched pid={0}" -f $_bsPid)
+            } catch {
+                _Bs-Log ("autostart failed: {0}" -f $_)
+                $_bsMeta["last_error"] = "autostart_failed: $_"
             }
         } else {
-            Write-Output "  Qwen: llama_server.ps1 not found at $_lsScript"
+            _Bs-Log ("LLAMA_AUTOSTART=1 but llama_server.ps1 not found at: {0}" -f $_lsScript)
+            $_bsMeta["last_error"] = "llama_server.ps1 not found"
+        }
+    } elseif (-not $_qwenReady -and $_llAutoStart -eq 0) {
+        _Bs-Log "LLAMA_AUTOSTART=0: skipping auto-start (pre-warmed server required)"
+    }
+
+    # D) Poll loop (1s interval) up to max_wait_sec
+    if (-not $_qwenReady) {
+        $_pollElapsed = 0
+        while ($_pollElapsed -lt $_llBootMaxWait) {
+            Start-Sleep -Seconds 1
+            $_pollElapsed++
+            try {
+                $_pollResp = Invoke-WebRequest -Uri $_qwenUrl -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop
+                $_qwenReady = $true
+                $_bsMeta["ready"]       = $true
+                $_bsMeta["ready_at"]    = (Get-Date -Format "o")
+                $_bsMeta["wait_sec"]    = $_pollElapsed
+                $_bsMeta["http_status"] = [int]$_pollResp.StatusCode
+                _Bs-Log ("ready after {0}s" -f $_pollElapsed)
+                break
+            } catch {
+                if ($_pollElapsed % 5 -eq 0 -or $_pollElapsed -eq $_llBootMaxWait) {
+                    _Bs-Log ("polling {0}/{1}s — still waiting" -f $_pollElapsed, $_llBootMaxWait)
+                }
+            }
+        }
+        if (-not $_qwenReady) {
+            $_bsMeta["wait_sec"]   = $_pollElapsed
+            $_bsMeta["last_error"] = if ($_isBudget600) {
+                "timeout after ${_pollElapsed}s (budget=600s mode, pre-warmed server required)"
+            } else { "timeout after ${_pollElapsed}s" }
+            _Bs-Log ("timeout: {0}" -f $_bsMeta["last_error"])
         }
     }
+
+    # Write bootstrap meta (with log tail)
+    try {
+        if (Test-Path $_bsLogPath) {
+            $_bsLines = Get-Content $_bsLogPath -Encoding utf8 -ErrorAction SilentlyContinue
+            if ($_bsLines) { $_bsMeta["log_tail"] = (($bsLines | Select-Object -Last 20) -join "`n") }
+        }
+        $_bsMeta | ConvertTo-Json -Depth 4 -Compress | Set-Content $_bsMetaPath -Encoding UTF8
+        Write-Output ("  bootstrap meta written: ready={0}  wait_sec={1}  pid={2}" `
+            -f $_bsMeta["ready"], $_bsMeta["wait_sec"], $_bsMeta["pid"])
+    } catch {
+        Write-Output ("  WARN: bootstrap meta write failed: {0}" -f $_)
+    }
+
+    # E) Branch: server ready vs not ready
     if ($_qwenReady) {
-        # ── GPU active evidence (Iteration GPU-v1) ────────────────────────────
-        # Probe nvidia-smi to confirm llama-server.exe is actually using the GPU.
-        # Without this check a pure-CPU run would look like a successful translation run.
+        # ── GPU active evidence ────────────────────────────────────────────────
         $_gpuFound    = $false
         $_vramMb      = 0
         $_nvsmiExists = $null -ne (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue)
         $_gpuMetaPath = Join-Path $repoRoot "outputs\gpu_probe.meta.json"
-        New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "outputs") -ErrorAction SilentlyContinue | Out-Null
 
         if ($_nvsmiExists) {
             Write-Output "  GPU probe: querying nvidia-smi --query-compute-apps ..."
@@ -364,7 +454,6 @@ if ($false -and $SkipPipeline) {
                 foreach ($_nvLine in $_nvsmiLines) {
                     $_lineStr = [string]$_nvLine
                     if ($_lineStr -match "llama") {
-                        # Process found by name in compute-apps — GPU context confirmed
                         $_gpuFound = $true
                         $_cols = $_lineStr -split ","
                         if ($_cols.Count -ge 3) {
@@ -374,35 +463,25 @@ if ($false -and $SkipPipeline) {
                         }
                         break
                     }
-                    # Windows permission boundary: llama-server launched in a different
-                    # interactive session shows as "[Insufficient Permissions]" in nvidia-smi
-                    # when queried from a different user context (e.g., from Claude Code bash).
-                    # If the server IS responding AND there are GPU processes we cannot identify,
-                    # treat it as GPU-active (conservative but correct for single-GPU setups).
-                    if ($_lineStr -match "Insufficient") {
-                        $_insuffPerm = $true
-                    }
+                    if ($_lineStr -match "Insufficient") { $_insuffPerm = $true }
                 }
                 if (-not $_gpuFound -and $_insuffPerm) {
-                    # Server is responding + GPU has unidentified processes → likely llama-server
                     $_gpuFound = $true
-                    Write-Output "  GPU probe: process name hidden (Insufficient Permissions) — server responds + GPU active → PASS"
+                    Write-Output "  GPU probe: Insufficient Permissions — server responds + GPU active => PASS"
                 }
             } catch {
-                Write-Output ("  GPU probe: nvidia-smi query error: {0}" -f $_)
+                Write-Output ("  GPU probe: nvidia-smi error: {0}" -f $_)
             }
             if ($_gpuFound) {
-                Write-Output ("  GPU active: llama-server VRAM={0} MB  gpu_process_found=true" -f $_vramMb)
+                Write-Output ("  GPU active: VRAM={0}MB  gpu_process_found=true" -f $_vramMb)
             } else {
-                Write-Output "  GPU probe: llama-server NOT found in nvidia-smi output  gpu_process_found=false"
+                Write-Output "  GPU probe: llama-server NOT in nvidia-smi  gpu_process_found=false"
             }
         } else {
-            # nvidia-smi not installed — cannot validate; warn and assume OK
             $_gpuFound = $true
-            Write-Output "  GPU probe: nvidia-smi not found on PATH — cannot validate GPU usage (assume OK)"
+            Write-Output "  GPU probe: nvidia-smi not found — assume OK"
         }
 
-        # Write gpu_probe.meta.json (evidence artifact, includes run_id + reason for STALE_META checks)
         $_gpuReason = if ($_gpuFound) { "none" } else { "GPU_NOT_ACTIVE" }
         @{
             run_id            = $_voRunId
@@ -413,31 +492,29 @@ if ($false -and $SkipPipeline) {
             probed_at         = (Get-Date -Format "o")
             reason            = $_gpuReason
         } | ConvertTo-Json -Compress | Set-Content $_gpuMetaPath -Encoding UTF8
-        Write-Output ("  gpu_probe.meta.json: gpu_process_found={0}  vram_mb={1}  reason={2}" -f $_gpuFound, $_vramMb, $_gpuReason)
+        Write-Output ("  gpu_probe.meta.json: gpu_process_found={0}  vram_mb={1}  reason={2}" `
+            -f $_gpuFound, $_vramMb, $_gpuReason)
 
+        $env:BRIEF_TRANSLATION_READY      = "1"
+        $env:BRIEF_TRANSLATION_FAIL_REASON = ""
         if ($_gpuFound) {
-            $env:BRIEF_TRANSLATION_READY      = "1"
-            $env:BRIEF_TRANSLATION_FAIL_REASON = ""
             Write-Output "  => BRIEF_TRANSLATION_READY=1  (server OK + GPU active)"
         } else {
-            # Server IS responding but GPU context not visible via nvidia-smi.
-            # This can happen when llama-server runs in a different Windows session
-            # (permissions prevent nvidia-smi from seeing its compute context) or
-            # when the GPU driver hides idle contexts.  Treat as WARN-OK: the server
-            # is clearly functional; gpu_probe.meta.json records gpu_process_found=false
-            # for audit purposes.  Hard-block only when the server itself is down.
-            $env:BRIEF_TRANSLATION_READY      = "1"
-            $env:BRIEF_TRANSLATION_FAIL_REASON = ""
-            Write-Output "  GPU probe: llama-server not in compute-apps (WARN) — server responds → WARN-OK, proceeding"
-            Write-Output "  NOTE: gpu_probe.meta.json gpu_process_found=false; verify llama-server uses --n-gpu-layers -1"
+            Write-Output "  GPU probe: not in compute-apps (WARN) — server responds => WARN-OK"
+            Write-Output "  NOTE: verify llama-server uses --n-gpu-layers -1"
             Write-Output "  => BRIEF_TRANSLATION_READY=1  (server OK; GPU probe WARN-OK)"
         }
     } else {
+        # Server not ready after full wait
+        $_snrFastReason = if ($_isBudget600) {
+            "SERVER_NOT_READY_FAST: budget=600 requires pre-warmed llama-server"
+        } else { "SERVER_NOT_READY" }
         $env:BRIEF_TRANSLATION_READY      = "0"
-        $env:BRIEF_TRANSLATION_FAIL_REASON = "SERVER_NOT_READY"
-        Write-Output "  => BRIEF_TRANSLATION_READY=0  reason=SERVER_NOT_READY  (pipeline will FAIL-fast)"
-        # Write gpu_probe.meta.json in SERVER_NOT_READY path too (evidence completeness)
+        $env:BRIEF_TRANSLATION_FAIL_REASON = $_snrFastReason
+        Write-Output ("  => BRIEF_TRANSLATION_READY=0  reason={0}" -f $_snrFastReason)
+
         New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "outputs") -ErrorAction SilentlyContinue | Out-Null
+        # gpu_probe.meta.json
         @{
             run_id            = $_voRunId
             nvidia_smi_ok     = $false
@@ -445,9 +522,9 @@ if ($false -and $SkipPipeline) {
             vram_mb           = 0
             nvidia_smi_found  = $false
             probed_at         = (Get-Date -Format "o")
-            reason            = "SERVER_NOT_READY"
+            reason            = $_snrFastReason
         } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\gpu_probe.meta.json") -Encoding UTF8
-        # iter36 SERVER_NOT_READY: 立刻寫 translation_engine.meta.json（success=false, calls_total=0）
+        # translation_engine.meta.json
         @{
             run_id                = $_voRunId
             generated_at          = (Get-Date -Format "o")
@@ -457,7 +534,7 @@ if ($false -and $SkipPipeline) {
             prompt_chars          = 0
             output_chars          = 0
             success               = $false
-            fail_reason           = "SERVER_NOT_READY"
+            fail_reason           = $_snrFastReason
             source_file           = ""
             calls_total           = 0
             calls_retry           = 0
@@ -472,14 +549,25 @@ if ($false -and $SkipPipeline) {
             cpu_fallback_detected = $false
             gpu_required          = $true
         } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\translation_engine.meta.json") -Encoding UTF8
-        Write-Output "  translation_engine.meta.json: success=false fail_reason=SERVER_NOT_READY calls_total=0 run_id=$_voRunId"
+        Write-Output ("  translation_engine.meta.json: success=false fail_reason={0} calls_total=0" -f $_snrFastReason)
     }
 }
 Write-Output ""
 
 if ($env:BRIEF_TRANSLATION_READY -ne "1") {
     $_voPreflightGate = if ($env:BRIEF_TRANSLATION_FAIL_REASON) { $env:BRIEF_TRANSLATION_FAIL_REASON } else { "TRANSLATION_ENGINE_DOWN" }
-    Invoke-VerifyOnlineFailFast -Gate $_voPreflightGate -Reason $_voPreflightGate
+    $_voPreflightNextSteps = @(
+        "1. 請用 GPU 參數啟動 llama-server，例如：",
+        "   llama-server.exe -m <model_path> --n-gpu-layers 999 -c 4096 --port 8080",
+        "   或: llama-server.exe -m <model_path> -ngl 999 --port 8080",
+        "2. 確認 http://127.0.0.1:8080/v1/models 可正常回應（HTTP 200）",
+        "3. 啟動後確認 nvidia-smi 中有 llama-server 程序且 VRAM > 300 MB",
+        "4. 若 GPU server 在 budget=600s 模式下起不來（冷啟動需較長時間），",
+        "   請改用常駐方式先在背景啟動 server，再執行 verify_online.ps1",
+        "   （常駐啟動參考: scripts\llama_server.ps1）"
+    ) -join "`n"
+    Invoke-VerifyOnlineFailFast -Gate $_voPreflightGate -Reason $_voPreflightGate `
+        -NextSteps $_voPreflightNextSteps
 }
 
 # ---------------------------------------------------------------------------
