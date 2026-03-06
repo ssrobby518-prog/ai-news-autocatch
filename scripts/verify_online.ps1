@@ -4120,7 +4120,7 @@ if (Test-Path $_teMetaPatchPath) {
         $_teObj["tok_per_sec_est"] = $_gpuTokPerSec
         $_teObj["gpu_required"]    = $true
         # ensure run_id is current (run_once.py may write its own run_id)
-        if (-not $_teObj.ContainsKey("run_id") -or [string]$_teObj["run_id"] -ne $_voRunId) {
+        if (-not $_teObj.Contains("run_id") -or [string]$_teObj["run_id"] -ne $_voRunId) {
             $_teObj["run_id"] = $_voRunId
         }
         # iter35: per-call tok/s — prefer data from run_once.py (already written);
