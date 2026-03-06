@@ -520,6 +520,52 @@ Write-Output ("  => GPU_MODE_REQUIRED_HARD：通過 (tok_per_sec_est={0:F1} >= {
 $env:GPU_TOK_PER_SEC_EST = [string]$_gpuTokPerSec
 Write-Output ""
 
+
+# GPU_CONTINUOUS_ENFORCEMENT_HARD: start periodic tok/s probe job (iter35)
+$_gpuCeInterval     = 60   # seconds between probes
+$_gpuCeFallbackTh   = 12   # tok/s below this = suspected CPU fallback
+$_gpuProbeHistPath  = Join-Path $repoRoot "outputs\gpu_probe_history.meta.json"
+$_gpuFallbackFlag   = Join-Path $repoRoot "outputs\_gpu_fallback_detected.flag"
+Remove-Item $_gpuFallbackFlag -Force -ErrorAction SilentlyContinue
+
+$_gpuCeJob = Start-Job -ScriptBlock {
+    param($compUrl, $histPath, $flagPath, $runId, $intervalSec, $fallbackTh)
+    $history   = [System.Collections.Generic.List[object]]::new()
+    $probeNum  = 0
+    $nvsmiOk   = [bool](Get-Command 'nvidia-smi' -ErrorAction SilentlyContinue)
+    while ($true) {
+        Start-Sleep -Seconds $intervalSec
+        $probeNum++
+        $ts      = [datetime]::UtcNow
+        $tps     = 0
+        $probeOk = $false
+        try {
+            $pay = '{"model":"qwen","messages":[{"role":"user","content":"GPU?"}],"max_tokens":15,"temperature":0,"stream":false}'
+            $t0  = [datetime]::UtcNow
+            $r   = Invoke-RestMethod -Uri $compUrl -Method Post -Body $pay -ContentType 'application/json' -TimeoutSec 25 -ErrorAction Stop
+            $el  = ([datetime]::UtcNow - $t0).TotalSeconds
+            $tps = if ($el -gt 0) { [math]::Round($r.usage.completion_tokens / $el, 2) } else { 0 }
+            $probeOk = $true
+        } catch {}
+        $vramMb  = 0
+        $gpuSeen = $false
+        if ($nvsmiOk -and ($probeNum % 2 -eq 0)) {
+            try {
+                $totMem = (nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>&1) -join ""
+                if ($totMem -match '(\d+)') { $vramMb = [int]$Matches[1]; $gpuSeen = ($vramMb -ge 300) }
+            } catch {}
+        }
+        $entry = @{ probe_num=$probeNum; timestamp=$ts.ToString("o"); tok_per_sec=$tps; probe_ok=$probeOk; vram_mb=$vramMb; gpu_seen=$gpuSeen }
+        $history.Add($entry)
+        try { @{ run_id=$runId; probes=@($history) } | ConvertTo-Json -Depth 5 -Compress | Set-Content $histPath -Encoding UTF8 } catch {}
+        if ($probeOk -and $tps -gt 0 -and $tps -lt $fallbackTh) {
+            "tok_per_sec=$tps probe_num=$probeNum" | Set-Content $flagPath -Encoding UTF8
+        }
+    }
+} -ArgumentList $_gpuCompUrl, $_gpuProbeHistPath, $_gpuFallbackFlag, $_voRunId, $_gpuCeInterval, $_gpuCeFallbackTh
+
+Write-Output ("  [GPU_CONTINUOUS_ENFORCEMENT_HARD] ????ａ?撌脣???(??={0}s  CPU??瑼?{1} tok/s)" -f $_gpuCeInterval, $_gpuCeFallbackTh)
+Write-Output ""
 # ---- Step 1: Z0 online collection + supply fallback ----
 $_z0Dir          = Join-Path $repoRoot "data\raw\z0"
 $_z0Latest       = Join-Path $_z0Dir   "latest.jsonl"
@@ -887,6 +933,19 @@ $env:PIPELINE_RUN_ID       = $null
 $env:PIPELINE_TRIGGERED_BY = $null
 $env:PYTEST_ADDOPTS        = $null
 
+
+# GPU_CONTINUOUS_ENFORCEMENT_HARD: stop probe job + evaluate (iter35)
+Stop-Job    -Job $_gpuCeJob -ErrorAction SilentlyContinue
+Receive-Job -Job $_gpuCeJob -ErrorAction SilentlyContinue | Out-Null
+Remove-Job  -Job $_gpuCeJob -ErrorAction SilentlyContinue
+Write-Output "  [GPU_CONTINUOUS_ENFORCEMENT_HARD] ?ａ?雿平撌脣?甇?
+if (Test-Path $_gpuFallbackFlag) {
+    $_ceFlag           = (Get-Content $_gpuFallbackFlag -ErrorAction SilentlyContinue) -join " "
+    $_ceFallbackReason = "GPU_FALLBACK_DETECTED: $_ceFlag ??CPU mode detected during pipeline execution"
+    Write-Output ("  => 銝剝?CPU ??菜葫: {0}" -f $_ceFallbackReason)
+    Invoke-VerifyOnlineFailFast -Gate "GPU_FALLBACK_DETECTED" -Reason $_ceFallbackReason `
+        -NextSteps "GPU ?冽?蝔葉????CPU 璅∪???蝣箄? llama-server 雿輻 --n-gpu-layers 999 ??銝虫???tok_per_sec >= 12??
+}
 if ($exitCode -ne 0) {
     # verify_run can fail after all hard gates pass when DOCX is file-locked during
     # output hash evidence (Get-FileHash on executive_report.docx). Keep this path
@@ -3829,8 +3888,27 @@ if (Test-Path $_teMetaPatchPath) {
         if (-not $_teObj.ContainsKey("run_id") -or [string]$_teObj["run_id"] -ne $_voRunId) {
             $_teObj["run_id"] = $_voRunId
         }
+        # iter35: add continuous probe tok/s data
+        if (Test-Path $_gpuProbeHistPath) {
+            try {
+                $_phData  = Get-Content $_gpuProbeHistPath -Raw -ErrorAction Stop | ConvertFrom-Json
+                $_tokSArr = @($_phData.probes | ForEach-Object { $_.tok_per_sec } | Where-Object { $_ -gt 0 })
+                if ($_tokSArr.Count -gt 0) {
+                    $_teObj["calls_tok_s"] = $_tokSArr
+                    $_teObj["tok_s_min"]   = [math]::Round(($_tokSArr | Measure-Object -Minimum).Minimum, 2)
+                    $_teObj["tok_s_avg"]   = [math]::Round(($_tokSArr | Measure-Object -Average).Average, 2)
+                    $_teObj["tok_s_max"]   = [math]::Round(($_tokSArr | Measure-Object -Maximum).Maximum, 2)
+                } else {
+                    $_teObj["calls_tok_s"] = @(); $_teObj["tok_s_min"] = $null; $_teObj["tok_s_avg"] = $null; $_teObj["tok_s_max"] = $null
+                }
+            } catch { $_teObj["calls_tok_s"] = @() }
+        } else {
+            $_teObj["calls_tok_s"] = @(); $_teObj["tok_s_min"] = $null; $_teObj["tok_s_avg"] = $null; $_teObj["tok_s_max"] = $null
+        }
+        $_teObj["cpu_fallback_detected"] = (Test-Path $_gpuFallbackFlag)
         $_teObj | ConvertTo-Json -Depth 5 -Compress | Set-Content $_teMetaPatchPath -Encoding UTF8
-        Write-Output ("  [iter34] translation_engine.meta.json 已更新: tok_per_sec_est={0:F1}  gpu_required=true" -f $_gpuTokPerSec)
+        Write-Output ("  [iter35] translation_engine.meta.json 撌脫?? tok_per_sec_est={0:F1}  calls_tok_s_count={1}  cpu_fallback={2}" `
+            -f $_gpuTokPerSec, @($_teObj["calls_tok_s"]).Count, $_teObj["cpu_fallback_detected"])
     } catch {
         Write-Output ("  [WARN] translation_engine.meta.json patch 失敗: {0}" -f $_)
     }
