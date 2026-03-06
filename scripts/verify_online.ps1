@@ -4401,6 +4401,37 @@ if ($_ridFail) {
 Write-Output "  [RUN_ID_COHERENCE_HARD] 通過"
 
 # ---------------------------------------------------------------------------
+# iter43: ALL_MISS_BUDGET_ESTIMATE_HARD
+# When translate_mode=all_cache_hit, use est_total_seconds_if_all_miss to verify
+# that a full-miss day would still complete within time_budget_seconds (200s).
+# ---------------------------------------------------------------------------
+$_amEstPath = Join-Path $repoRoot "outputs\translation_engine.meta.json"
+if (Test-Path $_amEstPath) {
+    try {
+        $_amMeta = Get-Content $_amEstPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $_amMode = [string]$_amMeta.translate_mode
+        $_amEst  = if ($null -ne $_amMeta.est_total_seconds_if_all_miss) { [int]$_amMeta.est_total_seconds_if_all_miss } else { 0 }
+        $_amBudget = $_voBudgetSec
+        Write-Output "ALL_MISS_BUDGET_ESTIMATE_HARD:"
+        Write-Output ("  translate_mode={0}  est_total_seconds_if_all_miss={1}  budget={2}" -f $_amMode, $_amEst, $_amBudget)
+        if ($_amEst -gt 0 -and $_amEst -le $_amBudget) {
+            Write-Output ("  => ALL_MISS_BUDGET_ESTIMATE_HARD: PASS (est={0}s <= budget={1}s)" -f $_amEst, $_amBudget)
+        } elseif ($_amEst -gt $_amBudget) {
+            Write-Output ("  => ALL_MISS_BUDGET_ESTIMATE_HARD: FAIL (est={0}s > budget={1}s)" -f $_amEst, $_amBudget)
+            Invoke-VerifyOnlineFailFast -Gate "ALL_MISS_BUDGET_ESTIMATE_HARD" `
+                -Reason ("ALL_MISS_BUDGET_ESTIMATE_HARD: est_total_seconds_if_all_miss={0}s > budget={1}s; tok/s-based workload estimate exceeds hard cap" -f $_amEst, $_amBudget)
+        } else {
+            Write-Output ("  => ALL_MISS_BUDGET_ESTIMATE_HARD: SKIP (est={0}, cannot verify)" -f $_amEst)
+        }
+    } catch {
+        Write-Output ("  ALL_MISS_BUDGET_ESTIMATE_HARD: WARN (parse error: {0})" -f $_)
+    }
+} else {
+    Write-Output "ALL_MISS_BUDGET_ESTIMATE_HARD: SKIP (translation_engine.meta.json not found)"
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # iter42b: PPTX_FORBIDDEN_HARD — three-layer defense: layer 3 (final gate)
 # Any *.pptx in outputs/ → FAIL (even if pipeline didn't generate them, e.g. stale files)
 # ---------------------------------------------------------------------------

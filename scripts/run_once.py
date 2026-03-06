@@ -7608,7 +7608,9 @@ def _translate_digest_1to1(
         # Check cache
         _cache_key = _make_translation_cache_key(_url or _title, model_id, "\n".join(_bullets_en))
         _zh_bullets: "list[str]"
-        if _cache_key in _cache:
+        # iter43: TRANSLATION_CACHE_BYPASS — force cache miss for all-miss testing
+        _cache_bypass = os.environ.get("TRANSLATION_CACHE_BYPASS", "") == "1"
+        if _cache_key in _cache and not _cache_bypass:
             _zh_bullets = _cache[_cache_key]
             _stats["cache_hit"] += 1
             import logging as _td1_log; _td1_log.getLogger("ai_intel").info("iter30 1:1 translate: event %d CACHE HIT (key=%s)", _ei, _cache_key)
