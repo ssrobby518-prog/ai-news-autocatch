@@ -938,13 +938,13 @@ $env:PYTEST_ADDOPTS        = $null
 Stop-Job    -Job $_gpuCeJob -ErrorAction SilentlyContinue
 Receive-Job -Job $_gpuCeJob -ErrorAction SilentlyContinue | Out-Null
 Remove-Job  -Job $_gpuCeJob -ErrorAction SilentlyContinue
-Write-Output "  [GPU_CONTINUOUS_ENFORCEMENT_HARD] ?ａ?雿平撌脣?甇?
+Write-Output "  [GPU_CONTINUOUS_ENFORCEMENT_HARD] probe job stopped"
 if (Test-Path $_gpuFallbackFlag) {
     $_ceFlag           = (Get-Content $_gpuFallbackFlag -ErrorAction SilentlyContinue) -join " "
     $_ceFallbackReason = "GPU_FALLBACK_DETECTED: $_ceFlag ??CPU mode detected during pipeline execution"
     Write-Output ("  => 銝剝?CPU ??菜葫: {0}" -f $_ceFallbackReason)
     Invoke-VerifyOnlineFailFast -Gate "GPU_FALLBACK_DETECTED" -Reason $_ceFallbackReason `
-        -NextSteps "GPU ?冽?蝔葉????CPU 璅∪???蝣箄? llama-server 雿輻 --n-gpu-layers 999 ??銝虫???tok_per_sec >= 12??
+        -NextSteps "GPU fell back to CPU mode during pipeline. Ensure llama-server uses --n-gpu-layers 999 and tok_per_sec >= 12."
 }
 if ($exitCode -ne 0) {
     # verify_run can fail after all hard gates pass when DOCX is file-locked during
