@@ -23,7 +23,7 @@ $repoRoot = Split-Path $PSScriptRoot -Parent
 $_voRunId    = (Get-Date -Format "yyyyMMdd_HHmmss")
 $_startedAt  = Get-Date
 $_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 3600 }  # iter32e: CPU Qwen constraint → 3600s hard cap (1800s soft-warn below)
+$_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 600 }  # iter33: reduced hard cap to 600s (soft-warn 480s below)
 $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
 
 # ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ function Append-TimingFooterToMd {
     # iter31: stage breakdown (if available)
     if ($StageSec -and $StageSec.Count -gt 0) {
         $footer.Add("- 分段耗時：")
-        foreach ($k in @("z0_collect","hydration","card_build","translate","build_docx","build_pptx","gates")) {
+        foreach ($k in @("z0_collect","hydrate","card_build","translate","build_docx","gates")) {  # iter33: hydration→hydrate, no build_pptx
             if ($StageSec.ContainsKey($k)) {
                 $footer.Add(("  - {0}：{1} 秒" -f $k, $StageSec[$k]))
             }
@@ -134,10 +134,8 @@ function Invoke-VerifyOnlineFailFast {
     foreach ($staleRel in @(
         "outputs\latest_brief.md",
         "outputs\executive_report.docx",
-        "outputs\executive_report.pptx",
         "outputs\NOT_READY_report.md",
         "outputs\NOT_READY_report.docx",
-        "outputs\NOT_READY_report.pptx",
         "outputs\deep_analysis.md",
         "outputs\deep_analysis_education.md",
         "outputs\notion_page.md",
@@ -186,7 +184,7 @@ reason: $Reason
     }
 
     $_voNrProdList = @()
-    foreach ($__nrf in @("NOT_READY_report.md","NOT_READY_report.docx","NOT_READY_report.pptx")) {
+    foreach ($__nrf in @("NOT_READY_report.md","NOT_READY_report.docx")) {
         if (Test-Path (Join-Path $outputsDir $__nrf)) { $_voNrProdList += "outputs\$__nrf" }
     }
     $_voNrProdStr = if ($_voNrProdList) { $_voNrProdList -join ", " } else { "(none)" }
@@ -807,24 +805,21 @@ if ($exitCode -ne 0) {
             $vrLockMsg    = [bool](Select-String -Path $_verifyRunLogPath -Pattern "being used by another process" -SimpleMatch | Select-Object -Last 1)
             $vrLockMsgCN  = [bool](Select-String -Path $_verifyRunLogPath -Pattern "因為檔案正由另一個程序使用" -SimpleMatch | Select-Object -Last 1)
 
-            $_vrPptxCanon = Join-Path $repoRoot "outputs\executive_report.pptx"
-            $_vrPptxBrief = Join-Path $repoRoot "outputs\executive_report_brief.pptx"
-            $vrPptxExists = (Test-Path $_vrPptxCanon) -or (Test-Path $_vrPptxBrief)
-            $vrPptxSizeOk = $false
-            if (Test-Path $_vrPptxCanon) {
-                $vrPptxSizeOk = ((Get-Item $_vrPptxCanon).Length -gt 0)
-            } elseif (Test-Path $_vrPptxBrief) {
-                $vrPptxSizeOk = ((Get-Item $_vrPptxBrief).Length -gt 0)
-            }
-
+            # iter33: PPTX discontinued; fallback only checks DOCX
             $_vrDocxCanon = Join-Path $repoRoot "outputs\executive_report.docx"
             $_vrDocxBrief = Join-Path $repoRoot "outputs\executive_report_brief.docx"
             $vrDocxExists = (Test-Path $_vrDocxCanon) -or (Test-Path $_vrDocxBrief)
+            $vrDocxSizeOk = $false
+            if (Test-Path $_vrDocxCanon) {
+                $vrDocxSizeOk = ((Get-Item $_vrDocxCanon).Length -gt 0)
+            } elseif (Test-Path $_vrDocxBrief) {
+                $vrDocxSizeOk = ((Get-Item $_vrDocxBrief).Length -gt 0)
+            }
 
-            if ($vrPass10of10 -and $vrHashMsg -and $vrDocxMsg -and ($vrLockMsg -or $vrLockMsgCN) -and $vrPptxExists -and $vrPptxSizeOk -and $vrDocxExists) {
+            if ($vrPass10of10 -and $vrHashMsg -and $vrDocxMsg -and ($vrLockMsg -or $vrLockMsgCN) -and $vrDocxExists -and $vrDocxSizeOk) {
                 $docxHashLockFallback = $true
                 $exitCode = 0
-                Write-Output "[verify_online] WARN-OK: verify_run non-gate hash evidence hit DOCX lock (WinError32 path); hard gates PASS and PPTX exists."
+                Write-Output "[verify_online] WARN-OK: verify_run non-gate hash evidence hit DOCX lock (WinError32 path); hard gates PASS and DOCX exists."
             }
         } catch {
             # Keep original exit handling if log parsing fails.
@@ -864,9 +859,9 @@ if ($exitCode -ne 0) {
                 }
             } catch {}
         }
-        # Build produced_files list from NOT_READY_report three-piece
+        # Build produced_files list from NOT_READY_report two-piece (iter33: pptx discontinued)
         $_voNrProdList = @()
-        foreach ($__nrf in @("NOT_READY_report.md","NOT_READY_report.docx","NOT_READY_report.pptx")) {
+        foreach ($__nrf in @("NOT_READY_report.md","NOT_READY_report.docx")) {
             if (Test-Path (Join-Path $repoRoot "outputs\$__nrf")) { $_voNrProdList += "outputs\$__nrf" }
         }
         $_voNrProdStr = if ($_voNrProdList) { $_voNrProdList -join ", " } else { "(none)" }
@@ -1343,7 +1338,6 @@ $ARCHIVE_HEAD = $($_dirLeaf -replace '^\d{8}_\d{6}_', '')
 $ARCHIVE_HEAD_MATCH = if ($CURRENT_HEAD -eq $ARCHIVE_HEAD) { "PASS" } else { "FAIL" }
 
 $_toArchive = @(
-    "outputs\executive_report.pptx",
     "outputs\executive_report.docx",
     "outputs\exec_selection.meta.json",
     "outputs\exec_kpi.meta.json",
@@ -1370,16 +1364,16 @@ if ($ARCHIVE_HEAD_MATCH -eq "FAIL") {
 }
 
 # ---------------------------------------------------------------------------
-# CANONICAL_DELIVERY_CONSISTENCY GATE — Stage 4 (Iteration 11)
-#   Compares SHA-256 of outputs\executive_report.pptx (canonical) with the
+# CANONICAL_DELIVERY_CONSISTENCY GATE — Stage 4 (Iteration 11; iter33: DOCX only)
+#   Compares SHA-256 of outputs\executive_report.docx (canonical) with the
 #   copy just archived into $_deliveryDir.  No Admin required.
 #   PASS    : both exist and hashes match
 #   FAIL    : both exist but hashes differ (canonical != delivery — diverged)
 #   OK      : delivery was not archived this run (allowed; canonical is the true source)
 #   WARN-OK : canonical itself not found (pipeline did not produce output)
 # ---------------------------------------------------------------------------
-$_cdcCanonPath   = Join-Path $repoRoot "outputs\executive_report.pptx"
-$_cdcDelivPath   = Join-Path $_deliveryDir "executive_report.pptx"
+$_cdcCanonPath   = Join-Path $repoRoot "outputs\executive_report.docx"
+$_cdcDelivPath   = Join-Path $_deliveryDir "executive_report.docx"
 
 Write-Output ""
 Write-Output "CANONICAL_DELIVERY_CONSISTENCY:"
@@ -1403,7 +1397,7 @@ if ((Test-Path $_cdcCanonPath) -and (Test-Path $_cdcDelivPath)) {
 } elseif (-not (Test-Path $_cdcCanonPath)) {
     Write-Output ("  canonical_path  : {0} (not found)" -f $_cdcCanonPath)
     Write-Output ""
-    Write-Output "  => CANONICAL_DELIVERY_CONSISTENCY: WARN-OK (canonical outputs\executive_report.pptx not found)"
+    Write-Output "  => CANONICAL_DELIVERY_CONSISTENCY: WARN-OK (canonical outputs\executive_report.docx not found)"
 } else {
     Write-Output ("  canonical_path  : {0}" -f $_cdcCanonPath)
     Write-Output ("  delivery_path   : {0} (not archived this run)" -f $_cdcDelivPath)
@@ -1551,11 +1545,9 @@ if (Test-Path $execDelivMetaOnlinePath) {
                 }
             }
             # Align with pipeline semantics: when this check throws WinError 32 it is
-            # explicitly non-fatal, and canonical DOCX/PPTX must still be validated.
+            # explicitly non-fatal, and canonical DOCX must still be validated (iter33: PPTX discontinued).
             $edDocxPath = Join-Path $repoRoot "outputs\executive_report.docx"
-            $edPptxPath = Join-Path $repoRoot "outputs\executive_report.pptx"
             $edDocxOk = (Test-Path $edDocxPath) -and ((Get-Item $edDocxPath).Length -gt 0)
-            $edPptxOk = (Test-Path $edPptxPath) -and ((Get-Item $edPptxPath).Length -gt 0)
             $edHasWin32NonFatal = $false
             $edLogPath = Join-Path $repoRoot "logs\app.log"
             if (Test-Path $edLogPath) {
@@ -1563,8 +1555,8 @@ if (Test-Path $execDelivMetaOnlinePath) {
                     $edHasWin32NonFatal = [bool](Select-String -Path $edLogPath -Pattern "EXEC_DELIVERABLE_DOCX_PPTX_HARD check failed (non-fatal): [WinError 32]" -SimpleMatch | Select-Object -Last 1)
                 } catch { }
             }
-            if ($edHasWin32NonFatal -and $edDocxOk -and $edPptxOk) {
-                Write-Output "  => EXEC_DELIVERABLE_DOCX_PPTX_HARD: WARN-OK (WinError 32 non-fatal path; DOCX/PPTX present)"
+            if ($edHasWin32NonFatal -and $edDocxOk) {
+                Write-Output "  => EXEC_DELIVERABLE_DOCX_PPTX_HARD: WARN-OK (WinError 32 non-fatal path; DOCX present)"
             } else {
                 exit 1
             }
@@ -1703,52 +1695,11 @@ if (Test-Path $briefMinerMetaPath) {
 }
 
 # ---------------------------------------------------------------------------
-# PPTX_MEDIA_AUDIT (soft): observability only; never affects PASS/FAIL.
+# PPTX_MEDIA_AUDIT (soft): iter33 — PPTX discontinued; gate always SKIPs.
 # ---------------------------------------------------------------------------
 Write-Output ""
 Write-Output "PPTX_MEDIA_AUDIT (soft):"
-$pptxExecPath = Join-Path $repoRoot "outputs\executive_report.pptx"
-$pptxNotReadyPath = Join-Path $repoRoot "outputs\NOT_READY_report.pptx"
-$pptxAuditPath = ""
-if (Test-Path $pptxExecPath) {
-    $pptxAuditPath = $pptxExecPath
-} elseif (Test-Path $pptxNotReadyPath) {
-    $pptxAuditPath = $pptxNotReadyPath
-}
-if (-not $pptxAuditPath) {
-    Write-Output "  PPTX_MEDIA_AUDIT: SKIP (no pptx found)"
-} else {
-    try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($pptxAuditPath)
-        try {
-            $slideCount = @($zip.Entries | Where-Object { $_.FullName -match '^ppt/slides/slide\d+\.xml$' }).Count
-            $imageCount = @($zip.Entries | Where-Object { $_.FullName -match '^ppt/media/.*\.(png|jpg|jpeg|gif|bmp|wmf|emf)$' }).Count
-            $slideRangeStatus = "SKIP"
-            if ($reportMode -eq "brief") {
-                if ($slideCount -ge 5 -and $slideCount -le 10) {
-                    $slideRangeStatus = "OK"
-                } else {
-                    $slideRangeStatus = "WARN"
-                }
-            } else {
-                $slideRangeStatus = "N/A"
-            }
-            Write-Output ("  pptx_path     : {0}" -f $pptxAuditPath)
-            Write-Output ("  report_mode   : {0}" -f $(if ($reportMode) { $reportMode } else { "unknown" }))
-            Write-Output ("  slide_count   : {0}" -f $slideCount)
-            Write-Output ("  image_count   : {0}" -f $imageCount)
-            Write-Output "  expected_slide_range_if_brief : 5-10"
-            Write-Output ("  slide_range_status           : {0}" -f $slideRangeStatus)
-            Write-Output "  expected_images_if_brief : 0"
-            Write-Output "  note          : brief 模式期望 image_count=0（僅提示，不影響 PASS/FAIL）；demo 建議 slide_count 落在 5-10"
-        } finally {
-            $zip.Dispose()
-        }
-    } catch {
-        Write-Output ("  PPTX_MEDIA_AUDIT: SKIP (audit error: {0})" -f $_)
-    }
-}
+Write-Output "  PPTX_MEDIA_AUDIT: SKIP (PPTX discontinued in iter33)"
 
 if ($briefAnyFail) {
     exit 1
@@ -2128,25 +2079,14 @@ $voExecBanPhrases = @(
 $voCjkBanCheck = & $voPy -c "
 import sys, re
 try:
-    from pptx import Presentation
     from docx import Document
-    pptx_text = ''
     docx_text = ''
-    try:
-        prs = Presentation('outputs/executive_report.pptx')
-        for slide in prs.slides:
-            for shape in slide.shapes:
-                if shape.has_text_frame:
-                    for p in shape.text_frame.paragraphs:
-                        pptx_text += p.text + ' '
-    except Exception:
-        pass
     try:
         doc = Document('outputs/executive_report.docx')
         docx_text = ' '.join(p.text for p in doc.paragraphs)
     except Exception:
         pass
-    combined = pptx_text + ' ' + docx_text
+    combined = docx_text
     cjk_banned = [
         '\u8a73\u898b\u539f\u59cb\u4f86\u6e90',
         '\u76e3\u63a7\u4e2d \u672c\u6b04\u66ab\u7121\u4e8b\u4ef6',
@@ -2165,16 +2105,6 @@ except Exception as e:
 " 2>$null
 $voExecBanHits = 0
 
-$voPptxScanText = & $voPy -c "
-from pptx import Presentation
-prs = Presentation('outputs/executive_report.pptx')
-for slide in prs.slides:
-    for shape in slide.shapes:
-        if shape.has_text_frame:
-            for p in shape.text_frame.paragraphs:
-                print(p.text, end=' ')
-" 2>$null
-
 $voDocxScanText = & $voPy -c "
 from docx import Document
 doc = Document('outputs/executive_report.docx')
@@ -2185,10 +2115,10 @@ for t in doc.tables:
             print(cell.text, end=' ')
 " 2>$null
 
-$voCombined = "$voPptxScanText $voDocxScanText"
+$voCombined = "$voDocxScanText"
 foreach ($bp in $voExecBanPhrases) {
     if ($voCombined -match $bp) {
-        Write-Output ("  FAIL: Banned phrase '{0}' found in PPT/DOCX output" -f $bp)
+        Write-Output ("  FAIL: Banned phrase '{0}' found in DOCX output" -f $bp)
         $voExecBanHits++
     }
 }
@@ -2754,25 +2684,14 @@ $voNaEventsTotal = if ((Test-Path $voNaPath) -and $voNa -and $voNa.PSObject.Prop
 $voGenericHits = & $voPy -c "
 import sys
 try:
-    from pptx import Presentation
     from docx import Document
-    pptx_text = ''
     docx_text = ''
-    try:
-        prs = Presentation('outputs/executive_report.pptx')
-        for slide in prs.slides:
-            for shape in slide.shapes:
-                if shape.has_text_frame:
-                    for p in shape.text_frame.paragraphs:
-                        pptx_text += p.text + ' '
-    except Exception:
-        pass
     try:
         doc = Document('outputs/executive_report.docx')
         docx_text = ' '.join(p.text for p in doc.paragraphs)
     except Exception:
         pass
-    combined = pptx_text + ' ' + docx_text
+    combined = docx_text
     generic_phrases = [
         '\u5f15\u767c\u696d\u754c\u5ee3\u6cdb\u95dc\u6ce8',
         '\u5177\u6709\u91cd\u8981\u610f\u7fa9',
@@ -2833,11 +2752,10 @@ if (Test-Path $voDbPath) {
 }
 
 # ---------------------------------------------------------------------------
-# AUTOOPEN_TARGET GATE — Stage 4 (Iteration 11)
+# AUTOOPEN_TARGET GATE — Stage 4 (Iteration 11; iter33: PPTX discontinued)
 #   Static analysis of scripts\open_ppt.ps1 to verify the AutoOpen chain
 #   never routes to outputs\deliveries or pointer files.
-#   PASS    : open_ppt.ps1 exists, contains no deliveries/pointer references,
-#             and explicitly opens outputs\executive_report.pptx
+#   PASS    : open_ppt.ps1 exists and contains no deliveries/pointer references
 #   FAIL    : open_ppt.ps1 references deliveries or latest_delivery pointer files
 #   WARN-OK : open_ppt.ps1 not found or content unclear
 # ---------------------------------------------------------------------------
@@ -2850,14 +2768,13 @@ if (Test-Path $voAtScript) {
         $voAtContent       = Get-Content $voAtScript -Raw -Encoding UTF8
         $voAtHasDeliveries = [bool]($voAtContent -imatch "deliveries")
         $voAtHasPointer    = [bool]($voAtContent -imatch "latest_delivery")
-        $voAtHasCanon      = [bool]($voAtContent -imatch "executive_report\.pptx")
         Write-Output ("  open_ppt_path      : {0}" -f $voAtScript)
         Write-Output ("  scans_deliveries   : {0}" -f $voAtHasDeliveries)
         Write-Output ("  reads_pointer_file : {0}" -f $voAtHasPointer)
-        Write-Output ("  opens_canonical    : {0}" -f $voAtHasCanon)
+        Write-Output ("  note               : PPTX discontinued in iter33; canonical check skipped")
         Write-Output ""
-        if (-not $voAtHasDeliveries -and -not $voAtHasPointer -and $voAtHasCanon) {
-            Write-Output "  => AUTOOPEN_TARGET: PASS (open_ppt.ps1 opens outputs\executive_report.pptx only)"
+        if (-not $voAtHasDeliveries -and -not $voAtHasPointer) {
+            Write-Output "  => AUTOOPEN_TARGET: PASS (open_ppt.ps1 has no deliveries/pointer references)"
         } elseif ($voAtHasDeliveries -or $voAtHasPointer) {
             Write-Output "  => AUTOOPEN_TARGET: FAIL (open_ppt.ps1 still references deliveries or pointer files)"
         } else {
@@ -3722,7 +3639,7 @@ if (Test-Path $showcaseReadyPath) {
     } catch {}
 }
 $_voProdList = @()
-foreach ($__pf in @("latest_brief.md","executive_report.docx","executive_report.pptx")) {
+foreach ($__pf in @("latest_brief.md","executive_report.docx")) {
     if (Test-Path (Join-Path $repoRoot "outputs\$__pf")) { $_voProdList += "outputs\$__pf" }
 }
 $_voProdStr = if ($_voProdList) { $_voProdList -join ", " } else { "(none)" }
@@ -3749,7 +3666,7 @@ Write-Output ""
 # 1800s soft-warn 保留於 ⏱️ 耗時 footer。
 # ---------------------------------------------------------------------------
 $_iter32_elapsed = [int]$_voStopwatch.Elapsed.TotalSeconds
-$_iter32_softWarn = 1800
+$_iter32_softWarn = 480
 if ($_iter32_elapsed -gt $_iter32_softWarn) {
     Write-Output ("[WARN] TIME_BUDGET_SOFT: {0}s > soft-warn {1}s (hard-cap={2}s)" -f $_iter32_elapsed, $_iter32_softWarn, $_voBudgetSec)
 }
@@ -3757,7 +3674,7 @@ Write-Output ("[iter32e] TIME_BUDGET 硬上限方案：硬上限={0}s  本次耗
 if ($_iter32_elapsed -gt $_voBudgetSec) {
     Write-Output ("[FAIL] TIME_BUDGET_EXCEEDED: {0}s > hard-cap {1}s → NOT_READY + exit 1" -f $_iter32_elapsed, $_voBudgetSec)
     # 刪除成功產物，避免被誤認為有效輸出
-    foreach ($_i32del in @("outputs\latest_brief.md","outputs\executive_report.docx","outputs\executive_report.pptx")) {
+    foreach ($_i32del in @("outputs\latest_brief.md","outputs\executive_report.docx")) {
         $_i32delp = Join-Path $repoRoot $_i32del
         if (Test-Path $_i32delp) { Remove-Item -LiteralPath $_i32delp -Force -ErrorAction SilentlyContinue }
     }

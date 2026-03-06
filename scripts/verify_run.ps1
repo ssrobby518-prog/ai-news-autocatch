@@ -247,17 +247,14 @@ if ($vrSparseDay) {
 }
 $execFiles = @(
     @{ Name="DOCX"; Path="outputs\executive_report.docx" },
-    @{ Name="PPTX"; Path="outputs\executive_report.pptx" },
     @{ Name="Notion"; Path="outputs\notion_page.md" },
     @{ Name="XMind"; Path="outputs\mindmap.xmind" }
 )
 $minSizes = @{
     "DOCX" = 10240
-    "PPTX" = 20480
 }
 $execAltPaths = @{
     "DOCX" = @("outputs\executive_report_brief.docx")
-    "PPTX" = @("outputs\executive_report_brief.pptx")
 }
 $binPass = $true
 $resolvedExecPaths = @{}
@@ -305,12 +302,9 @@ if (-not $binPass) {
 Write-Host "  Executive output check passed." -ForegroundColor Green
 
 $docxPathForChecks = if ($resolvedExecPaths.ContainsKey("DOCX")) { $resolvedExecPaths["DOCX"] } else { "outputs\executive_report.docx" }
-$pptxPathForChecks = if ($resolvedExecPaths.ContainsKey("PPTX")) { $resolvedExecPaths["PPTX"] } else { "outputs\executive_report.pptx" }
 $docxPathForPy = $docxPathForChecks -replace '\\', '/'
-$pptxPathForPy = $pptxPathForChecks -replace '\\', '/'
 # Pass paths via env vars to avoid CJK garbling when interpolated into Python -c args
 $env:_VRF_DOCX_PATH = $docxPathForChecks
-$env:_VRF_PPTX_PATH = $pptxPathForChecks
 
 # 9) Executive Output v3 guard ??banned words + embedded images
 Write-Host "`n[9/9] 執行摘要輸出 v3 守衛..." -ForegroundColor Yellow
@@ -330,7 +324,6 @@ $bannedWords = @(
 $v3Pass = $true
 $notionBannedHits = 0
 $docxBannedHits = 0
-$pptxBannedHits = 0
 
 # Check banned words in Notion page (plain text) — skip on sparse day if file absent
 if ($env:BRIEF_ONLY -eq "1") {
@@ -375,33 +368,7 @@ if ($docxText) {
     }
 }
 
-# Check banned words in PPTX (extract text via python; strip URLs to avoid false positives)
-$pptxText = & $py -c "
-import re, os
-from pptx import Presentation
-prs = Presentation(os.environ['_VRF_PPTX_PATH'])
-raw = ''
-for slide in prs.slides:
-    for shape in slide.shapes:
-        if shape.has_text_frame:
-            for p in shape.text_frame.paragraphs:
-                raw += p.text + ' '
-        if shape.has_table:
-            for row in shape.table.rows:
-                for cell in row.cells:
-                    raw += cell.text + ' '
-raw = re.sub(r'https?://\S+', ' URL_STRIPPED ', raw)
-print(raw)
-" 2>$null
-if ($pptxText) {
-    foreach ($bw in $bannedWords) {
-        if ($pptxText -match [regex]::Escape($bw)) {
-            Write-Host "  FAIL: Banned word '$bw' found in executive_report.pptx" -ForegroundColor Red
-            $pptxBannedHits++
-            $v3Pass = $false
-        }
-    }
-}
+# PPTX banned phrase check: SKIP (Iter33 — PPTX delivery discontinued)
 
 # Count event cards for context (event cards need per-card images; zero events still need banner)
 $eventCardCount = & $py -c "import os; from docx import Document; doc = Document(os.environ['_VRF_DOCX_PATH']); print(sum(1 for p in doc.paragraphs if p.text.lstrip().startswith(chr(31532))))" 2>$null
@@ -423,28 +390,7 @@ if ($docxImageCount -lt 1) {
     Write-Host "  DOCX embedded images: $docxImageCount file(s)" -ForegroundColor Green
 }
 
-# PPTX must always have at least 1 embedded image (banner on cover or per-card images)
-# EXCEPTION: brief mode intentionally removes all images from PPTX (per design) — skip check
-$isBriefModeVr = $false
-$briefMinMetaVrPath = Join-Path $PSScriptRoot "..\outputs\brief_min_events_hard.meta.json"
-if (Test-Path $briefMinMetaVrPath) { $isBriefModeVr = $true }
-if ($isBriefModeVr) {
-    Write-Host "  PPTX image check: SKIP (brief mode — images intentionally absent)" -ForegroundColor Yellow
-} else {
-    $pptxHasImage = & $py -c "
-import zipfile, os
-with zipfile.ZipFile(os.environ['_VRF_PPTX_PATH']) as z:
-    media = [n for n in z.namelist() if n.startswith('ppt/media/')]
-    print(len(media))
-" 2>$null
-    $pptxImageCount = if ($pptxHasImage) { [int]$pptxHasImage } else { 0 }
-    if ($pptxImageCount -lt 1) {
-        Write-Host "  FAIL: PPTX has no embedded images (ppt/media/ is empty)" -ForegroundColor Red
-        $v3Pass = $false
-    } else {
-        Write-Host "  PPTX embedded images: $pptxImageCount file(s)" -ForegroundColor Green
-    }
-}
+# PPTX image check: SKIP (Iter33 — PPTX delivery discontinued)
 
 if (-not $v3Pass) {
     Write-Host "  Executive Output v3 guard FAILED" -ForegroundColor Red
@@ -491,66 +437,8 @@ if (Test-Path $zhMetaVerifyPath) {
 }
 
 # ---------------------------------------------------------------------------
-# Executive Slide Density Audit (post-step-9; hard gate for 3 key slides)
+# Executive Slide Density Audit: SKIP (Iter33 — PPTX delivery discontinued)
 # ---------------------------------------------------------------------------
-Write-Host "`n[Density Audit] Executive Slide Density Audit..." -ForegroundColor Yellow
-$densityRaw = & $py -c "
-import sys, json
-from pathlib import Path
-sys.path.insert(0, str(Path('.').resolve()))
-from scripts.diagnostics_pptx import slide_density_audit
-try:
-    res = slide_density_audit(Path('outputs/executive_report.pptx'))
-    print(json.dumps(res))
-except Exception as ex:
-    print(json.dumps([]))
-" 2>$null
-
-$densityAuditPass = $true
-$keyPatterns = @('Overview', '總覽', 'Event Ranking', '排行', 'Pending', '待決')
-$forbiddenFragments = @('Last July was')
-$requiredDensity = 80   # EXEC_REQUIRED_SLIDE_DENSITY (configurable)
-
-$requiredSemanticDensity = 40   # EXEC_SEMANTIC_THRESHOLDS default
-
-if ($densityRaw) {
-    try { $densityData = $densityRaw | ConvertFrom-Json } catch { $densityData = @() }
-    foreach ($s in $densityData) {
-        $tbl = "$($s.table_cells_nonempty)/$($s.table_cells_total)"
-        $semScore = if ($s.PSObject.Properties['semantic_score']) { $s.semantic_score } else { 0 }
-        Write-Host ("[DENSITY] slide={0:D2} title=`"{1}`" chars={2} table={3} terms={4} nums={5} sents={6} score={7} sem_score={8}" -f $s.slide_index, ($s.title -replace '"', "'"), $s.text_chars, $tbl, $s.terms, $s.numbers, $s.sentences, $s.density_score, $semScore)
-    }
-    foreach ($s in $densityData) {
-        # Forbidden fragment check (all slides)
-        foreach ($frag in $forbiddenFragments) {
-            if ($s.all_text -match [regex]::Escape($frag)) {
-                Write-Host "  [DENSITY FAIL] Forbidden fragment '$frag' in slide=$($s.slide_index) title=`"$($s.title)`""
-                $densityAuditPass = $false
-            }
-        }
-        # Hard gate for key slides — semantic (primary) + formal (secondary)
-        # Semantic gate is the hard gate: sem_score < threshold → truly hollow content → FAIL
-        # Formal density gate: low but sem OK → WARN only (sparse-day signal-only is acceptable)
-        $isKey = $false
-        foreach ($pat in $keyPatterns) { if ($s.title -like "*$pat*") { $isKey = $true; break } }
-        if ($isKey) {
-            $semScore = if ($s.PSObject.Properties['semantic_score']) { $s.semantic_score } else { 0 }
-            if ($semScore -lt $requiredSemanticDensity) {
-                Write-Host ("  [DENSITY FAIL] slide={0} title=`"{1}`" sem_score={2} < required_semantic={3} (hollow content)" -f $s.slide_index, $s.title, $semScore, $requiredSemanticDensity)
-                $densityAuditPass = $false
-            } elseif ($s.density_score -lt $requiredDensity) {
-                Write-Host ("  [DENSITY WARN] slide={0} title=`"{1}`" density={2} < {3} but sem_score={4} OK (sparse day, not hollow)" -f $s.slide_index, $s.title, $s.density_score, $requiredDensity, $semScore)
-            }
-        }
-    }
-    if (-not $densityAuditPass) {
-        Write-Host "  Executive Slide Density Audit FAILED"
-        exit 1
-    }
-    Write-Host "  Executive Slide Density Audit PASSED"
-} else {
-    Write-Host "  [Density Audit] Skipped (pptx parser returned no output)"
-}
 
 # ---------------------------------------------------------------------------
 # BRIEF hard gates (brief mode only; SKIP when meta absent)
@@ -811,9 +699,8 @@ Write-Host "EduNewsCard schema modified: $schemaModified"
 Write-Host "Schema proof command: git diff HEAD~1..HEAD -- schemas/education_models.py"
 Write-Host "Schema proof output: $schemaProofOutput"
 Write-Host ""
-Write-Host "Banned phrases detected: $($notionBannedHits + $docxBannedHits + $pptxBannedHits) hits"
+Write-Host "Banned phrases detected: $($notionBannedHits + $docxBannedHits) hits"
 Write-Host "DOCX output: $docxBannedHits hits"
-Write-Host "PPTX output: $pptxBannedHits hits"
 Write-Host ""
 
 # Translation Delivery meta — display + STALE_META guard (Iteration 19)
@@ -1577,16 +1464,8 @@ $execBanPhrases = @(
 # Note: CJK banned phrases are checked below via Python subprocess (UTF-8 safe)
 $execBanHits = 0
 
-# Scan PPTX
-$pptxScanText = & $py -c "
-from pptx import Presentation
-prs = Presentation('outputs/executive_report.pptx')
-for slide in prs.slides:
-    for shape in slide.shapes:
-        if shape.has_text_frame:
-            for p in shape.text_frame.paragraphs:
-                print(p.text, end=' ')
-" 2>$null
+# Scan PPTX: SKIP (Iter33 — PPTX delivery discontinued)
+$pptxScanText = ""
 
 # Scan DOCX
 $docxScanText = & $py -c "
@@ -1599,7 +1478,7 @@ for t in doc.tables:
             print(cell.text, end=' ')
 " 2>$null
 
-$combinedScanText = "$pptxScanText $docxScanText"
+$combinedScanText = "$docxScanText"
 foreach ($bp in $execBanPhrases) {
     # Use IndexOf for literal matching; avoid regex interpretation of PPTX/DOCX content
     $isRegexPat = $bp -match '[\.\*\+\?\^\$\{\}\[\]\(\)\|\\]'
@@ -1618,25 +1497,14 @@ foreach ($bp in $execBanPhrases) {
 $cjkBanResult = & $py -c "
 import sys
 try:
-    from pptx import Presentation
     from docx import Document
-    pptx_text = ''
     docx_text = ''
-    try:
-        prs = Presentation('outputs/executive_report.pptx')
-        for slide in prs.slides:
-            for shape in slide.shapes:
-                if shape.has_text_frame:
-                    for p in shape.text_frame.paragraphs:
-                        pptx_text += p.text + ' '
-    except Exception:
-        pass
     try:
         doc = Document('outputs/executive_report.docx')
         docx_text = ' '.join(p.text for p in doc.paragraphs)
     except Exception:
         pass
-    combined = pptx_text + ' ' + docx_text
+    combined = docx_text
     cjk_banned = [
         '\u8a73\u898b\u539f\u59cb\u4f86\u6e90',
         '\u76e3\u63a7\u4e2d \u672c\u6b04\u66ab\u7121\u4e8b\u4ef6',
@@ -1794,7 +1662,6 @@ function Get-LatestArtifactPath {
 Write-Host ""
 Write-Host "OUTPUT ARTIFACTS EVIDENCE:"
 $_artSpecs = @(
-    @{ StdPath = "outputs\executive_report.pptx";    Pattern = "executive_report*.pptx" },
     @{ StdPath = "outputs\executive_report.docx";    Pattern = "executive_report*.docx" },
     @{ StdPath = "outputs\exec_selection.meta.json"; Pattern = "exec_selection*.json"   },
     @{ StdPath = "outputs\flow_counts.meta.json";    Pattern = "flow_counts*.json"      }

@@ -5268,7 +5268,7 @@ def _write_brief_fact_candidates_hard_meta(prepared: list[dict]) -> None:
       2. >= 6 total bullets correspond to fact_candidates (anchor/number/EN-word token overlap).
       3. Every bullet >= 14 CJK chars.
       4. >= 3 bullets contain an anchor or number.
-    FAIL: writes outputs/NOT_READY.md and deletes executive_report.pptx/.docx.
+    FAIL: writes outputs/NOT_READY.md and deletes executive_report.docx.
     """
     import json as _bfc_json
     _MIN_FC = 6
@@ -5355,7 +5355,7 @@ def _write_brief_fact_candidates_hard_meta(prepared: list[dict]) -> None:
             )
         except Exception:
             pass
-        for _art in ("executive_report.pptx", "executive_report.docx"):
+        for _art in ("executive_report.docx",):  # iter33: PPTX discontinued
             try:
                 _art_p = Path(settings.PROJECT_ROOT) / "outputs" / _art
                 if _art_p.exists():
@@ -6035,7 +6035,7 @@ def _generate_brief_md(prepared: list[dict], run_id: str, mode: str, report_mode
         # ???? Produced files ??????????????????????????????????????????????????????????????????????????????????????????????????????
         if not _brief_md_compact:
             _lines += ["## Produced Files", ""]
-            for _fn in ("executive_report.docx", "executive_report.pptx", "latest_brief.md"):
+            for _fn in ("executive_report.docx", "latest_brief.md"):  # iter33: PPTX discontinued
                 _fp = _out_dir / _fn
                 if _fp.exists():
                     _lines.append(f"- `outputs/{_fn}` ({_fp.stat().st_size:,} bytes)")
@@ -6403,10 +6403,27 @@ def _write_translation_engine_meta(
     calls_retry: int = 0,
     cache_hit: int = 0,
     cache_miss: int = 0,
+    tok_per_sec_est: float = 0.0,
+    gpu_process_found: bool = False,
 ) -> None:
     """Write outputs/translation_engine.meta.json — PM-required Qwen call evidence."""
     import json as _tem_j
     from datetime import datetime as _tem_dt, timezone as _tem_tz
+    # iter33: compute tok_per_sec_est if not provided
+    if tok_per_sec_est <= 0 and latency_ms > 0 and output_chars > 0:
+        # rough estimate: 4 chars ≈ 1 token
+        _est_toks = float(output_chars) / 4.0
+        tok_per_sec_est = round(_est_toks / (float(latency_ms) / 1000.0), 2)
+    # iter33: read gpu_process_found from gpu_probe.meta.json if not provided
+    if not gpu_process_found:
+        try:
+            import json as _gj
+            _gp = Path(settings.PROJECT_ROOT) / "outputs" / "gpu_probe.meta.json"
+            if _gp.exists():
+                _gdata = _gj.loads(_gp.read_text(encoding="utf-8"))
+                gpu_process_found = bool(_gdata.get("gpu_process_found", False))
+        except Exception:
+            pass
     _out = Path(settings.PROJECT_ROOT) / "outputs" / "translation_engine.meta.json"
     _out.parent.mkdir(parents=True, exist_ok=True)
     _meta = {
@@ -6425,6 +6442,8 @@ def _write_translation_engine_meta(
         "calls_retry": int(calls_retry),
         "cache_hit": int(cache_hit),
         "cache_miss": int(cache_miss),
+        "tok_per_sec_est": float(tok_per_sec_est),
+        "gpu_process_found": bool(gpu_process_found),
     }
     _out.write_text(_tem_j.dumps(_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -6445,11 +6464,12 @@ def _write_stage_timing_meta(run_id: str, stg: dict) -> None:
 
     _stage_secs = {
         "z0_collect": _dur("z0_collect_start", "z0_collect_end"),
-        "hydration":  _dur("hydration_start",  "hydration_end"),
+        "hydrate":    _dur("hydration_start",  "hydration_end"),   # iter33: renamed hydration→hydrate
         "card_build": _dur("card_build_start",  "card_build_end"),
         "translate":  _dur("translate_start",   "translate_end"),
         "build_docx": _dur("build_docx_start",  "build_docx_end"),
-        "build_pptx": _dur("build_pptx_start",  "build_pptx_end"),
+        "gates":      _dur("gates_start",       "gates_end"),       # iter33: gates stage
+        # iter33: build_pptx removed (PPTX delivery discontinued)
     }
     try:
         _p = Path(settings.PROJECT_ROOT) / "outputs" / "stage_timing.meta.json"
@@ -8547,8 +8567,7 @@ def run_pipeline() -> None:
             for _success_artifact in (
                 "outputs/latest_brief.md",
                 "outputs/executive_report.docx",
-                "outputs/executive_report.pptx",
-            ):
+            ):  # iter33: PPTX discontinued
                 try:
                     (Path(settings.PROJECT_ROOT) / _success_artifact).unlink(missing_ok=True)
                 except Exception:
@@ -8813,10 +8832,8 @@ def run_pipeline() -> None:
         try:
             from utils.fulltext_hydrator import hydrate_items_batch
             if _is_brief_mode and raw_items:
-                _batch_size = max(20, int(os.environ.get("BRIEF_HYDRATE_BATCH_SIZE", "80") or 80))
-                # iter31: use BRIEF_MAX_EVENTS (7) as the early-stop probe target so hydration
-                # stops as soon as enough candidates for the full selection quota are found.
-                # Previously used _brief_min_events (5) which was too conservative.
+                # iter33: targeted hydration — pre-select top (max_events*2) by score,
+                # hydrate ONLY those to achieve ≤14 items hydrated vs prior ~80.
                 _probe_target = max(
                     1,
                     max(
@@ -8824,173 +8841,13 @@ def run_pipeline() -> None:
                         int(os.environ.get("BRIEF_MAX_EVENTS", "7") or "7"),
                     ),
                 )
-                _early_stop_target_default = _probe_target  # stop as soon as min viable events found
-                try:
-                    _early_stop_target = max(
-                        _probe_target,
-                        int(
-                            os.environ.get(
-                                "BRIEF_EARLY_STOP_TARGET",
-                                str(_early_stop_target_default),
-                            ) or _early_stop_target_default
-                        ),
-                    )
-                except Exception:
-                    _early_stop_target = _early_stop_target_default
-                if not _bfp_tiers:
-                    _ranked_brief_items = sorted(raw_items, key=_bfp_score, reverse=True)
-                    _bfp_tiers = _build_bfp_tiers(len(_ranked_brief_items), _bfp_limit)
-                _hydrated_accum: list = []
-                _hydration_total = _bfp_tiers[-1] if _bfp_tiers else len(raw_items)
-                _early_stop_hit = False
-                _last_probe = {"deduped": 0, "kept": 0, "signal_pool": 0}
-
-                def _brief_ready_candidates(items: list) -> int:
-                    _ready = 0
-                    for _it in items:
-                        try:
-                            _ft_len = max(
-                                int(getattr(_it, "fulltext_len", 0) or 0),
-                                len(str(getattr(_it, "full_text", "") or "").strip()),
-                                len(str(getattr(_it, "body", "") or "").strip()),
-                            )
-                        except Exception:
-                            _ft_len = 0
-                        if _ft_len < 300:
-                            continue
-                        try:
-                            _pub_ts = _bfp_parse_pub_ts(_it)
-                        except Exception:
-                            _pub_ts = 0.0
-                        if _pub_ts and _pub_ts < (time.time() - 72 * 3600):
-                            continue
-                        _title = str(getattr(_it, "title", "") or "").strip()
-                        _source = str(getattr(_it, "source_name", "") or "").strip()
-                        _body = str(getattr(_it, "body", "") or "").strip()
-                        _full_text = str(getattr(_it, "full_text", "") or "").strip()
-                        _sample = " ".join(part for part in (_title, _body, _full_text[:600]) if part)
-                        _anchors = [part for part in (_title, _source) if part]
-                        if _sample and _brief_bullet_is_event_sentence(_sample, _anchors):
-                            _ready += 1
-                    return _ready
-
-                def _brief_probe_filtered(items: list) -> dict[str, int]:
-                    _probe_deduped = dedup_items(list(items), existing_ids)
-                    _probe_filtered, _probe_summary = filter_items(_probe_deduped)
-                    # iter32e: track distinct source_name for diversity-aware early-stop
-                    _probe_distinct = len(set(
-                        str(getattr(_it, "source_name", "") or "").strip()
-                        for _it in _probe_filtered
-                        if str(getattr(_it, "source_name", "") or "").strip()
-                    ))
-                    return {
-                        "deduped": len(_probe_deduped),
-                        "kept": len(_probe_filtered),
-                        "signal_pool": len(_probe_summary.signal_pool or []),
-                        "distinct_sources": _probe_distinct,  # iter32e
-                    }
-
-                _prev_limit = 0
-                for _tier_idx, _tier_limit in enumerate(_bfp_tiers, start=1):
-                    if _tier_idx > 1:
-                        log.info(
-                            "BRIEF_FAST_PRESELECT_EXPAND: %d -> %d (tier=%d/%d max_limit=%d)",
-                            _prev_limit,
-                            _tier_limit,
-                            _tier_idx,
-                            len(_bfp_tiers),
-                            _bfp_limit,
-                        )
-
-                    _tier_items = _ranked_brief_items[_prev_limit:_tier_limit]
-                    for _offset in range(0, len(_tier_items), _batch_size):
-                        _batch = _tier_items[_offset:_offset + _batch_size]
-                        _hydrated_batch = hydrate_items_batch(_batch) or _batch
-                        _hydrated_accum.extend(_hydrated_batch)
-                        _ready_now = _brief_ready_candidates(_hydrated_accum)
-                        try:
-                            _last_probe = _brief_probe_filtered(_hydrated_accum)
-                        except Exception as _probe_exc:
-                            log.warning("BRIEF_FILTER_PROBE failed (non-fatal): %s", _probe_exc)
-                        log.info(
-                            "BRIEF_HYDRATE_BATCH: tier=%d/%d hydrated=%d/%d probe_deduped=%d "
-                            "probe_kept=%d probe_signal=%d probe_distinct=%d heuristic_ready=%d target=%d batch_size=%d",
-                            _tier_idx,
-                            len(_bfp_tiers),
-                            len(_hydrated_accum),
-                            _hydration_total,
-                            int(_last_probe.get("deduped", 0) or 0),
-                            int(_last_probe.get("kept", 0) or 0),
-                            int(_last_probe.get("signal_pool", 0) or 0),
-                            int(_last_probe.get("distinct_sources", 0) or 0),
-                            _ready_now,
-                            _probe_target,
-                            _batch_size,
-                        )
-
-                        _stop_reason = ""
-                        _stop_value = 0
-                        if int(_last_probe.get("kept", 0) or 0) >= _probe_target:
-                            # iter32e: also require ≥3 distinct sources before early-stop.
-                            # On TechCrunch-heavy days, tier 1 may have kept≥target but distinct=2.
-                            # Continuing to tier 2 finds additional sources (AWS, Google, etc.)
-                            # and avoids 1700s DBE triggered by SOURCE_DIVERSITY_WARN.
-                            # Exception: last tier — stop regardless to avoid hydrating full 600-item pool.
-                            _probe_distinct_now = int(_last_probe.get("distinct_sources", 0) or 0)
-                            if _probe_distinct_now >= 3 or _tier_idx >= len(_bfp_tiers):
-                                _stop_reason = "probe_kept"
-                                _stop_value = int(_last_probe.get("kept", 0) or 0)
-                        elif (
-                            int(_last_probe.get("signal_pool", 0) or 0) >= _probe_target
-                            and len(_hydrated_accum) >= max(_batch_size, 120)
-                        ):
-                            _stop_reason = "signal_pool"
-                            _stop_value = int(_last_probe.get("signal_pool", 0) or 0)
-                        elif (
-                            _ready_now >= _early_stop_target
-                            and len(_hydrated_accum) >= max(_batch_size, 80)
-                        ):
-                            _stop_reason = "heuristic_ready"
-                            _stop_value = _ready_now
-
-                        if _stop_reason:
-                            raw_items = _hydrated_accum
-                            _early_stop_hit = True
-                            log.info(
-                                "BRIEF_FAST_EARLY_STOP: tier=%d/%d hydrated=%d/%d stop_reason=%s "
-                                "value=%d target=%d probe_kept=%d probe_signal=%d probe_distinct=%d heuristic_ready=%d",
-                                _tier_idx,
-                                len(_bfp_tiers),
-                                len(raw_items),
-                                _hydration_total,
-                                _stop_reason,
-                                _stop_value,
-                                _probe_target,
-                                int(_last_probe.get("kept", 0) or 0),
-                                int(_last_probe.get("signal_pool", 0) or 0),
-                                int(_last_probe.get("distinct_sources", 0) or 0),
-                                _ready_now,
-                            )
-                            break
-
-                        _check_time_budget(f"brief_hydrate_tier{_tier_idx}")
-
-                    _prev_limit = _tier_limit
-                    if _early_stop_hit:
-                        break
-                if not _early_stop_hit:
-                    raw_items = _hydrated_accum
-                    log.info(
-                        "BRIEF_FAST_PRESELECT_EXHAUSTED: hydrated=%d/%d probe_kept=%d probe_signal=%d",
-                        len(raw_items),
-                        _hydration_total,
-                        int(_last_probe.get("kept", 0) or 0),
-                        int(_last_probe.get("signal_pool", 0) or 0),
-                    )
+                _hydrate_n = min(_probe_target * 2, len(raw_items))
+                _targeted_pool = raw_items[:_hydrate_n]  # already sorted by _bfp_score
+                _hydrated = hydrate_items_batch(_targeted_pool) or _targeted_pool
+                raw_items = _hydrated
                 log.info(
-                    "Z0 fulltext hydration complete (%d items%s)",
-                    len(raw_items),
-                    "; early-stop" if _early_stop_hit else "",
+                    "Z0 targeted hydration (iter33): hydrated=%d (top %d by bfp_score, probe_target=%d)",
+                    len(raw_items), _hydrate_n, _probe_target,
                 )
             else:
                 raw_items = hydrate_items_batch(raw_items)
@@ -9822,7 +9679,7 @@ def run_pipeline() -> None:
                             f"template_leak_bullets_count={_btl_leak_count}\n",
                             encoding="utf-8",
                         )
-                        for _btl_art in ("executive_report.pptx", "executive_report.docx"):
+                        for _btl_art in ("executive_report.docx",):  # iter33: PPTX discontinued
                             try:
                                 _btl_art_p = Path(settings.PROJECT_ROOT) / "outputs" / _btl_art
                                 if _btl_art_p.exists():
@@ -10456,11 +10313,11 @@ def run_pipeline() -> None:
                 except Exception as _dbe_exc:
                     log.warning("DEMO_EXTENDED_POOL query failed (non-fatal): %s", _dbe_exc)
 
-            # Generate executive output files (PPTX + DOCX + Notion + XMind)
+            # Generate executive output files (DOCX only — iter33: PPTX discontinued)
             try:
                 _outputs_dir = Path(settings.PROJECT_ROOT) / "outputs"
                 _exec_backups: dict[str, Path] = {}
-                for _artifact in ("executive_report.pptx", "executive_report.docx"):
+                for _artifact in ("executive_report.docx",):
                     _artifact_path = _outputs_dir / _artifact
                     if _artifact_path.exists():
                         _backup_path = _outputs_dir / f".backup_before_gate_{_artifact}"
@@ -10473,7 +10330,6 @@ def run_pipeline() -> None:
                 if _is_brief_mode:
                     from core.doc_generator import generate_executive_docx as _gen_exec_docx
                     from core.education_renderer import _build_cards_and_health as _build_exec_cards_and_health
-                    from core.ppt_generator import generate_executive_ppt as _gen_exec_ppt
 
                     _cards, _health, _report_time, _total_items = _build_exec_cards_and_health(
                         results=z5_results,
@@ -10490,31 +10346,7 @@ def run_pipeline() -> None:
                                 continue
                             _cards.append(_ec)
                             _existing_ids.add(_ec_id)
-                    _pptx_target = _outputs_dir / "executive_report.pptx"
-                    try:
-                        pptx_path = _gen_exec_ppt(
-                            cards=_cards,
-                            health=_health,
-                            report_time=_report_time,
-                            total_items=_total_items,
-                            output_path=_pptx_target,
-                            metrics=metrics_dict or {},
-                        )
-                    except PermissionError as _brief_pptx_lock_exc:
-                        _alt_pptx = _outputs_dir / f"executive_report_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.pptx"
-                        pptx_path = _gen_exec_ppt(
-                            cards=_cards,
-                            health=_health,
-                            report_time=_report_time,
-                            total_items=_total_items,
-                            output_path=_alt_pptx,
-                            metrics=metrics_dict or {},
-                        )
-                        log.warning(
-                            "Executive PPTX canonical path is locked; generated fallback file: %s (%s)",
-                            pptx_path,
-                            _brief_pptx_lock_exc,
-                        )
+                    pptx_path = None  # iter33: PPTX discontinued
                     docx_path = _gen_exec_docx(
                         cards=_cards,
                         health=_health,
@@ -10525,7 +10357,7 @@ def run_pipeline() -> None:
                     )
                     notion_path = None
                     xmind_path = None
-                    log.info("Executive reports generated (brief mode: DOCX + PPTX only)")
+                    log.info("Executive reports generated (brief mode: DOCX only — iter33)")
                 else:
                     pptx_path, docx_path, notion_path, xmind_path = generate_executive_reports(
                         results=z5_results,
@@ -10549,28 +10381,10 @@ def run_pipeline() -> None:
                             except Exception:
                                 pass
 
-                _pptx_canon_path = _outputs_dir / "executive_report.pptx"
+                # iter33: PPTX discontinued — only DOCX canon path
                 _docx_canon_path = _outputs_dir / "executive_report.docx"
-                _pptx_generated_path = Path(str(pptx_path)) if pptx_path else _pptx_canon_path
                 _docx_generated_path = Path(str(docx_path)) if docx_path else _docx_canon_path
 
-                if (
-                    _pptx_generated_path.exists()
-                    and _pptx_generated_path != _pptx_canon_path
-                    and not _pptx_canon_path.exists()
-                ):
-                    try:
-                        shutil.copy2(_pptx_generated_path, _pptx_canon_path)
-                        log.info(
-                            "Executive PPTX canonicalized from alt: %s -> %s",
-                            _pptx_generated_path,
-                            _pptx_canon_path,
-                        )
-                    except Exception as _pptx_canon_exc:
-                        log.warning(
-                            "Executive PPTX canonicalization failed (non-fatal): %s",
-                            _pptx_canon_exc,
-                        )
                 if (
                     _docx_generated_path.exists()
                     and _docx_generated_path != _docx_canon_path
@@ -10589,48 +10403,8 @@ def run_pipeline() -> None:
                             _docx_canon_exc,
                         )
 
-                if _pptx_canon_path.exists():
-                    pptx_path = _pptx_canon_path
                 if _docx_canon_path.exists():
                     docx_path = _docx_canon_path
-
-                _pptx_write_exists = _pptx_canon_path.exists()
-                _pptx_write_size = _pptx_canon_path.stat().st_size if _pptx_write_exists else 0
-                log.info(
-                    "PPTX_WRITE_CHECK path=%s exists=%s size=%d",
-                    _pptx_canon_path,
-                    _pptx_write_exists,
-                    _pptx_write_size,
-                )
-
-                # Demo mode: stamp slide 0 with a red textbox so the deck can never be
-                # mistaken for a production deliverable.
-                if _is_demo_mode_sr and pptx_path and Path(str(pptx_path)).exists():
-                    try:
-                        from pptx import Presentation as _DmPrs
-                        from pptx.util import Inches as _DmIn, Pt as _DmPt
-                        from pptx.dml.color import RGBColor as _DmRGB
-                        _dm_prs   = _DmPrs(str(pptx_path))
-                        _dm_slide = _dm_prs.slides[0]
-                        _dm_txbx  = _dm_slide.shapes.add_textbox(
-                            _DmIn(0.1), _DmIn(0.05), _DmIn(9.0), _DmIn(0.4)
-                        )
-                        _dm_tf  = _dm_txbx.text_frame
-                        _dm_tf.word_wrap = False
-                        _dm_p   = _dm_tf.paragraphs[0]
-                        _dm_run = _dm_p.add_run()
-                        _dm_run.text = (
-                            f"[DEMO MODE]  ai_selected={_sr_ai_selected}"
-                            f"  extended_pool_supplement={_sr_demo_supplement}"
-                            "  DO NOT DISTRIBUTE"
-                        )
-                        _dm_run.font.size      = _DmPt(11)
-                        _dm_run.font.bold      = True
-                        _dm_run.font.color.rgb = _DmRGB(0xCC, 0x00, 0x00)
-                        _dm_prs.save(str(pptx_path))
-                        log.info("Demo mode: PPTX slide 0 stamped with DEMO MODE banner")
-                    except Exception as _dm_exc:
-                        log.warning("Demo mode PPTX stamp failed (non-fatal): %s", _dm_exc)
 
                 # Demo mode: stamp DOCX cover page with DEMO MODE banner (page 1, prepend paragraph).
                 if _is_demo_mode_sr and docx_path and Path(str(docx_path)).exists():
@@ -10923,7 +10697,7 @@ def run_pipeline() -> None:
                         )
                         _nr_gate_path.write_text(_nr_gate_content, encoding="utf-8")
                         # Remove PPTX/DOCX that were just generated (gate failed)
-                        for _art_del in ("executive_report.pptx", "executive_report.docx"):
+                        for _art_del in ("executive_report.docx",):  # iter33: PPTX discontinued
                             _art_p = Path(settings.PROJECT_ROOT) / "outputs" / _art_del
                             if _art_p.exists():
                                 try:
@@ -10952,31 +10726,24 @@ def run_pipeline() -> None:
                     from datetime import datetime as _gate_dt, timezone as _gate_tz
 
                     _docx_canon = Path(settings.PROJECT_ROOT) / "outputs" / "executive_report.docx"
-                    _pptx_canon = Path(settings.PROJECT_ROOT) / "outputs" / "executive_report.pptx"
-                    # When Word/PowerPoint locks the canonical file, _generate_brief_*_only
+                    # iter33: PPTX discontinued; _pptx_canon removed
+                    # When Word locks the canonical file, _generate_brief_*_only
                     # falls back to *_brief.* (new content) + os.utime on canonical (timestamp
                     # only, old content).  Evaluate against the newer alt file so the sync
                     # check reads actual new data rather than stale locked content.
                     _docx_brief_alt = Path(settings.PROJECT_ROOT) / "outputs" / "executive_report_brief.docx"
-                    _pptx_brief_alt = Path(settings.PROJECT_ROOT) / "outputs" / "executive_report_brief.pptx"
                     _docx_eval_path = _docx_canon
-                    _pptx_eval_path = _pptx_canon
                     if _docx_brief_alt.exists() and (
                         not _docx_canon.exists()
                         or _docx_brief_alt.stat().st_mtime > _docx_canon.stat().st_mtime + 30
                     ):
                         _docx_eval_path = _docx_brief_alt
-                    if _pptx_brief_alt.exists() and (
-                        not _pptx_canon.exists()
-                        or _pptx_brief_alt.stat().st_mtime > _pptx_canon.stat().st_mtime + 30
-                    ):
-                        _pptx_eval_path = _pptx_brief_alt
                     _final_cards_eval = list(_final_cards or [])
 
                     _deliverable_meta = _evaluate_exec_deliverable_docx_pptx_hard(
                         final_cards=_final_cards_eval,
                         docx_path=_docx_eval_path,
-                        pptx_path=_pptx_eval_path,
+                        pptx_path=None,  # iter33: PPTX discontinued
                     )
                     _deliverable_meta["generated_at"] = _gate_dt.now(_gate_tz.utc).isoformat()
 
@@ -11129,7 +10896,7 @@ def run_pipeline() -> None:
                         # Brief mode: keep PPTX/DOCX — canonical payloads already have ZH
                         # from faithful_zh_news; TFD-skip path overrides meta to PASS.
                         if not _is_brief_mode:
-                            for _artifact in ("executive_report.docx", "executive_report.pptx"):
+                            for _artifact in ("executive_report.docx",):  # iter33: PPTX discontinued
                                 _target = _outputs_dir / _artifact
                                 _backup = _exec_backups.get(_artifact) if isinstance(_exec_backups, dict) else None
                                 if _backup and _backup.exists():
@@ -11320,7 +11087,7 @@ def run_pipeline() -> None:
                                 "<=50% English ratio, and quote_window substrings in quote_1/quote_2.\n",
                                 encoding="utf-8",
                             )
-                            for _art_zh in ("executive_report.pptx", "executive_report.docx"):
+                            for _art_zh in ("executive_report.docx",):  # iter33: PPTX discontinued
                                 _art_zhp = Path(settings.PROJECT_ROOT) / "outputs" / _art_zh
                                 if _art_zhp.exists():
                                     _art_zhp.unlink(missing_ok=True)
@@ -11359,7 +11126,7 @@ def run_pipeline() -> None:
                             f"ai_true={_aip_meta['ai_true']} selected={_aip_meta['selected']}\n",
                             encoding="utf-8",
                         )
-                        for _art_aip in ("executive_report.pptx", "executive_report.docx"):
+                        for _art_aip in ("executive_report.docx",):  # iter33: PPTX discontinued
                             (_art_aip_p := Path(settings.PROJECT_ROOT) / "outputs" / _art_aip).unlink(missing_ok=True)
                         log.error("AI_PURITY_HARD FAIL ??non-AI events in deck; NOT_READY.md written")
                     else:
@@ -11395,7 +11162,7 @@ def run_pipeline() -> None:
                             f"fail_count={len(_nbp_fail_events)}\n",
                             encoding="utf-8",
                         )
-                        for _art_nbp in ("executive_report.pptx", "executive_report.docx"):
+                        for _art_nbp in ("executive_report.docx",):  # iter33: PPTX discontinued
                             (Path(settings.PROJECT_ROOT) / "outputs" / _art_nbp).unlink(missing_ok=True)
                         log.error("NO_BOILERPLATE_Q1Q2_HARD FAIL ??%d events with banned phrases", len(_nbp_fail_events))
                     else:
@@ -11434,7 +11201,7 @@ def run_pipeline() -> None:
                         (Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md").write_text(
                             f"# NOT_READY\n\ngate: Q1_STRUCTURE_HARD\nfail_count={_q1s_fail}\n", encoding="utf-8"
                         )
-                        for _art_q1s in ("executive_report.pptx", "executive_report.docx"):
+                        for _art_q1s in ("executive_report.docx",):  # iter33: PPTX discontinued
                             (Path(settings.PROJECT_ROOT) / "outputs" / _art_q1s).unlink(missing_ok=True)
                         log.error("Q1_STRUCTURE_HARD FAIL ??%d events failed Q1 structure", _q1s_fail)
                     else:
@@ -11473,7 +11240,7 @@ def run_pipeline() -> None:
                         (Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md").write_text(
                             f"# NOT_READY\n\ngate: Q2_STRUCTURE_HARD\nfail_count={_q2s_fail}\n", encoding="utf-8"
                         )
-                        for _art_q2s in ("executive_report.pptx", "executive_report.docx"):
+                        for _art_q2s in ("executive_report.docx",):  # iter33: PPTX discontinued
                             (Path(settings.PROJECT_ROOT) / "outputs" / _art_q2s).unlink(missing_ok=True)
                         log.error("Q2_STRUCTURE_HARD FAIL ??%d events failed Q2 structure", _q2s_fail)
                     else:
@@ -11506,7 +11273,7 @@ def run_pipeline() -> None:
                         (Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md").write_text(
                             f"# NOT_READY\n\ngate: MOVES_ANCHORED_HARD\nfail_count={len(_ma_fail_events)}\n", encoding="utf-8"
                         )
-                        for _art_ma in ("executive_report.pptx", "executive_report.docx"):
+                        for _art_ma in ("executive_report.docx",):  # iter33: PPTX discontinued
                             (Path(settings.PROJECT_ROOT) / "outputs" / _art_ma).unlink(missing_ok=True)
                         log.error("MOVES_ANCHORED_HARD FAIL ??%d events with unanchored bullets", len(_ma_fail_events))
                     else:
@@ -11546,7 +11313,7 @@ def run_pipeline() -> None:
                         (Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md").write_text(
                             f"# NOT_READY\n\ngate: EXEC_PRODUCT_READABILITY_HARD\nfail_count={_epr_fail}\n", encoding="utf-8"
                         )
-                        for _art_epr in ("executive_report.pptx", "executive_report.docx"):
+                        for _art_epr in ("executive_report.docx",):  # iter33: PPTX discontinued
                             (Path(settings.PROJECT_ROOT) / "outputs" / _art_epr).unlink(missing_ok=True)
                         log.error("EXEC_PRODUCT_READABILITY_HARD FAIL ??%d events failed", _epr_fail)
                     else:
@@ -11884,7 +11651,7 @@ def run_pipeline() -> None:
                                 f"fact_pack_fail={int(_brief_fact_pack_meta.get('fail_count', 0) or 0)}\n",
                                 encoding="utf-8",
                             )
-                            for _brief_art in ("executive_report.pptx", "executive_report.docx"):
+                            for _brief_art in ("executive_report.docx",):  # iter33: PPTX discontinued
                                 (Path(settings.PROJECT_ROOT) / "outputs" / _brief_art).unlink(missing_ok=True)
                             log.error("%s FAIL ??%s", _brief_gate, _brief_detail)
                             _supply_meta["not_ready"] = True
@@ -11959,7 +11726,7 @@ def run_pipeline() -> None:
                                 "deck would be empty. Deleting output files, writing NOT_READY.md.",
                                 _scg_ai, _scg_thr, _scg_mode,
                             )
-                            for _scg_art in ("executive_report.pptx", "executive_report.docx"):
+                            for _scg_art in ("executive_report.docx",):  # iter33: PPTX discontinued
                                 _scg_art_path = Path(settings.PROJECT_ROOT) / "outputs" / _scg_art
                                 if _scg_art_path.exists():
                                     _scg_art_path.unlink(missing_ok=True)
@@ -12215,16 +11982,8 @@ def run_pipeline() -> None:
             _supply_meta["reason"] = ""
     _write_supply_resilience_meta(_supply_meta)
 
-    _pptx_final_path = Path(settings.PROJECT_ROOT) / "outputs" / "executive_report.pptx"
-    _pptx_final_exists = _pptx_final_path.exists()
-    _pptx_final_size = _pptx_final_path.stat().st_size if _pptx_final_exists else 0
+    # iter33: PPTX discontinued; _pptx_final_path block removed
     _cleanup_brief_only_artifacts("before_delivery")
-    log.info(
-        "PPTX_FINAL_CHECK path=%s exists=%s size=%d",
-        _pptx_final_path,
-        _pptx_final_exists,
-        _pptx_final_size,
-    )
 
     # Generate outputs/latest_brief.md (success path, brief mode only)
     _tfd_run_id = os.environ.get("PIPELINE_RUN_ID", "unknown")
@@ -12314,7 +12073,7 @@ def run_pipeline() -> None:
                         f"reason: {_tfd_result}\n",
                         encoding="utf-8",
                     )
-                    for _tfd_art in ("latest_brief.md", "executive_report.docx", "executive_report.pptx"):
+                    for _tfd_art in ("latest_brief.md", "executive_report.docx"):  # iter33: PPTX discontinued
                         try:
                             (_tfd_outputs / _tfd_art).unlink(missing_ok=True)
                         except Exception:
@@ -12388,15 +12147,7 @@ def run_pipeline() -> None:
                         except Exception as _tfd_docx_exc:
                             log.warning("Translation-First: ZH DOCX generation failed (non-fatal): %s", _tfd_docx_exc)
                         _stg["build_docx_end"] = time.time()    # iter31 stage timing
-                        # Overwrite executive_report.pptx with ZH
-                        _stg["build_pptx_start"] = time.time()  # iter31 stage timing
-                        try:
-                            from core.ppt_generator import generate_zh_md_pptx as _gen_zh_pptx
-                            _gen_zh_pptx(_tfd_zh, _tfd_outputs / "executive_report.pptx")
-                            log.info("Translation-First: ZH PPTX written: outputs/executive_report.pptx")
-                        except Exception as _tfd_pptx_exc:
-                            log.warning("Translation-First: ZH PPTX generation failed (non-fatal): %s", _tfd_pptx_exc)
-                        _stg["build_pptx_end"] = time.time()    # iter31 stage timing
+                        # iter33: PPTX discontinued; build_pptx block removed
                         _write_translation_meta(
                             run_id=_tfd_run_id,
                             success=True,
@@ -12659,23 +12410,9 @@ if __name__ == "__main__":
         except Exception as _docx_exc:
             print(f"ERROR generating NOT_READY_report.docx: {_docx_exc}")
 
-        # 5. Generate NOT_READY_report.pptx
-        try:
-            from core.ppt_generator import generate_not_ready_report_pptx
-            _pptx_out = generate_not_ready_report_pptx(
-                output_path=_outputs / "NOT_READY_report.pptx",
-                fail_reason=_fail_reason,
-                gate_name=_gate_name,
-                samples=_samples,
-                next_steps=_next_steps,
-                run_id=_run_id,
-                run_date=_run_date,
-            )
-            print(f"NOT_READY_report.pptx written: {_pptx_out}")
-        except Exception as _pptx_exc:
-            print(f"ERROR generating NOT_READY_report.pptx: {_pptx_exc}")
+        # iter33: PPTX discontinued; NOT_READY_report.pptx block removed
 
-        # 6. Generate NOT_READY_report.md (Markdown for quick reading)
+        # 5. Generate NOT_READY_report.md (Markdown for quick reading)
         try:
             from datetime import datetime as _nr2_dt, timezone as _nr2_tz
             _nr2_now      = _nr2_dt.now(_nr2_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
