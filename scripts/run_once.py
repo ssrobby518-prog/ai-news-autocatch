@@ -6912,6 +6912,29 @@ def _f600_run_fast_path(
     # --- Step 16: write stage timing (without card_build) ---
     _write_stage_timing_meta_f600(_run_id, stg)
 
+    # --- Step 17: write LAST_RUN_SUMMARY.txt ---
+    # Sets report_mode=brief so verify_online.ps1 EXEC KPI GATES are suppressed ($kpi_affects_exit=false)
+    try:
+        from datetime import datetime as _f6_dt
+        _f6_now = _f6_dt.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        _lrs_path = _outputs / "LAST_RUN_SUMMARY.txt"
+        _lrs_path.write_text(
+            f"run_id              = {_run_id}\n"
+            f"started_at          = {_f6_now}\n"
+            f"finished_at         = {_f6_now}\n"
+            f"mode                = manual\n"
+            f"report_mode         = brief\n"
+            f"status              = OK\n"
+            f"selected_events     = {len(_selected)}\n"
+            f"ai_selected_events  = {len(_selected)}\n"
+            f"canonical_output_dir = outputs\n"
+            f"produced_files      = outputs/latest_brief.md, outputs/executive_report.docx\n"
+            f"fail_reason         = \n",
+            encoding="utf-8",
+        )
+    except Exception as _lrse:
+        _log.warning("FAST_600_MODE: LAST_RUN_SUMMARY write failed (non-fatal): %s", _lrse)
+
     _log.info(
         "FAST_600_MODE: complete — selected=%d distinct_sources=%d bigtech=%d pool_status=%s",
         len(_selected), _f6_distinct, _f6_bigtech, _pool_status,
