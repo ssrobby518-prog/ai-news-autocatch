@@ -231,7 +231,7 @@ if ($env:BRIEF_ONLY -eq "1") {
     Write-Host "  Education quality gate passed." -ForegroundColor Green
 }
 
-# 8) Executive output files check (DOCX/PPTX/Notion/XMind)
+# 8) Executive output files check (DOCX/Notion/XMind) — iter42: PPTX removed from contract
 Write-Host "`n[8/9] 檢查執行摘要輸出檔案..." -ForegroundColor Yellow
 # Detect sparse day: Notion/XMind are only required when main events passed the pipeline.
 $vrSparseDay = $false

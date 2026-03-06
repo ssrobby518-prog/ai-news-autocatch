@@ -39,11 +39,12 @@ $_fast300Daily = ($env:FAST_300_DAILY -eq "1")
 # iter39: FAST_300_MODE — hard cap 300s, auto-enables FAST_600_MODE
 $_fast300Mode = ($env:FAST_300_MODE -eq "1") -or $_fast300Daily
 if ($_fast300Daily) {
-    $_voBudgetSec = 300; $env:PIPELINE_TIME_BUDGET_SEC = "300"
+    $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 200 }
+    $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec
     $env:FAST_600_MODE = "1"
     $env:FAST_300_DAILY = "1"
     $env:BIGTECH_GATES_ENFORCE = "1"
-    Write-Output "FAST_300_DAILY=1（線上收集+大廠配額+硬上限=300s）"
+    Write-Output ("FAST_300_DAILY=1（線上收集+大廠配額+硬上限={0}s）" -f $_voBudgetSec)
 } elseif ($_fast300Mode) {
     if (-not $env:PIPELINE_TIME_BUDGET_SEC) { $_voBudgetSec = 300; $env:PIPELINE_TIME_BUDGET_SEC = "300" }
     $env:FAST_600_MODE = "1"
@@ -65,7 +66,7 @@ if ($_fast600Mode) {
 # iter41: soft target — DAILY default 200s; FAST_300_MODE default 270s; FAST_600_MODE default 300s
 $_voSoftTargetSec = if ($env:PIPELINE_SOFT_TARGET_SEC -and $env:PIPELINE_SOFT_TARGET_SEC -ne "") {
     [int]$env:PIPELINE_SOFT_TARGET_SEC
-} elseif ($_fast300Daily) { 200 } elseif ($_fast300Mode) { 270 } elseif ($_fast600Mode) { 300 } else { 0 }
+} elseif ($_fast300Daily) { 160 } elseif ($_fast300Mode) { 270 } elseif ($_fast600Mode) { 300 } else { 0 }
 if ($_voSoftTargetSec -gt 0) {
     Write-Output ("soft_target={0}s（超過只警告，不 FAIL）" -f $_voSoftTargetSec)
 }
@@ -141,6 +142,24 @@ function Write-RunTimingMeta {
     if ($script:_z0OnlineSec -ne $null) {
         $meta["z0_collect_online_seconds"] = [int]$script:_z0OnlineSec
     }
+    # iter42: z0_data_source for DAILY evidence
+    if ($script:_z0DeadlineSoftSec) {
+        $meta["z0_data_source"] = "online"
+    }
+    # iter42: stage deadline constants (evidence for PM demo)
+    if ($script:_z0DeadlineSoftSec) {
+        $meta["z0_soft_deadline_sec"]         = [int]$script:_z0DeadlineSoftSec
+        $meta["z0_hard_deadline_sec"]         = [int]$script:_z0DeadlineHardSec
+        $meta["hydrate_hard_deadline_sec"]    = 55
+        $meta["translate_hard_deadline_sec"]  = 45
+        $meta["build_docx_hard_deadline_sec"] = 10
+        $meta["gates_hard_deadline_sec"]      = 10
+        $meta["before_translation_limit_sec"] = 120
+    }
+    # iter42: before_translation_seconds from stage_timing
+    if ($StageSec -and $StageSec.ContainsKey("before_translation")) {
+        $meta["before_translation_seconds"] = [double]$StageSec["before_translation"]
+    }
     # iter31: include stage_seconds if available
     if ($StageSec -and $StageSec.Count -gt 0) {
         $meta["stage_seconds"] = $StageSec
@@ -163,6 +182,10 @@ function Read-StageTiming {
                 foreach ($p in $obj.stage_seconds.PSObject.Properties) {
                     $ht[$p.Name] = [double]$p.Value
                 }
+            }
+            # iter42: extract before_translation_seconds from top level
+            if ($obj.PSObject.Properties["before_translation_seconds"]) {
+                $ht["before_translation"] = [double]$obj.before_translation_seconds
             }
         } catch {}
     }
@@ -815,10 +838,10 @@ if (-not $SkipPipeline) {
         $_z0OnlineStart = $_voStopwatch.Elapsed.TotalSeconds
         # iter41: FAST_300_DAILY — z0 soft/hard two-stage deadline
         if ($_fast300Daily) {
-            $script:_z0DeadlineSoftSec = 60
-            $script:_z0DeadlineHardSec = 90
+            $script:_z0DeadlineSoftSec = 45
+            $script:_z0DeadlineHardSec = 70
             $script:_z0StopReason = "unknown"
-            Write-Output ("  [FAST_300_DAILY] Z0 軟截止={0}s / 硬截止={1}s" -f $script:_z0DeadlineSoftSec, $script:_z0DeadlineHardSec)
+            Write-Output ("  [FAST_300_DAILY] Z0 軟截止={0}s / 硬截止={1}s  z0_data_source=online" -f $script:_z0DeadlineSoftSec, $script:_z0DeadlineHardSec)
             $_z0Job = Start-Job -ScriptBlock {
                 param($scriptPath)
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath
@@ -844,7 +867,7 @@ if (-not $SkipPipeline) {
                 }
             }
             Remove-Job -Job $_z0Job -Force -ErrorAction SilentlyContinue
-            Write-Output ("  [FAST_300_DAILY] Z0 stop_reason={0}" -f $script:_z0StopReason)
+            Write-Output ("  [FAST_300_DAILY] Z0 stop_reason={0}  z0_data_source=online" -f $script:_z0StopReason)
         } else {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
             if ($LASTEXITCODE -ne 0) {
@@ -1231,7 +1254,7 @@ if ($exitCode -ne 0) {
 
     if (-not $docxHashLockFallback) {
         Write-Output "[verify_online] verify_run.ps1 FAILED (exit $exitCode)."
-        # Generate NOT_READY_report.md/docx/pptx for direct invocation (Iteration 19 DoD FAIL scenario)
+        # Generate NOT_READY_report md+docx for direct invocation (iter42: pptx removed)
         Write-Output "  Generating NOT_READY_report (calling run_once.py --not-ready-report)..."
         Set-Location $repoRoot
         # Re-expose run_id so NOT_READY_report files carry correct run_id (env was cleared above)

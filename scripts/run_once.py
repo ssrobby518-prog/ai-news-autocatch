@@ -6778,11 +6778,12 @@ def _write_stage_timing_meta_f600(run_id: str, stg: dict) -> None:
     try:
         _p = Path(settings.PROJECT_ROOT) / "outputs" / "stage_timing.meta.json"
         _p.parent.mkdir(parents=True, exist_ok=True)
+        _payload = {"run_id": run_id, "stage_seconds": _stage_secs, "fast_600_mode": True}
+        # iter42: include before_translation_seconds at top level for verify_online.ps1
+        if _bt is not None:
+            _payload["before_translation_seconds"] = round(float(_bt), 1)
         _p.write_text(
-            _f6st_j.dumps(
-                {"run_id": run_id, "stage_seconds": _stage_secs, "fast_600_mode": True},
-                ensure_ascii=False, indent=2,
-            ),
+            _f6st_j.dumps(_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     except Exception:
@@ -7068,10 +7069,10 @@ def _f600_run_fast_path(
     if not _digest_path:
         _f6_fail("HYDRATION_TOO_THIN", "digest.md generation failed")
 
-    # --- Step 5: TIME_BUDGET_GUARD_BEFORE_TRANSLATION (iter38: 240→150s) ---
+    # --- Step 5: TIME_BUDGET_GUARD_BEFORE_TRANSLATION (iter42: DAILY 120s; else 150s) ---
     _elapsed_pre_xlat = time.time() - t_start
     stg["before_translation_seconds"] = round(_elapsed_pre_xlat, 1)
-    _pre_xlat_limit = 150
+    _pre_xlat_limit = 120 if _is_daily else 150
     if _elapsed_pre_xlat > _pre_xlat_limit:
         _f6_fail(
             "TIME_BUDGET_GUARD_BEFORE_TRANSLATION",
@@ -7147,6 +7148,10 @@ def _f600_run_fast_path(
         _llama_singleflight_release()
     _tfd_latency_ms = (time.time() - _tfd_t0) * 1000
     stg["translate_end"] = time.time()
+    # iter42: translate_hard_deadline_sec=45 enforcement (DAILY)
+    _xlat_dur = float(stg.get("translate_end", 0)) - float(stg.get("translate_start", 0))
+    if _is_daily and _xlat_dur > 45:
+        _f6_fail("TRANSLATE_HARD_DEADLINE", f"translate={_xlat_dur:.0f}s > 45s")
 
     if not _tfd_ok:
         _tfd_gate = (
@@ -7204,6 +7209,10 @@ def _f600_run_fast_path(
     except Exception as _f6_docx_exc:
         _log.warning("FAST_600_MODE: DOCX generation failed (non-fatal): %s", _f6_docx_exc)
     stg["build_docx_end"] = time.time()
+    # iter42: build_docx_hard_deadline_sec=10 enforcement (DAILY)
+    _docx_dur = float(stg.get("build_docx_end", 0)) - float(stg.get("build_docx_start", 0))
+    if _is_daily and _docx_dur > 10:
+        _f6_fail("BUILD_DOCX_HARD_DEADLINE", f"build_docx={_docx_dur:.0f}s > 10s")
 
     # --- Step 10: write translation meta ---
     # iter39 (E): compute workload stats for all-miss estimation
@@ -9489,6 +9498,7 @@ def run_pipeline() -> None:
     t_start_iso = datetime.now(UTC).isoformat()
     _report_mode = _resolve_report_mode()
     _is_brief_mode = (_report_mode == "brief")
+    _is_daily = os.environ.get("FAST_300_DAILY", "0") == "1"  # iter42: used for hydration deadlines
     _pipeline_mode_runtime = _normalize_ws(os.environ.get("PIPELINE_MODE", "manual") or "manual")
     _brief_min_events = 5
     if _is_brief_mode:
@@ -9751,7 +9761,10 @@ def run_pipeline() -> None:
                 )
                 _hydrate_n = min(max(_probe_target * 4, 30), len(raw_items))
                 _targeted_pool = raw_items[:_hydrate_n]  # already sorted by _bfp_score
-                _hydrated = hydrate_items_batch(_targeted_pool) or _targeted_pool
+                # iter42: DAILY uses per-url=4s, batch_timeout=55s (hydrate_hard_deadline)
+                _hy_timeout = 4 if _is_daily else 8
+                _hy_batch   = 55 if _is_daily else 180
+                _hydrated = hydrate_items_batch(_targeted_pool, timeout_s=_hy_timeout, batch_timeout=_hy_batch) or _targeted_pool
                 raw_items = _hydrated
                 log.info(
                     "Z0 targeted hydration (iter33b): hydrated=%d (top %d by bfp_score, probe_target=%d)",
@@ -9802,6 +9815,20 @@ def run_pipeline() -> None:
     # TIME_BUDGET checkpoint 1: after Z0 hydration
     _check_time_budget("after_z0_hydration")
     _stg["hydration_end"] = time.time()    # iter31 stage timing
+    # iter42: hydrate_hard_deadline_sec=55 enforcement (DAILY)
+    if _is_daily:
+        _hy_dur = float(_stg.get("hydration_end", 0)) - float(_stg.get("hydration_start", 0))
+        if _hy_dur > 55:
+            _bgt_nr = Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md"
+            _bgt_nr.parent.mkdir(parents=True, exist_ok=True)
+            _bgt_nr.write_text(
+                f"# NOT_READY\n\ngate: HYDRATE_HARD_DEADLINE\n"
+                f"run_id: {_pipeline_run_id_bgt}\n"
+                f"reason: hydrate={_hy_dur:.0f}s > 55s\n",
+                encoding="utf-8",
+            )
+            log.error("HYDRATE_HARD_DEADLINE: hydrate=%.0fs > 55s", _hy_dur)
+            sys.exit(1)
 
     # iter37: FAST_600_MODE bypass — skip card_build + DBE entirely
     if os.environ.get("FAST_600_MODE", "0") == "1":
@@ -13189,7 +13216,7 @@ def run_pipeline() -> None:
 
 if __name__ == "__main__":
     if "--not-ready-report" in sys.argv:
-        # Standalone mode: generate NOT_READY_report.docx/.pptx without running pipeline.
+        # Standalone mode: generate NOT_READY_report.docx (two-piece: md+docx) without running pipeline.
         # Called by run_pipeline.ps1 when IsSuccess=False.
         import json as _nr_json
         import re as _nr_re
