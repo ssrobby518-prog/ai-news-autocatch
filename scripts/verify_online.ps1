@@ -36,6 +36,14 @@ if ($_fast600Mode) {
     $env:FAST_600_MODE = "0"
 }
 
+# iter38: soft target — WARN-only, never FAIL
+$_voSoftTargetSec = if ($env:PIPELINE_SOFT_TARGET_SEC -and $env:PIPELINE_SOFT_TARGET_SEC -ne "") {
+    [int]$env:PIPELINE_SOFT_TARGET_SEC
+} elseif ($_fast600Mode) { 300 } else { 0 }
+if ($_voSoftTargetSec -gt 0) {
+    Write-Output ("soft_target={0}s（超過只警告，不 FAIL）" -f $_voSoftTargetSec)
+}
+
 # ---------------------------------------------------------------------------
 # iter29: 計時 helper functions
 #   Append-TimingFooterToMd : 在指定 .md 末尾追加繁中耗時附錄
@@ -83,7 +91,8 @@ function Write-RunTimingMeta {
         [Parameter(Mandatory=$true)][datetime]$EndDt,
         [Parameter(Mandatory=$true)][int]$TotalSec,
         [Parameter(Mandatory=$true)][int]$BudgetSec,
-        [hashtable]$StageSec = @{}
+        [hashtable]$StageSec = @{},
+        [int]$SoftTargetSec = 0
     )
     $meta = [ordered]@{
         run_id              = $RunId
@@ -91,6 +100,11 @@ function Write-RunTimingMeta {
         finished_at         = $EndDt.ToString("yyyy-MM-ddTHH:mm:ss")
         total_seconds       = $TotalSec
         time_budget_seconds = $BudgetSec
+    }
+    # iter38: soft target evidence
+    if ($SoftTargetSec -gt 0) {
+        $meta["soft_target_seconds"]  = $SoftTargetSec
+        $meta["soft_target_exceeded"] = ($TotalSec -gt $SoftTargetSec)
     }
     # iter31: include stage_seconds if available
     if ($StageSec -and $StageSec.Count -gt 0) {
@@ -236,7 +250,8 @@ fail_reason         = $Gate
             -EndDt    $_fEndAt `
             -TotalSec $_fSecTot `
             -BudgetSec $_voBudgetSec `
-            -StageSec $_fStgHt
+            -StageSec $_fStgHt `
+            -SoftTargetSec $_voSoftTargetSec
         Append-TimingFooterToMd `
             -MdPath   (Join-Path $repoRoot "outputs\NOT_READY_report.md") `
             -RunId    $_voRunId `
@@ -4024,6 +4039,15 @@ if ($_iter32_elapsed -gt $_voBudgetSec) {
 }
 Write-Output ("[iter32e] TIME_BUDGET 通過：{0}s ≤ {1}s" -f $_iter32_elapsed, $_voBudgetSec)
 
+# iter38: soft target WARN (never FAIL)
+if ($_voSoftTargetSec -gt 0) {
+    if ($_iter32_elapsed -gt $_voSoftTargetSec) {
+        Write-Output ("[WARN] soft_target_exceeded: {0}s > soft_target {1}s — 警告僅供參考，不影響 PASS/FAIL" -f $_iter32_elapsed, $_voSoftTargetSec)
+    } else {
+        Write-Output ("[iter38] soft_target 達標：{0}s ≤ {1}s" -f $_iter32_elapsed, $_voSoftTargetSec)
+    }
+}
+
 # ---------------------------------------------------------------------------
 # iter29/31: 計時 — 成功路徑寫 timing meta + 追加 brief 末尾附錄（含分段耗時）
 # ---------------------------------------------------------------------------
@@ -4041,7 +4065,8 @@ try {
         -EndDt    $_sEndAt `
         -TotalSec $_sSecTot `
         -BudgetSec $_voBudgetSec `
-        -StageSec $_stgHt
+        -StageSec $_stgHt `
+        -SoftTargetSec $_voSoftTargetSec
     Append-TimingFooterToMd `
         -MdPath   (Join-Path $repoRoot "outputs\latest_brief.md") `
         -RunId    $_voRunId `

@@ -6418,16 +6418,17 @@ def _write_translation_engine_meta(
         # rough estimate: 4 chars ≈ 1 token
         _est_toks = float(output_chars) / 4.0
         tok_per_sec_est = round(_est_toks / (float(latency_ms) / 1000.0), 2)
-    # iter33: read gpu_process_found from gpu_probe.meta.json if not provided
-    if not gpu_process_found:
-        try:
-            import json as _gj
-            _gp = Path(settings.PROJECT_ROOT) / "outputs" / "gpu_probe.meta.json"
-            if _gp.exists():
-                _gdata = _gj.loads(_gp.read_text(encoding="utf-8"))
-                gpu_process_found = bool(_gdata.get("gpu_process_found", False))
-        except Exception:
-            pass
+    # iter38 (C-1): always read gpu_process_found from gpu_probe.meta.json (authoritative source)
+    # Fixes inconsistency where translation_engine showed false while gpu_probe showed true.
+    # Use utf-8-sig to handle PowerShell BOM.
+    try:
+        import json as _gj
+        _gp = Path(settings.PROJECT_ROOT) / "outputs" / "gpu_probe.meta.json"
+        if _gp.exists():
+            _gdata = _gj.loads(_gp.read_text(encoding="utf-8-sig"))
+            gpu_process_found = bool(_gdata.get("gpu_process_found", False))
+    except Exception:
+        pass
     # iter35: per-call tok/s from GPU_CONTINUOUS_ENFORCEMENT_HARD accumulator
     _tem_percall = list(_i35_percall_toks)  # snapshot of module-level accumulator
     _tem_valid = [x for x in _tem_percall if x > 0]
@@ -6463,6 +6464,9 @@ def _write_translation_engine_meta(
         "cpu_fallback_detected": _tem_cpu_fallback,
         "gpu_required": True,
     }
+    # iter38 (C-2): when all translations came from cache, annotate why translate=0
+    if int(cache_hit) > 0 and int(cache_miss) == 0:
+        _meta["translate_skipped_reason"] = "all_cache_hit"
     _out.write_text(_tem_j.dumps(_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -6627,6 +6631,10 @@ def _write_stage_timing_meta_f600(run_id: str, stg: dict) -> None:
         "translate":  _dur("translate_start",   "translate_end"),
         "build_docx": _dur("build_docx_start",  "build_docx_end"),
     }
+    # iter38: include before_translation_seconds for guard evidence
+    _bt = stg.get("before_translation_seconds")
+    if _bt is not None:
+        _stage_secs["before_translation"] = round(float(_bt), 1)
     try:
         _p = Path(settings.PROJECT_ROOT) / "outputs" / "stage_timing.meta.json"
         _p.parent.mkdir(parents=True, exist_ok=True)
@@ -6673,9 +6681,10 @@ def _f600_run_fast_path(
     _log.info("FAST_600_MODE: fast path entered (budget=%ds raw_items=%d)", budget_sec, len(raw_items))
 
     # --- Step 1: fast select top max_events hydrated items ---
-    # Prefer items with fulltext_len >= 1200 so DIGEST_DENSITY_FLOOR_HARD (chars>=1200 per event)
-    # can be satisfied even when bullet count < 5. Sort by bfp_score within each tier.
-    _max_events = int(os.environ.get("BRIEF_MAX_EVENTS", "7") or "7")
+    # iter38: target 5 events. Over-select 7 to allow dropping thin events
+    # while still meeting BRIEF_MIN_EVENTS_HARD required=[5,10].
+    _f6_target = 5
+    _max_events = 7  # over-select; will trim after density check
 
     def _f6_bfp(it) -> float:
         return float(getattr(it, "_bfp_score", 0) or 0) + float(getattr(it, "bfp_score", 0) or 0)
@@ -6695,6 +6704,34 @@ def _f600_run_fast_path(
             break
     if not _selected:
         _selected = list(raw_items[:_max_events])
+
+    # iter38: diversity-aware swap — ensure distinct_sources >= 3
+    def _f6_src(it) -> str:
+        return str(getattr(it, "source_name", "") or "").strip().lower()
+
+    _f6_srcs = {_f6_src(it) for it in _selected}
+    if len(_f6_srcs) < 3 and len(_selected) >= 3:
+        # Build replacement pool: must have fulltext_len >= 800 to avoid DIGEST_DENSITY fail
+        _f6_repl_pool = [it for it in _f6_tier(800) if it not in _selected]
+        _f6_repl_pool += [it for it in _f6_tier(300) if it not in _selected and it not in _f6_repl_pool]
+        # Find items from NEW sources (not in current set)
+        _f6_new_src_items = [it for it in _f6_repl_pool if _f6_src(it) not in _f6_srcs]
+        # Replace lowest-scored items from the majority source
+        from collections import Counter as _F6Counter
+        _f6_src_counts = _F6Counter(_f6_src(it) for it in _selected)
+        _f6_majority_src = _f6_src_counts.most_common(1)[0][0] if _f6_src_counts else ""
+        while len(_f6_srcs) < 3 and _f6_new_src_items:
+            # Find the worst item from majority source to replace
+            _f6_majority_items = [it for it in _selected if _f6_src(it) == _f6_majority_src]
+            if not _f6_majority_items or len(_f6_majority_items) <= 1:
+                break
+            _f6_worst = min(_f6_majority_items, key=_f6_bfp)
+            _f6_replacement = _f6_new_src_items.pop(0)
+            _selected = [_f6_replacement if it is _f6_worst else it for it in _selected]
+            _f6_srcs = {_f6_src(it) for it in _selected}
+            _f6_src_counts = _F6Counter(_f6_src(it) for it in _selected)
+            _f6_majority_src = _f6_src_counts.most_common(1)[0][0] if _f6_src_counts else ""
+        _log.info("FAST_600_MODE: diversity swap → distinct_sources=%d", len(_f6_srcs))
     _hydrated_ok_count = sum(1 for it in raw_items if int(getattr(it, "fulltext_len", 0) or 0) >= 300)
     _log.info(
         "FAST_600_MODE: selected %d items (hydrated_ok=%d total=%d)",
@@ -6722,16 +6759,42 @@ def _f600_run_fast_path(
     if not _digest_path:
         _f6_fail("HYDRATION_TOO_THIN", "digest.md generation failed")
 
-    # --- Step 5: TIME_BUDGET_GUARD_BEFORE_TRANSLATION ---
+    # --- Step 5: TIME_BUDGET_GUARD_BEFORE_TRANSLATION (iter38: 240→150s) ---
     _elapsed_pre_xlat = time.time() - t_start
-    if _elapsed_pre_xlat > 240:
+    stg["before_translation_seconds"] = round(_elapsed_pre_xlat, 1)
+    _pre_xlat_limit = 150
+    if _elapsed_pre_xlat > _pre_xlat_limit:
         _f6_fail(
-            "TIME_BUDGET_EXCEEDED",
-            f"TIME_BUDGET_GUARD_BEFORE_TRANSLATION: {_elapsed_pre_xlat:.0f}s > 240s",
+            "TIME_BUDGET_GUARD_BEFORE_TRANSLATION",
+            f"before_translation={_elapsed_pre_xlat:.0f}s > {_pre_xlat_limit}s",
         )
 
     # --- Step 6: DIGEST_DENSITY_FLOOR_HARD ---
+    # iter38: over-selected to _max_events; now trim to _f6_target, dropping thin events first
     _dd_ok, _dd_reason, _dd_meta = _f600_check_digest_density(_digest_path, _outputs, _run_id)
+    _need_rebuild = False
+    if len(_selected) > _f6_target:
+        # Drop thin events first, then lowest-scored extras
+        _thin_idxs = set()
+        if not _dd_ok and _dd_meta.get("thin_events_count", 0) > 0:
+            for _di, _dev in enumerate(_dd_meta.get("events", [])):
+                if _dev.get("bullet_count", 0) < 5 and _dev.get("chars", 0) < 1200:
+                    _thin_idxs.add(_di)
+        # Build non-thin + thin lists
+        _non_thin = [it for i, it in enumerate(_selected) if i not in _thin_idxs]
+        # Keep _f6_target from non-thin (sorted by bfp), discard the rest
+        if len(_non_thin) >= _f6_target:
+            _selected = _non_thin[:_f6_target]
+        else:
+            _selected = _non_thin + [it for i, it in enumerate(_selected) if i in _thin_idxs]
+            _selected = _selected[:_f6_target]
+        _need_rebuild = True
+    if _need_rebuild:
+        _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+        _digest_path = _generate_digest_md(_card_dicts, _run_id)
+        _dd_ok, _dd_reason, _dd_meta = _f600_check_digest_density(_digest_path, _outputs, _run_id)
+        _log.info("FAST_600_MODE: trimmed to %d events (target=%d), density=%s",
+                   len(_selected), _f6_target, _dd_meta.get("gate_result"))
     if not _dd_ok:
         _f6_fail(
             "DIGEST_DENSITY_FLOOR_HARD",
@@ -6833,8 +6896,9 @@ def _f600_run_fast_path(
     )
 
     # --- Step 11: write pool_sufficiency.meta.json ---
+    # iter38: threshold adjusted for fixed 5 events (was 6/4, now 5/3)
     _strict_ok = sum(1 for it in _selected if int(getattr(it, "fulltext_len", 0) or 0) >= 800)
-    _pool_status = "OK" if (len(_selected) >= 6 and _strict_ok >= 4) else "DEGRADED"
+    _pool_status = "OK" if (len(_selected) >= 5 and _strict_ok >= 3) else "DEGRADED"
     try:
         (_outputs / "pool_sufficiency.meta.json").write_text(
             _f6_j.dumps({
@@ -6885,10 +6949,17 @@ def _f600_run_fast_path(
     except Exception:
         pass
 
-    # --- Step 14: write final_cards.meta.json + exec_selection.meta.json ---
+    # --- Step 14: write final_cards.meta.json + exec_selection.meta.json + brief_min_events_hard ---
+    # iter38 (C-3): write brief_min_events_hard.meta.json so actual matches selected_events
+    _f6_min_events_ok = (5 <= len(_selected) <= 10)
     for _fname, _fdata in (
         ("final_cards.meta.json", {"run_id": _run_id, "final_cards_count": len(_selected), "fast_600_mode": True}),
         ("exec_selection.meta.json", {"run_id": _run_id, "final_selected_events": len(_selected), "events_total": len(_selected), "fast_600_mode": True}),
+        ("brief_min_events_hard.meta.json", {
+            "gate_result": "PASS" if _f6_min_events_ok else "FAIL",
+            "events_total": len(_selected), "required_min": 5, "required_max": 10,
+            "actual": len(_selected),
+        }),
     ):
         try:
             (_outputs / _fname).write_text(
