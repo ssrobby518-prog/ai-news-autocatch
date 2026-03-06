@@ -246,6 +246,29 @@ Write-Output "=== verify_online.ps1 開始 ==="
 Write-Output ""
 
 # ---------------------------------------------------------------------------
+# META_RESET_HARD (iter36): 清除本次要重寫的 meta 檔（確保 run_id 一致、無殘留舊值）
+# 只刪 meta / summary，不刪 outputs 其他產物（不破壞已有證據）
+# ---------------------------------------------------------------------------
+Write-Output "[META_RESET_HARD] 清除舊 meta 檔（run_id=$_voRunId）..."
+$_metaResetDir = Join-Path $repoRoot "outputs"
+New-Item -ItemType Directory -Force -Path $_metaResetDir -ErrorAction SilentlyContinue | Out-Null
+foreach ($_mrFile in @(
+    "outputs\translation_engine.meta.json",
+    "outputs\gpu_probe.meta.json",
+    "outputs\gpu_probe_history.meta.json",
+    "outputs\run_timing.meta.json",
+    "outputs\LAST_RUN_SUMMARY.txt",
+    "outputs\stage_timing.meta.json"
+)) {
+    $_mrPath = Join-Path $repoRoot $_mrFile
+    if (Test-Path $_mrPath) {
+        Remove-Item -LiteralPath $_mrPath -Force -ErrorAction SilentlyContinue
+        Write-Output ("  [META_RESET] 已刪除: {0}" -f $_mrFile)
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # PRE-CLEAN: 清除前次殘留的 brief-demo 禁止產物（notion/xmind/deep_analysis）
 #   硬鎖：brief demo 路徑不得有這些檔案。即使前次失敗中斷也要清乾淨。
 # ---------------------------------------------------------------------------
@@ -424,6 +447,32 @@ if ($false -and $SkipPipeline) {
             probed_at         = (Get-Date -Format "o")
             reason            = "SERVER_NOT_READY"
         } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\gpu_probe.meta.json") -Encoding UTF8
+        # iter36 SERVER_NOT_READY: 立刻寫 translation_engine.meta.json（success=false, calls_total=0）
+        @{
+            run_id                = $_voRunId
+            generated_at          = (Get-Date -Format "o")
+            endpoint              = "http://127.0.0.1:8080"
+            response_model        = ""
+            latency_ms            = 0
+            prompt_chars          = 0
+            output_chars          = 0
+            success               = $false
+            fail_reason           = "SERVER_NOT_READY"
+            source_file           = ""
+            calls_total           = 0
+            calls_retry           = 0
+            cache_hit             = 0
+            cache_miss            = 0
+            tok_per_sec_est       = 0.0
+            gpu_process_found     = $false
+            calls_tok_s           = @()
+            tok_s_min             = $null
+            tok_s_avg             = $null
+            tok_s_max             = $null
+            cpu_fallback_detected = $false
+            gpu_required          = $true
+        } | ConvertTo-Json -Compress | Set-Content (Join-Path $repoRoot "outputs\translation_engine.meta.json") -Encoding UTF8
+        Write-Output "  translation_engine.meta.json: success=false fail_reason=SERVER_NOT_READY calls_total=0 run_id=$_voRunId"
     }
 }
 Write-Output ""
@@ -3868,6 +3917,26 @@ try {
         $_stgLine = ($_stgHt.Keys | ForEach-Object { "{0}:{1}s" -f $_, [int]$_stgHt[$_] }) -join "  "
         Write-Output ("  stage_seconds: {0}" -f $_stgLine)
     }
+    # TIMING_SANITY_HARD (iter36): total_seconds >= every stage_seconds (±5s tolerance)
+    if ($_stgHt -and $_stgHt.Count -gt 0) {
+        $_tsBadParts = @()
+        foreach ($_sk in $_stgHt.Keys) {
+            if ([double]$_stgHt[$_sk] -gt ($_sSecTot + 5)) {
+                $_tsBadParts += ("{0}={1}s > total={2}s" -f $_sk, [int]$_stgHt[$_sk], $_sSecTot)
+            }
+        }
+        $_tsSum = ($_stgHt.Values | Measure-Object -Sum).Sum
+        if ($_tsSum -gt ($_sSecTot + 5)) {
+            $_tsBadParts += ("sum_stages={0}s > total={1}s" -f [int]$_tsSum, $_sSecTot)
+        }
+        if ($_tsBadParts.Count -gt 0) {
+            $_tsReason = "TIMING_SANITY_HARD: " + ($_tsBadParts -join "; ")
+            Write-Output ("  [TIMING_SANITY_HARD] FAIL: {0}" -f $_tsReason)
+            Invoke-VerifyOnlineFailFast -Gate "TIMING_SANITY_HARD" -Reason $_tsReason
+        } else {
+            Write-Output ("  [TIMING_SANITY_HARD] 通過 (total={0}s)" -f $_sSecTot)
+        }
+    }
 } catch {
     Write-Output ("  [WARN] 計時寫入失敗: {0}" -f $_)
 }
@@ -3926,6 +3995,41 @@ if (Test-Path $_teMetaPatchPath) {
 } else {
     Write-Output "  [INFO] translation_engine.meta.json 不存在（pipeline 未寫入），略過 patch"
 }
+
+# ---------------------------------------------------------------------------
+# RUN_ID_COHERENCE_HARD (iter36): 確認所有 meta 檔使用相同 run_id
+# ---------------------------------------------------------------------------
+Write-Output ""
+Write-Output "[RUN_ID_COHERENCE_HARD] 核對所有 meta 檔 run_id = $_voRunId ..."
+$_ridFail = $false
+$_ridBad  = @()
+# check LAST_RUN_SUMMARY.txt
+$_ridLrs = Join-Path $repoRoot "outputs\LAST_RUN_SUMMARY.txt"
+if (Test-Path $_ridLrs) {
+    try {
+        $_ridLrsLine = (Select-String -Path $_ridLrs -Pattern "^run_id\s*=\s*(\S+)" -ErrorAction Stop |
+            Select-Object -First 1)
+        $_ridLrsVal  = $_ridLrsLine.Matches[0].Groups[1].Value.Trim()
+        if ($_ridLrsVal -ne $_voRunId) { $_ridFail=$true; $_ridBad += "LAST_RUN_SUMMARY($($_ridLrsVal))" }
+        else { Write-Output ("  [OK] LAST_RUN_SUMMARY.txt run_id={0}" -f $_ridLrsVal) }
+    } catch { Write-Output ("  [SKIP] LAST_RUN_SUMMARY.txt: 無法解析 run_id ({0})" -f $_) }
+} else { Write-Output "  [SKIP] LAST_RUN_SUMMARY.txt: 不存在" }
+foreach ($_ridJson in @("run_timing.meta.json","gpu_probe.meta.json","translation_engine.meta.json")) {
+    $_ridJP = Join-Path $repoRoot "outputs\$_ridJson"
+    if (Test-Path $_ridJP) {
+        try {
+            $_ridJVal = [string](Get-Content $_ridJP -Raw -Encoding UTF8 | ConvertFrom-Json).run_id
+            if ($_ridJVal -ne $_voRunId) { $_ridFail=$true; $_ridBad += "$_ridJson($($_ridJVal))" }
+            else { Write-Output ("  [OK] {0} run_id={1}" -f $_ridJson, $_ridJVal) }
+        } catch { Write-Output ("  [SKIP] {0}: 無法解析 run_id ({1})" -f $_ridJson, $_) }
+    } else { Write-Output ("  [SKIP] {0}: 不存在" -f $_ridJson) }
+}
+if ($_ridFail) {
+    $_ridReason = "RUN_ID_COHERENCE_HARD: " + ($_ridBad -join "; ") + "; expected=$_voRunId"
+    Write-Output ("  [RUN_ID_COHERENCE_HARD] FAIL: {0}" -f $_ridReason)
+    Invoke-VerifyOnlineFailFast -Gate "RUN_ID_COHERENCE_HARD" -Reason $_ridReason
+}
+Write-Output "  [RUN_ID_COHERENCE_HARD] 通過"
 
 if ($pool85Degraded) {
     Write-Output "=== verify_online.ps1 完成：降級運行（Z0 frontier85_72h 低於嚴格目標；已接受 fallback）==="
