@@ -6680,11 +6680,9 @@ def _f600_run_fast_path(
 
     _log.info("FAST_600_MODE: fast path entered (budget=%ds raw_items=%d)", budget_sec, len(raw_items))
 
-    # --- Step 1: fast select top max_events hydrated items ---
-    # iter38: target 5 events. Over-select 7 to allow dropping thin events
-    # while still meeting BRIEF_MIN_EVENTS_HARD required=[5,10].
+    # --- Step 1: fast select top 5 hydrated items ---
     _f6_target = 5
-    _max_events = 7  # over-select; will trim after density check
+    _max_events = 5
 
     def _f6_bfp(it) -> float:
         return float(getattr(it, "_bfp_score", 0) or 0) + float(getattr(it, "bfp_score", 0) or 0)
@@ -6770,31 +6768,7 @@ def _f600_run_fast_path(
         )
 
     # --- Step 6: DIGEST_DENSITY_FLOOR_HARD ---
-    # iter38: over-selected to _max_events; now trim to _f6_target, dropping thin events first
     _dd_ok, _dd_reason, _dd_meta = _f600_check_digest_density(_digest_path, _outputs, _run_id)
-    _need_rebuild = False
-    if len(_selected) > _f6_target:
-        # Drop thin events first, then lowest-scored extras
-        _thin_idxs = set()
-        if not _dd_ok and _dd_meta.get("thin_events_count", 0) > 0:
-            for _di, _dev in enumerate(_dd_meta.get("events", [])):
-                if _dev.get("bullet_count", 0) < 5 and _dev.get("chars", 0) < 1200:
-                    _thin_idxs.add(_di)
-        # Build non-thin + thin lists
-        _non_thin = [it for i, it in enumerate(_selected) if i not in _thin_idxs]
-        # Keep _f6_target from non-thin (sorted by bfp), discard the rest
-        if len(_non_thin) >= _f6_target:
-            _selected = _non_thin[:_f6_target]
-        else:
-            _selected = _non_thin + [it for i, it in enumerate(_selected) if i in _thin_idxs]
-            _selected = _selected[:_f6_target]
-        _need_rebuild = True
-    if _need_rebuild:
-        _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
-        _digest_path = _generate_digest_md(_card_dicts, _run_id)
-        _dd_ok, _dd_reason, _dd_meta = _f600_check_digest_density(_digest_path, _outputs, _run_id)
-        _log.info("FAST_600_MODE: trimmed to %d events (target=%d), density=%s",
-                   len(_selected), _f6_target, _dd_meta.get("gate_result"))
     if not _dd_ok:
         _f6_fail(
             "DIGEST_DENSITY_FLOOR_HARD",
@@ -6977,7 +6951,7 @@ def _f600_run_fast_path(
     if _pool_status != "OK":
         _f6_fail(
             "POOL_SUFFICIENCY_HARD",
-            f"final_selected={len(_selected)} strict_fulltext_ok={_strict_ok} (need >=6 and >=4)",
+            f"final_selected={len(_selected)} strict_fulltext_ok={_strict_ok} (need >=5 and >=3)",
         )
 
     # --- Step 16: write stage timing (without card_build) ---
