@@ -2,6 +2,147 @@
 
 ---
 
+## 2026-03-05 / Iteration 33 狀態更新
+
+> **最後更新：2026-03-06**
+> 對應 Iteration 33（run_id=20260305_183925）
+> 本段屬於「狀態記錄」，不宣稱整體完成。
+
+---
+
+### (1) 標題與版本
+
+| 欄位 | 內容 |
+|------|------|
+| 專案 | AI Intel Scraper MVP |
+| 報告類型 | 狀態記錄（非完成宣告） |
+| 最後更新 | 2026-03-06 |
+| 對應 Iteration | 33 |
+| run_id | 20260305_183925 |
+| 核心 commit | dbecaf4（iter33），7cbac5b（iter33b patch） |
+
+---
+
+### (2) Iter33 結果摘要
+
+| 指標 | 數值 | 備註 |
+|------|------|------|
+| verify_online 結果 | **FAIL（exit 1）** | TIME_BUDGET_EXCEEDED |
+| 總耗時 | **4688 秒** | 預算 600 秒，超標 681% |
+| card_build 耗時（估算） | ~4681 秒 | z0_extra 新卡片需 CPU Qwen 全量生成 |
+| 交付物格式 | md + docx | ✅ pptx 已全面移除 |
+| selected | 5 | ✅（5-7 範圍） |
+| distinct_sources | 3 | ✅（≥3） |
+| bigtech_hit | 5 | ✅（≥4） |
+| DBE_TRIGGERED | false | ✅ 主路徑成功，無 DBE |
+| NOT_READY 兩件套 | .md + .docx | ✅（.pptx 已移除） |
+
+---
+
+### (3) 本輪變更（已完成）
+
+| 變更項目 | 狀態 |
+|----------|------|
+| PPTX 全面停止生成（run_once.py / verify_online.ps1 / verify_run.ps1） | ✅ 完成 |
+| PIPELINE_TIME_BUDGET_SEC：3600 → 600 | ✅ 完成 |
+| 軟警告閾值：1800 → 480 | ✅ 完成 |
+| translation_engine.meta.json 新增 tok_per_sec_est / gpu_process_found | ✅ 完成 |
+| stage_seconds：hydration → hydrate，新增 gates，移除 build_pptx | ✅ 完成 |
+| 目標水化（targeted hydration）：只取前 max(probe×4, 30) 筆 | ✅ 完成（iter33b 修正） |
+| _extract_pptx_text NoneType 保護 | ✅ 完成（iter33b patch） |
+| CANONICAL_DELIVERY_CONSISTENCY：改為只驗 DOCX | ✅ 完成 |
+| NOT_READY 改為二件套（md+docx） | ✅ 完成 |
+
+---
+
+### (4) FAIL 根因分析
+
+**(a) TIME_BUDGET_EXCEEDED：4688s > 600s**
+
+- stage=before_translation；card_build 估計消耗 4681s
+- 主路徑（非 DBE）處理 7 張卡片；每張約 669s
+- 批次翻譯（`_brief_batch_translate_event`，max_tokens=480）估計各耗 480s（GPU 若真 5 tok/sec 應 96s）
+
+**(b) 根本原因：vram_mb=0，GPU 推論未實際啟用**
+
+- gpu_probe.meta.json：`gpu_process_found=True, vram_mb=0`
+- VRAM 占用 0 MB 表示模型完全在 CPU 記憶體運行（記憶體映射模式），而非真正 GPU 計算
+- 實際推論速度 ≈ 1 tok/sec（CPU 基準），非 PM 預估的 5-10 tok/sec（GPU）
+- 480 tokens × 1 tok/sec × 9 事件（7 主路徑 + 2 z0_extra）≈ 4320s，符合實測 4681s
+
+**(c) 目標水化加劇問題**
+
+- 只水化 12 筆（probe_target × 2）→ 僅 3 筆通過內容過濾器（non_ai_topic 拒絕 9 筆）
+- 不足 5 筆 minimum → 依賴 Z0_EXEC_EXTRA（6 筆 Z0 原始項目，無預建卡片）填補
+- Z0_EXEC_EXTRA 項目需 full card_build（無快取 canonical payload）→ 每張約 669s
+- iter33b 已修正：pool 擴大至 max(probe×4, 30) = 30 筆，預期更多筆通過過濾器
+
+---
+
+### (5) Section A：Z0 收集器證據
+
+```
+collected_at      : 2026-03-06T02:43:59Z
+total_items       : 2402
+frontier_ge_85_72h: 245
+Z0_MIN_TOTAL_ITEMS: PASS（2402 ≥ 800）
+Z0_MIN_FRONTIER85_72H: PASS（245 ≥ 10）
+```
+
+---
+
+### (6) Section B：Pipeline 關鍵日誌
+
+```
+BRIEF_FAST_PRESELECT: 2402 → 200 (limit=600, budget=600s)
+Z0 targeted hydration (iter33): hydrated=12 (top 12, probe_target=6)
+hydrate_items_batch: total=12 ok=6 elapsed=3.05s
+Filters: 7 -> 3 items (non_ai_topic=3 rejected)
+Z0_EXEC_EXTRA: selected=6 (from Z0 frontier pool, no pre-built cards)
+PH_SUPP: added 4 pre-hydrated supplemental cards
+BRIEF_MAIN_PATH: quota_cap=9 input_pool=7 final=5
+SELECTION_AUDIT: selected=5 distinct_sources=3 bigtech_hit=5
+DBE_TRIGGERED: False
+TIME_BUDGET_EXCEEDED: stage=before_translation; elapsed=4688s > budget=600s
+```
+
+---
+
+### (7) Section C：FAIL 證據
+
+```
+gate: TIME_BUDGET_EXCEEDED
+fail_reason: elapsed=4688s > budget=600s
+NOT_READY_report.md: ✅ 生成（.pptx 已移除，兩件套 md+docx）
+NOT_READY_report.docx: ✅ 生成
+gpu_probe: gpu_process_found=True, vram_mb=0 → CPU 模式推論
+```
+
+---
+
+### (8) Section D：git 狀態
+
+```
+commit dbecaf4  feat(iter33): md+docx only, 600s hard cap, targeted hydration
+commit 7cbac5b  fix(iter33b): NoneType guard + widen hydration pool
+HEAD → main（已 push origin 0 0 at 7cbac5b）
+```
+
+---
+
+### (9) 結論與下一步
+
+| 項目 | 說明 |
+|------|------|
+| 功能品質 | ✅ 5 事件，select_audit 全 PASS，DOCX 生成正常 |
+| 時間閘門 | ❌ FAIL：4688s > 600s 硬上限 |
+| 根本障礙 | 硬體：vram_mb=0，llama-server 模型在 CPU 運行 |
+| 600s 可達性 | **需要真實 GPU 推論（vram_mb > 4000 MB 建議）** |
+| Iter34 建議 | 確認 llama-server 確實載入 GPU（`--n-gpu-layers` 設定），再重測 |
+| 備選方案 | 若 GPU 無法修復：調低 max_tokens（480→100），或切換至更小模型 |
+
+---
+
 ## 2026-03-05 / Iteration 32 狀態更新
 
 > **最後更新：2026-03-05**
