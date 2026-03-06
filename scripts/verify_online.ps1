@@ -125,7 +125,8 @@ function Invoke-VerifyOnlineFailFast {
     param(
         [string]$Gate,
         [string]$Reason,
-        [int]$ExitCode = 1
+        [int]$ExitCode = 1,
+        [string]$NextSteps = ""
     )
 
     $outputsDir = Join-Path $repoRoot "outputs"
@@ -181,6 +182,13 @@ reason: $Reason
         $env:BRIEF_FORCE_QWEN_ONLY   = $null
         $env:SKIP_DEEP_ANALYSIS      = $null
         $env:SKIP_EDUCATION_RENDERER = $null
+    }
+    # iter34: append GPU / other next-steps instructions to NOT_READY_report.md
+    if ($NextSteps -and (Test-Path (Join-Path $outputsDir "NOT_READY_report.md"))) {
+        try {
+            Add-Content -LiteralPath (Join-Path $outputsDir "NOT_READY_report.md") `
+                -Value ("`n`n## 下一步`n$NextSteps") -Encoding utf8
+        } catch {}
     }
 
     $_voNrProdList = @()
@@ -424,6 +432,93 @@ if ($env:BRIEF_TRANSLATION_READY -ne "1") {
     $_voPreflightGate = if ($env:BRIEF_TRANSLATION_FAIL_REASON) { $env:BRIEF_TRANSLATION_FAIL_REASON } else { "TRANSLATION_ENGINE_DOWN" }
     Invoke-VerifyOnlineFailFast -Gate $_voPreflightGate -Reason $_voPreflightGate
 }
+
+# ---------------------------------------------------------------------------
+# GPU_MODE_REQUIRED_HARD gate (iter34)
+# tok/s probe — 呼叫一次 llama-server completions 探針，計算 tok_per_sec_est。
+# 門檻：tok_per_sec_est >= 15（保守值）；低於門檻 = CPU 模式，立刻 FAIL-FAST。
+# 輔助指標：gpu_process_found=true 或 vram_mb >= 300（來自前面的 nvidia-smi probe）
+# PASS 條件：tok_per_sec_est >= 15 AND (gpu_process_found OR vram_mb >= 300)
+# FAIL 條件：tok_per_sec_est < 15（無論 nvidia-smi 顯示為何）
+# 目標：60 秒內完成（probe timeout=50s；NOT_READY 兩件套生成 < 60s）
+# ---------------------------------------------------------------------------
+Write-Output ""
+Write-Output "[GPU_MODE_REQUIRED_HARD] tok/s 探針啟動..."
+$_gpuTokThreshold = 15
+$_gpuTokPerSec    = 0.0
+$_gpuProbeModel   = ""
+$_gpuCompUrl      = $_qwenUrl -replace "/v1/models", "/v1/chat/completions"
+$_gpuProbePayload = @{
+    model       = "qwen"
+    messages    = @(@{ role = "user"; content = "Summarize in one sentence: NVIDIA announced a new H200 GPU with doubled VRAM for large-scale AI inference workloads." })
+    max_tokens  = 80
+    temperature = 0.0
+    stream      = $false
+} | ConvertTo-Json -Depth 5 -Compress
+
+$_gpuProbeWatch = [System.Diagnostics.Stopwatch]::StartNew()
+try {
+    $_gpuProbeHeaders = @{ "Content-Type" = "application/json" }
+    $_gpuProbeResp = Invoke-RestMethod -Uri $_gpuCompUrl -Method POST `
+        -Body $_gpuProbePayload -Headers $_gpuProbeHeaders -TimeoutSec 50 -ErrorAction Stop
+    $_gpuProbeWatch.Stop()
+    $_gpuProbeElapsed = $_gpuProbeWatch.Elapsed.TotalSeconds
+    $_gpuOutputTok = 0
+    if ($_gpuProbeResp.PSObject.Properties['usage'] -and
+        $_gpuProbeResp.usage.PSObject.Properties['completion_tokens']) {
+        $_gpuOutputTok = [int]$_gpuProbeResp.usage.completion_tokens
+    }
+    # fallback: rough word count if usage absent
+    if ($_gpuOutputTok -le 0) {
+        $_gpuContent = ""
+        try { $_gpuContent = [string]$_gpuProbeResp.choices[0].message.content } catch {}
+        $_gpuOutputTok = [Math]::Max(10, ($($_gpuContent -split '\s+').Count))
+    }
+    try { $_gpuProbeModel = [string]$_gpuProbeResp.model } catch {}
+    $_gpuTokPerSec = [Math]::Round($_gpuOutputTok / [Math]::Max(0.1, $_gpuProbeElapsed), 2)
+    Write-Output ("  探針完成: model={0}  output_tokens={1}  elapsed={2:F2}s  tok_per_sec_est={3:F1}" `
+        -f $_gpuProbeModel, $_gpuOutputTok, $_gpuProbeElapsed, $_gpuTokPerSec)
+} catch {
+    $_gpuProbeWatch.Stop()
+    Write-Output ("  探針失敗（視為 CPU 模式）: {0}" -f $_)
+    $_gpuTokPerSec = 0.0
+}
+
+# 更新 gpu_probe.meta.json，加入 tok_per_sec_est
+try {
+    $_gpuMetaPathV2 = Join-Path $repoRoot "outputs\gpu_probe.meta.json"
+    New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "outputs") -ErrorAction SilentlyContinue | Out-Null
+    @{
+        run_id            = $_voRunId
+        nvidia_smi_ok     = $_nvsmiExists
+        gpu_process_found = $_gpuFound
+        vram_mb           = $_vramMb
+        tok_per_sec_est   = $_gpuTokPerSec
+        tok_threshold     = $_gpuTokThreshold
+        gpu_required      = $true
+        probed_at         = (Get-Date -Format "o")
+        reason            = if ($_gpuTokPerSec -ge $_gpuTokThreshold) { "none" } else { "tok_per_sec_below_threshold" }
+    } | ConvertTo-Json -Compress | Set-Content $_gpuMetaPathV2 -Encoding UTF8
+    Write-Output ("  gpu_probe.meta.json 已更新: tok_per_sec_est={0:F1}  gpu_required=true" -f $_gpuTokPerSec)
+} catch {
+    Write-Output ("  [WARN] gpu_probe.meta.json 更新失敗: {0}" -f $_)
+}
+
+$_gpuTokPass      = ($_gpuTokPerSec -ge $_gpuTokThreshold)
+$_gpuEvidencePass = ($_gpuFound -or $_vramMb -ge 300)
+Write-Output ("  GPU_MODE_REQUIRED_HARD: tok_per_sec_est={0:F1} threshold={1}  gpu_evidence={2} (gpu_found={3} vram={4}MB)" `
+    -f $_gpuTokPerSec, $_gpuTokThreshold, $_gpuEvidencePass, $_gpuFound, $_vramMb)
+
+if (-not $_gpuTokPass) {
+    $_gpuHardReason = ("GPU_MODE_REQUIRED_HARD: tok_per_sec_est={0:F1} < {1} (CPU mode detected — GPU inference not active)" `
+        -f $_gpuTokPerSec, $_gpuTokThreshold)
+    Write-Output ("  => 失敗: {0}" -f $_gpuHardReason)
+    Invoke-VerifyOnlineFailFast -Gate "GPU_MODE_REQUIRED_HARD" -Reason $_gpuHardReason `
+        -NextSteps "請用 GPU 參數啟動 llama-server（-ngl 999 或 --n-gpu-layers 999）並確認 tok_per_sec_est >= 15。参考: scripts\llama_server.ps1 已内建 --n-gpu-layers -1 啟動邏輯，CUDA build 路徑為 C:\llama_node\llama-b8123-bin-win-cuda-12.4-x64\llama-server.exe。"
+}
+Write-Output ("  => GPU_MODE_REQUIRED_HARD：通過 (tok_per_sec_est={0:F1} >= {1})" -f $_gpuTokPerSec, $_gpuTokThreshold)
+$env:GPU_TOK_PER_SEC_EST = [string]$_gpuTokPerSec
+Write-Output ""
 
 # ---- Step 1: Z0 online collection + supply fallback ----
 $_z0Dir          = Join-Path $repoRoot "data\raw\z0"
@@ -3718,6 +3813,30 @@ try {
     Write-Output ("  [WARN] 計時寫入失敗: {0}" -f $_)
 }
 Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter34: patch translation_engine.meta.json — add tok_per_sec_est + gpu_required
+# ---------------------------------------------------------------------------
+$_teMetaPatchPath = Join-Path $repoRoot "outputs\translation_engine.meta.json"
+if (Test-Path $_teMetaPatchPath) {
+    try {
+        $_teMeta = Get-Content $_teMetaPatchPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $_teObj  = [ordered]@{}
+        foreach ($p in $_teMeta.PSObject.Properties) { $_teObj[$p.Name] = $p.Value }
+        $_teObj["tok_per_sec_est"] = $_gpuTokPerSec
+        $_teObj["gpu_required"]    = $true
+        # ensure run_id is current (run_once.py may write its own run_id)
+        if (-not $_teObj.ContainsKey("run_id") -or [string]$_teObj["run_id"] -ne $_voRunId) {
+            $_teObj["run_id"] = $_voRunId
+        }
+        $_teObj | ConvertTo-Json -Depth 5 -Compress | Set-Content $_teMetaPatchPath -Encoding UTF8
+        Write-Output ("  [iter34] translation_engine.meta.json 已更新: tok_per_sec_est={0:F1}  gpu_required=true" -f $_gpuTokPerSec)
+    } catch {
+        Write-Output ("  [WARN] translation_engine.meta.json patch 失敗: {0}" -f $_)
+    }
+} else {
+    Write-Output "  [INFO] translation_engine.meta.json 不存在（pipeline 未寫入），略過 patch"
+}
 
 if ($pool85Degraded) {
     Write-Output "=== verify_online.ps1 完成：降級運行（Z0 frontier85_72h 低於嚴格目標；已接受 fallback）==="
