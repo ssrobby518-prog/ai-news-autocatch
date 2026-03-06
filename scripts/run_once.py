@@ -6914,9 +6914,12 @@ def _f600_run_fast_path(
 
     # --- Step 17: clean up stale meta files that fast path does not produce ---
     # Prevents gates from reading stale values from previous normal-pipeline runs.
+    # iter37d: also remove LATEST_SHOWCASE.md — Part B of EXEC_NARRATIVE_FIDELITY_HARD
+    # scans it for 克勞德/style patterns; stale full-pipeline version may contain them.
     for _stale_meta in (
         "exec_news_quality.meta.json",   # EXEC_NARRATIVE_FIDELITY_HARD reads this
         "brief_template_leak.meta.json",  # BRIEF HARD GATES may read this
+        "LATEST_SHOWCASE.md",            # EXEC_NARRATIVE_FIDELITY_HARD Part B scans this
     ):
         try:
             (_outputs / _stale_meta).unlink(missing_ok=True)
