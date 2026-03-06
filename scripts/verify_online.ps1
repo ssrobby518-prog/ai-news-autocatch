@@ -1547,12 +1547,15 @@ if (Test-Path $poolSuffPath) {
         Write-Output ("  backfill_hydrated_ok(>=800): {0}" -f $psBfOk)
         Write-Output ("  pipeline_status            : {0}" -f $psPipeStatus)
 
-        if ($psFinal -ge 6 -and $psStrict -ge 4) {
+        # iter38: FAST_600_MODE targets 5 events; normal pipeline targets 6+
+        $psMinFinal  = if ($_fast600Mode) { 5 } else { 6 }
+        $psMinStrict = if ($_fast600Mode) { 3 } else { 4 }
+        if ($psFinal -ge $psMinFinal -and $psStrict -ge $psMinStrict) {
             Write-Output "  => POOL_SUFFICIENCY_HARD: PASS"
         } else {
             Write-Output ("  => POOL_SUFFICIENCY_HARD: FAIL " +
-                "(need final_selected>=6 AND strict_fulltext_ok>=4; " +
-                "got final={0} strict={1})" -f $psFinal, $psStrict)
+                "(need final_selected>={0} AND strict_fulltext_ok>={1}; " +
+                "got final={2} strict={3})" -f $psMinFinal, $psMinStrict, $psFinal, $psStrict)
             exit 1
         }
     } catch {
