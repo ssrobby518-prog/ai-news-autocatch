@@ -11303,7 +11303,7 @@ def run_pipeline() -> None:
                     xmind_path = None
                     log.info("Executive reports generated (brief mode: DOCX only — iter33)")
                 else:
-                    pptx_path, docx_path, notion_path, xmind_path = generate_executive_reports(
+                    _gen_pptx_path, docx_path, notion_path, xmind_path = generate_executive_reports(
                         results=z5_results,
                         report=z5_report,
                         metrics=metrics_dict,
@@ -11311,8 +11311,15 @@ def run_pipeline() -> None:
                         max_items=settings.EDU_REPORT_MAX_ITEMS,
                         extra_cards=z0_exec_extra_cards or None,
                     )
-                    log.info("Executive PPTX generated: %s", pptx_path)
-                    log.info("Executive DOCX generated: %s", docx_path)
+                    # iter42b: PPTX forbidden — delete if generate_executive_reports produced one
+                    if _gen_pptx_path:
+                        try:
+                            Path(str(_gen_pptx_path)).unlink(missing_ok=True)
+                            log.info("iter42b: deleted generated PPTX: %s", _gen_pptx_path)
+                        except Exception as _pptx_del_exc:
+                            log.warning("iter42b: failed to delete PPTX %s: %s", _gen_pptx_path, _pptx_del_exc)
+                    pptx_path = None  # iter42b: PPTX forbidden
+                    log.info("Executive DOCX generated (PPTX forbidden — iter42b): %s", docx_path)
                     log.info("Notion page generated: %s", notion_path)
                     log.info("XMind mindmap generated: %s", xmind_path)
 

@@ -232,6 +232,11 @@ function Invoke-VerifyOnlineFailFast {
             Remove-Item -LiteralPath $stalePath -Force -ErrorAction SilentlyContinue
         }
     }
+    # iter42b: PPTX forbidden — also clean any pptx from outputs in fail-fast path
+    Get-ChildItem -Path $outputsDir -Filter "*.pptx" -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+        Write-Output ("  [fail-fast] 已刪除殘留 PPTX: {0}" -f $_.Name)
+    }
 
     @"
 # NOT_READY
@@ -358,6 +363,14 @@ Write-Output ""
 # PRE-CLEAN: 清除前次殘留的 brief-demo 禁止產物（notion/xmind/deep_analysis）
 #   硬鎖：brief demo 路徑不得有這些檔案。即使前次失敗中斷也要清乾淨。
 # ---------------------------------------------------------------------------
+# iter42b: PPTX removal — clean ALL pptx from outputs (three-layer defense: layer 1 pre-clean)
+$_pptxPreCleanCount = 0
+Get-ChildItem -Path (Join-Path $repoRoot "outputs") -Filter "*.pptx" -ErrorAction SilentlyContinue | ForEach-Object {
+    Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+    Write-Output ("  [PRE-CLEAN] 已刪除 PPTX: {0}" -f $_.Name)
+    $_pptxPreCleanCount++
+}
+Write-Output ("[PRE-CLEAN] PPTX 清除完成：刪除 {0} 個 pptx 檔案" -f $_pptxPreCleanCount)
 Write-Output "[PRE-CLEAN] 清除舊的 notion/xmind/deep_analysis 殘留產物..."
 foreach ($_voPreClean in @(
     "outputs\notion_page.md",
@@ -4386,6 +4399,24 @@ if ($_ridFail) {
     Invoke-VerifyOnlineFailFast -Gate "RUN_ID_COHERENCE_HARD" -Reason $_ridReason
 }
 Write-Output "  [RUN_ID_COHERENCE_HARD] 通過"
+
+# ---------------------------------------------------------------------------
+# iter42b: PPTX_FORBIDDEN_HARD — three-layer defense: layer 3 (final gate)
+# Any *.pptx in outputs/ → FAIL (even if pipeline didn't generate them, e.g. stale files)
+# ---------------------------------------------------------------------------
+$_pptxForbiddenFiles = @(Get-ChildItem -Path (Join-Path $repoRoot "outputs") -Filter "*.pptx" -ErrorAction SilentlyContinue)
+if ($_pptxForbiddenFiles.Count -gt 0) {
+    $_pptxForbiddenNames = ($_pptxForbiddenFiles | ForEach-Object { $_.Name }) -join ", "
+    Write-Output ("PPTX_FORBIDDEN_HARD: FAIL — found {0} pptx file(s) in outputs: {1}" -f $_pptxForbiddenFiles.Count, $_pptxForbiddenNames)
+    # Attempt cleanup before fail (but still FAIL — no hiding)
+    foreach ($_pff in $_pptxForbiddenFiles) {
+        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+        Write-Output ("  [PPTX_FORBIDDEN_HARD] 已刪除: {0}" -f $_pff.Name)
+    }
+    Invoke-VerifyOnlineFailFast -Gate "PPTX_FORBIDDEN_HARD" `
+        -Reason ("PPTX_FORBIDDEN_HARD: found {0} pptx files in outputs ({1})" -f $_pptxForbiddenFiles.Count, $_pptxForbiddenNames)
+}
+Write-Output "PPTX_FORBIDDEN_HARD: PASS (0 pptx files in outputs)"
 
 if ($pool85Degraded) {
     Write-Output "=== verify_online.ps1 完成：降級運行（Z0 frontier85_72h 低於嚴格目標；已接受 fallback）==="
