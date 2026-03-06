@@ -26,9 +26,17 @@ $_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 600 }  # iter33: reduced hard cap to 600s (soft-warn 480s below)
 $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
 
+# iter40: FAST_300_DAILY — online collect + bigtech gates + 300s hard cap
+$_fast300Daily = ($env:FAST_300_DAILY -eq "1")
 # iter39: FAST_300_MODE — hard cap 300s, auto-enables FAST_600_MODE
-$_fast300Mode = ($env:FAST_300_MODE -eq "1")
-if ($_fast300Mode) {
+$_fast300Mode = ($env:FAST_300_MODE -eq "1") -or $_fast300Daily
+if ($_fast300Daily) {
+    $_voBudgetSec = 300; $env:PIPELINE_TIME_BUDGET_SEC = "300"
+    $env:FAST_600_MODE = "1"
+    $env:FAST_300_DAILY = "1"
+    $env:BIGTECH_GATES_ENFORCE = "1"
+    Write-Output "FAST_300_DAILY=1（線上收集+大廠配額+硬上限=300s）"
+} elseif ($_fast300Mode) {
     if (-not $env:PIPELINE_TIME_BUDGET_SEC) { $_voBudgetSec = 300; $env:PIPELINE_TIME_BUDGET_SEC = "300" }
     $env:FAST_600_MODE = "1"
     Write-Output "FAST_300_MODE=1（硬上限=300s，自動啟用 FAST_600_MODE）"
@@ -294,7 +302,9 @@ foreach ($_mrFile in @(
     "outputs\run_timing.meta.json",
     "outputs\LAST_RUN_SUMMARY.txt",
     "outputs\stage_timing.meta.json",
-    "outputs\digest_density.meta.json"
+    "outputs\digest_density.meta.json",
+    "outputs\bigtech_focus.meta.json",
+    "outputs\selection_audit.meta.json"
 )) {
     $_mrPath = Join-Path $repoRoot $_mrFile
     if (Test-Path $_mrPath) {
@@ -695,12 +705,17 @@ Write-Output ""
 
 
 # GPU_CONTINUOUS_ENFORCEMENT_HARD: start periodic tok/s probe job (iter35)
+# iter40: FAST_300_DAILY disables periodic probes (no concurrent GPU requests)
 $_gpuCeInterval     = 120  # seconds between probes (spec: 每120秒一次)
 $_gpuCeFallbackTh   = 12   # tok/s below this = suspected CPU fallback
 $_gpuProbeHistPath  = Join-Path $repoRoot "outputs\gpu_probe_history.meta.json"
 $_gpuFallbackFlag   = Join-Path $repoRoot "outputs\_gpu_fallback_detected.flag"
 Remove-Item $_gpuFallbackFlag -Force -ErrorAction SilentlyContinue
 
+$_gpuCeJob = $null
+if ($_fast300Daily) {
+    Write-Output "  [FAST_300_DAILY] 週期性 GPU 探針已禁用（避免併發）"
+} else {
 $_gpuCeJob = Start-Job -ScriptBlock {
     param($compUrl, $histPath, $flagPath, $runId, $intervalSec, $fallbackTh)
     $history   = [System.Collections.Generic.List[object]]::new()
@@ -738,6 +753,7 @@ $_gpuCeJob = Start-Job -ScriptBlock {
 } -ArgumentList $_gpuCompUrl, $_gpuProbeHistPath, $_gpuFallbackFlag, $_voRunId, $_gpuCeInterval, $_gpuCeFallbackTh
 
 Write-Output ("  [GPU_CONTINUOUS_ENFORCEMENT_HARD] 持續GPU探針已啟動（間隔={0}s  CPU判定閾值={1} tok/s）" -f $_gpuCeInterval, $_gpuCeFallbackTh)
+}  # end else (not $_fast300Daily)
 Write-Output ""
 # ---- Step 1: Z0 online collection + supply fallback ----
 $_z0Dir          = Join-Path $repoRoot "data\raw\z0"
@@ -773,10 +789,11 @@ if (-not $SkipPipeline) {
 
     $_forceZ0Fail = ($env:FORCE_Z0_FAIL -eq "1")
 
-    if ($_fast300Mode -and (Test-Path $_z0Latest)) {
-        # iter39: FAST_300_MODE skips z0_collect_online (takes ~350s); uses cached z0 data
+    if ($_fast300Mode -and -not $_fast300Daily -and (Test-Path $_z0Latest)) {
+        # iter39: FAST_300_BENCH skips z0_collect_online (takes ~350s); uses cached z0 data
+        # iter40: FAST_300_DAILY always collects online
         $script:_z0OnlineSec = 0
-        Write-Output "  [FAST_300_MODE] z0_collect_online 已略過（使用快取 z0 資料）"
+        Write-Output "  [FAST_300_BENCH] z0_collect_online 已略過（使用快取 z0 資料）"
     } elseif (-not $_forceZ0Fail) {
         $_z0OnlineStart = $_voStopwatch.Elapsed.TotalSeconds
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
@@ -1114,9 +1131,11 @@ $env:PYTEST_ADDOPTS        = $null
 
 
 # GPU_CONTINUOUS_ENFORCEMENT_HARD: stop probe job + evaluate (iter35)
-Stop-Job    -Job $_gpuCeJob -ErrorAction SilentlyContinue
-Receive-Job -Job $_gpuCeJob -ErrorAction SilentlyContinue | Out-Null
-Remove-Job  -Job $_gpuCeJob -ErrorAction SilentlyContinue
+if ($_gpuCeJob) {
+    Stop-Job    -Job $_gpuCeJob -ErrorAction SilentlyContinue
+    Receive-Job -Job $_gpuCeJob -ErrorAction SilentlyContinue | Out-Null
+    Remove-Job  -Job $_gpuCeJob -ErrorAction SilentlyContinue
+}
 Write-Output "  [GPU_CONTINUOUS_ENFORCEMENT_HARD] probe job stopped"
 if (Test-Path $_gpuFallbackFlag) {
     $_ceFlag           = (Get-Content $_gpuFallbackFlag -ErrorAction SilentlyContinue) -join " "
@@ -1620,6 +1639,48 @@ if ($_fast600Mode) {
     }
 } else {
     Write-Output "  DIGEST_DENSITY_FLOOR_HARD: SKIP (FAST_600_MODE not active)"
+}
+
+# ---------------------------------------------------------------------------
+# iter40: BIGTECH_DOMINANCE_HARD + DEV_NOISE_CAP_HARD
+#   Reads selection_audit.meta.json + bigtech_focus.meta.json
+#   Enforced when FAST_300_DAILY=1 or BIGTECH_GATES_ENFORCE=1
+# ---------------------------------------------------------------------------
+$_btGatesEnforce = ($_fast300Daily -or ($env:BIGTECH_GATES_ENFORCE -eq "1"))
+$_saMetaPath = Join-Path $repoRoot "outputs\selection_audit.meta.json"
+$_bfMetaPath = Join-Path $repoRoot "outputs\bigtech_focus.meta.json"
+Write-Output ""
+Write-Output "BIGTECH_DOMINANCE_HARD + DEV_NOISE_CAP_HARD:"
+if ($_btGatesEnforce -and (Test-Path $_saMetaPath)) {
+    try {
+        $_saMeta = Get-Content $_saMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $_btHitCount = if ($_saMeta.PSObject.Properties['bigtech_hit_count']) { [int]$_saMeta.bigtech_hit_count } else { 0 }
+        $_omCount    = if ($_saMeta.PSObject.Properties['official_or_media_count']) { [int]$_saMeta.official_or_media_count } else { 0 }
+        $_dnCount    = if ($_saMeta.PSObject.Properties['non_bigtech_dev_noise_count']) { [int]$_saMeta.non_bigtech_dev_noise_count } else { 0 }
+        Write-Output ("  bigtech_hit_count            : {0}" -f $_btHitCount)
+        Write-Output ("  official_or_media_count      : {0}" -f $_omCount)
+        Write-Output ("  non_bigtech_dev_noise_count  : {0}" -f $_dnCount)
+        # BIGTECH_DOMINANCE_HARD: bigtech>=5 AND official_or_media>=4
+        if ($_btHitCount -lt 5 -or $_omCount -lt 4) {
+            $_btFailReason = ("BIGTECH_DOMINANCE_HARD_FAIL: bigtech_hit={0} official_or_media={1}" -f $_btHitCount, $_omCount)
+            Write-Output ("  => FAIL: {0}" -f $_btFailReason)
+            Invoke-VerifyOnlineFailFast -Gate "BIGTECH_DOMINANCE_HARD" -Reason $_btFailReason
+        }
+        Write-Output "  => BIGTECH_DOMINANCE_HARD: PASS"
+        # DEV_NOISE_CAP_HARD: non_bigtech_dev_noise <= 1
+        if ($_dnCount -gt 1) {
+            $_dnFailReason = ("DEV_NOISE_CAP_HARD_FAIL: non_bigtech_dev_noise={0}" -f $_dnCount)
+            Write-Output ("  => FAIL: {0}" -f $_dnFailReason)
+            Invoke-VerifyOnlineFailFast -Gate "DEV_NOISE_CAP_HARD" -Reason $_dnFailReason
+        }
+        Write-Output "  => DEV_NOISE_CAP_HARD: PASS"
+    } catch {
+        Write-Output ("  BIGTECH gates: WARN-OK (parse error: {0})" -f $_)
+    }
+} elseif ($_btGatesEnforce) {
+    Write-Output "  BIGTECH gates: WARN (selection_audit.meta.json not found)"
+} else {
+    Write-Output "  BIGTECH gates: SKIP (not FAST_300_DAILY mode)"
 }
 
 # ---------------------------------------------------------------------------

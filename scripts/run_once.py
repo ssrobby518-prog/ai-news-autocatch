@@ -441,7 +441,9 @@ _BIGTECH_COMPANY_RE = re.compile(
     r"\b(?:NVIDIA|OpenAI|Anthropic|Amazon|AWS|Google|Apple|Meta|Microsoft|"
     r"xAI|X\.ai|Mistral|DeepMind|Gemini|DeepSeek|Tesla|Qualcomm|Samsung|"
     r"Baidu|Alibaba|Cohere|Salesforce|Intel|AMD|Grok|Perplexity|Scale\s*AI|"
-    r"HuggingFace|Hugging\s*Face|Stability\s*AI|Runway)\b",
+    r"HuggingFace|Hugging\s*Face|Stability\s*AI|Runway|"
+    r"Jensen\s*Huang|Sam\s*Altman|Dario\s*Amodei|Sundar\s*Pichai|Demis\s*Hassabis|"
+    r"Andy\s*Jassy|Tim\s*Cook|Mark\s*Zuckerberg|Satya\s*Nadella|Elon\s*Musk)\b",
     re.IGNORECASE,
 )
 
@@ -454,20 +456,24 @@ _EXEC_ROLE_RE = re.compile(
 
 
 def _classify_source_type(source_name: str, final_url: str) -> str:
-    """Classify source as official/media/social/code/paper for quota enforcement."""
+    """Classify source as official/media/dev_forum/code_release/paper for quota enforcement.
+
+    iter40: dev_forum replaces social; code_release replaces code.
+    """
     _sn = (source_name or "").lower()
     _url = (final_url or "").lower()
     # Paper: arxiv
     if "arxiv" in _sn or "arxiv.org" in _url:
         return "paper"
-    # Code: github
+    # code_release: github releases / commits
     if "github" in _sn or "github.com" in _url:
-        return "code"
-    # Social/forum/community
+        return "code_release"
+    # dev_forum: forums / discussion / community
     _SOCIAL_KW = ("reddit", "hackernews", "hacker news", "forum", "discuss.",
-                  "ycombinator", "community", "/r/")
+                  "ycombinator", "community", "/r/", "huggingface forum",
+                  "hugging face forum", "dev.to", "stackoverflow")
     if any(x in _sn for x in _SOCIAL_KW) or any(x in _url for x in _SOCIAL_KW):
-        return "social"
+        return "dev_forum"
     # Official: company/research blogs
     _OFFICIAL_KW = ("openai", "anthropic", "google research", "microsoft ai", "nvidia",
                     "meta ai", "aws ml", "huggingface blog", "hugging face blog",
@@ -5602,6 +5608,12 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
         distinct_sources = len({r["source_domain"] for r in audit_rows})
         bigtech_count = sum(1 for r in audit_rows if r["bigtech_hit"])
         official_or_media_count = sum(1 for r in audit_rows if r["official_or_media"])
+        # iter40: dev_forum/code_release counts
+        dev_forum_count = sum(1 for r in audit_rows if r["source_type"] in ("dev_forum", "code_release", "social", "code"))
+        non_bigtech_dev_noise_count = sum(
+            1 for r in audit_rows
+            if r["source_type"] in ("dev_forum", "code_release", "social", "code") and not r["bigtech_hit"]
+        )
         _sap = Path(settings.PROJECT_ROOT) / "outputs" / "selection_audit.meta.json"
         _sap.parent.mkdir(parents=True, exist_ok=True)
         _sap.write_text(
@@ -5611,6 +5623,8 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
                 "selected_sources_distinct": distinct_sources,
                 "bigtech_hit_count": bigtech_count,
                 "official_or_media_count": official_or_media_count,
+                "dev_forum_count": dev_forum_count,
+                "non_bigtech_dev_noise_count": non_bigtech_dev_noise_count,
                 "items": audit_rows,
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -5620,6 +5634,75 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
         import logging as _salog
         _salog.getLogger(__name__).warning("selection_audit.meta.json write failed: %s", _sae)
         return 0, 0, 0
+
+
+def _write_bigtech_focus_meta(
+    selected_cards: list[dict],
+    rejected_pool: list[dict],
+    run_id: str = "",
+) -> dict:
+    """Write outputs/bigtech_focus.meta.json — iter40 bigtech dominance audit.
+
+    Returns dict with bigtech_hit_count, official_or_media_count, non_bigtech_dev_noise_count.
+    """
+    try:
+        import json as _bfm_j, logging as _bfm_log
+        _log = _bfm_log.getLogger("ai_intel")
+        _sel_bt = 0
+        _sel_om = 0
+        _sel_devnoise = 0
+        for fc in (selected_cards or []):
+            t = str(fc.get("title", "") or "")
+            sn = str(fc.get("source_name", "") or "")
+            fu = str(fc.get("final_url", "") or "")
+            bt = bool(_BIGTECH_COMPANY_RE.search(t) or _BIGTECH_COMPANY_RE.search(sn))
+            st = _classify_source_type(sn, fu)
+            om = st in ("official", "media")
+            dn = st in ("dev_forum", "code_release", "social", "code") and not bt
+            if bt:
+                _sel_bt += 1
+            if om:
+                _sel_om += 1
+            if dn:
+                _sel_devnoise += 1
+        # Top 5 rejected items
+        _rej_samples = []
+        for fc in (rejected_pool or [])[:10]:
+            t = str(fc.get("title", "") or "")
+            sn = str(fc.get("source_name", "") or "")
+            fu = str(fc.get("final_url", "") or "")
+            bt = bool(_BIGTECH_COMPANY_RE.search(t) or _BIGTECH_COMPANY_RE.search(sn))
+            st = _classify_source_type(sn, fu)
+            _rej_samples.append({
+                "title": t[:120],
+                "source_name": sn,
+                "source_type": st,
+                "bigtech_hit": bt,
+                "why_rejected": "non_bigtech_dev_noise" if (st in ("dev_forum", "code_release") and not bt) else "quota_full",
+            })
+        meta = {
+            "run_id": run_id,
+            "bigtech_hit_count": _sel_bt,
+            "official_or_media_count": _sel_om,
+            "dev_forum_count": sum(
+                1 for fc in (selected_cards or [])
+                if _classify_source_type(
+                    str(fc.get("source_name", "") or ""),
+                    str(fc.get("final_url", "") or "")
+                ) in ("dev_forum", "code_release", "social", "code")
+            ),
+            "non_bigtech_dev_noise_count": _sel_devnoise,
+            "rejected_samples_top10": _rej_samples,
+        }
+        _p = Path(settings.PROJECT_ROOT) / "outputs" / "bigtech_focus.meta.json"
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.write_text(_bfm_j.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        _log.info("bigtech_focus.meta.json: bt=%d om=%d devnoise=%d", _sel_bt, _sel_om, _sel_devnoise)
+        return meta
+    except Exception as _bfme:
+        import logging as _bfml
+        _bfml.getLogger("ai_intel").warning("bigtech_focus.meta.json write failed: %s", _bfme)
+        return {}
 
 
 def _write_selection_debug_meta(
@@ -5761,7 +5844,7 @@ def _apply_brief_quota_filter(
             _official_media.append(_fc)
         elif _st == "paper":
             _papers.append(_fc)
-        elif _st in ("social", "code"):
+        elif _st in ("social", "code", "dev_forum", "code_release"):
             _social_code.append(_fc)
         else:
             _other.append(_fc)
@@ -6532,6 +6615,25 @@ def _write_stage_timing_meta(run_id: str, stg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# iter40: llama singleflight lock — file-based mutex for all llama calls
+# Prevents concurrent probes / translation from saturating GPU.
+# ---------------------------------------------------------------------------
+import threading as _llama_th
+_llama_sf_lock = _llama_th.Lock()  # process-level mutex (file lock for cross-process)
+
+def _llama_singleflight_acquire(timeout: float = 10.0) -> bool:
+    """Acquire the llama singleflight lock. Returns True on success."""
+    return _llama_sf_lock.acquire(timeout=timeout)
+
+def _llama_singleflight_release() -> None:
+    """Release the llama singleflight lock."""
+    try:
+        _llama_sf_lock.release()
+    except RuntimeError:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # iter37: FAST_600_MODE helpers
 # Flow: hydrated raw items → fast select → digest → DIGEST_DENSITY_FLOOR_HARD → translate → DOCX
 # card_build + DBE rebuild are entirely skipped.
@@ -6703,48 +6805,85 @@ def _f600_run_fast_path(
         _write_stage_timing_meta_f600(_run_id, stg)
         sys.exit(1)
 
-    _log.info("FAST_600_MODE: fast path entered (budget=%ds raw_items=%d)", budget_sec, len(raw_items))
+    _is_daily = os.environ.get("FAST_300_DAILY", "0") == "1"
+    _log.info("FAST_600_MODE: fast path entered (budget=%ds raw_items=%d daily=%s)", budget_sec, len(raw_items), _is_daily)
 
-    # --- Step 1: fast select top 7 hydrated items (iter39: raised from 5 to 7) ---
+    # --- Step 1: fast select top 7 items — iter40: bigtech-prioritized ---
     _f6_target = 7
     _max_events = 7
 
     def _f6_bfp(it) -> float:
         return float(getattr(it, "_bfp_score", 0) or 0) + float(getattr(it, "bfp_score", 0) or 0)
 
+    def _f6_src(it) -> str:
+        return str(getattr(it, "source_name", "") or "").strip().lower()
+
+    def _f6_title(it) -> str:
+        return str(getattr(it, "title", "") or "")
+
+    def _f6_is_bigtech(it) -> bool:
+        return bool(_BIGTECH_COMPANY_RE.search(_f6_title(it)) or _BIGTECH_COMPANY_RE.search(_f6_src(it)))
+
+    def _f6_src_type(it) -> str:
+        return _classify_source_type(_f6_src(it), str(getattr(it, "url", "") or getattr(it, "link", "") or ""))
+
+    def _f6_is_dev_noise(it) -> bool:
+        return _f6_src_type(it) in ("dev_forum", "code_release", "social", "code") and not _f6_is_bigtech(it)
+
+    def _f6_sort_key(it) -> tuple:
+        """iter40: bigtech-first, official/media first, then by fulltext density."""
+        bt = 2 if _f6_is_bigtech(it) else 0
+        st = _f6_src_type(it)
+        om = 2 if st in ("official", "media") else 0
+        dn = -2 if _f6_is_dev_noise(it) else 0
+        ftl = int(getattr(it, "fulltext_len", 0) or 0)
+        return (bt, om, dn, ftl, _f6_bfp(it))
+
     def _f6_tier(min_len: int) -> list:
         return sorted(
             [it for it in raw_items if int(getattr(it, "fulltext_len", 0) or 0) >= min_len],
-            key=_f6_bfp, reverse=True,
+            key=_f6_sort_key, reverse=True,
         )
 
-    # Tier 1: >= 1200 chars (density-ready); tier 2: >= 800; tier 3: >= 300 (fallback)
+    # iter40: bigtech-first selection — fill bigtech items first, then official/media, minimize dev noise
+    _bt_pool = [it for it in _f6_tier(300) if _f6_is_bigtech(it)]
+    _om_pool = [it for it in _f6_tier(300) if not _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
+    _other_pool = [it for it in _f6_tier(300) if it not in _bt_pool and it not in _om_pool and not _f6_is_dev_noise(it)]
+    _devnoise_pool = [it for it in _f6_tier(300) if _f6_is_dev_noise(it)]
+
     _selected: list = []
-    for _tier_min in (1200, 800, 300, 100):
-        _pool = [it for it in _f6_tier(_tier_min) if it not in _selected]
-        _selected = (_selected + _pool)[:_max_events]
-        if len(_selected) >= _max_events:
-            break
+    # First: bigtech items (up to 7)
+    _selected += _bt_pool[:_max_events]
+    # Then: official/media non-bigtech
+    if len(_selected) < _max_events:
+        for it in _om_pool:
+            if it not in _selected:
+                _selected.append(it)
+                if len(_selected) >= _max_events:
+                    break
+    # Then: other non-dev-noise
+    if len(_selected) < _max_events:
+        for it in _other_pool:
+            if it not in _selected:
+                _selected.append(it)
+                if len(_selected) >= _max_events:
+                    break
+    # Last resort: dev noise (max 1)
+    if len(_selected) < _max_events and _devnoise_pool:
+        _selected.append(_devnoise_pool[0])
+    # Absolute fallback
     if not _selected:
         _selected = list(raw_items[:_max_events])
 
     # iter38: diversity-aware swap — ensure distinct_sources >= 3
-    def _f6_src(it) -> str:
-        return str(getattr(it, "source_name", "") or "").strip().lower()
-
+    from collections import Counter as _F6Counter
     _f6_srcs = {_f6_src(it) for it in _selected}
     if len(_f6_srcs) < 3 and len(_selected) >= 3:
-        # Build replacement pool: must have fulltext_len >= 800 to avoid DIGEST_DENSITY fail
-        _f6_repl_pool = [it for it in _f6_tier(800) if it not in _selected]
-        _f6_repl_pool += [it for it in _f6_tier(300) if it not in _selected and it not in _f6_repl_pool]
-        # Find items from NEW sources (not in current set)
+        _f6_repl_pool = [it for it in _f6_tier(300) if it not in _selected]
         _f6_new_src_items = [it for it in _f6_repl_pool if _f6_src(it) not in _f6_srcs]
-        # Replace lowest-scored items from the majority source
-        from collections import Counter as _F6Counter
         _f6_src_counts = _F6Counter(_f6_src(it) for it in _selected)
         _f6_majority_src = _f6_src_counts.most_common(1)[0][0] if _f6_src_counts else ""
         while len(_f6_srcs) < 3 and _f6_new_src_items:
-            # Find the worst item from majority source to replace
             _f6_majority_items = [it for it in _selected if _f6_src(it) == _f6_majority_src]
             if not _f6_majority_items or len(_f6_majority_items) <= 1:
                 break
@@ -6757,25 +6896,72 @@ def _f600_run_fast_path(
         _log.info("FAST_600_MODE: diversity swap → distinct_sources=%d", len(_f6_srcs))
     _hydrated_ok_count = sum(1 for it in raw_items if int(getattr(it, "fulltext_len", 0) or 0) >= 300)
     _log.info(
-        "FAST_600_MODE: selected %d items (hydrated_ok=%d total=%d)",
+        "FAST_600_MODE: selected %d items (hydrated_ok=%d total=%d bigtech=%d)",
         len(_selected), _hydrated_ok_count, len(raw_items),
+        sum(1 for it in _selected if _f6_is_bigtech(it)),
     )
 
-    # --- Step 2: write selection audit meta (card dicts) ---
+    # --- Step 2: write selection audit meta + bigtech_focus meta (card dicts) ---
     _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+    _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
     try:
-        _f6_distinct, _f6_bigtech, _ = _write_selection_audit_meta(_card_dicts, run_id=_run_id)
+        _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id)
     except Exception as _f6_sau_exc:
         _log.warning("FAST_600_MODE: selection_audit meta failed (non-fatal): %s", _f6_sau_exc)
         _f6_distinct = len({str(getattr(it, "source_name", "") or "") for it in _selected})
         _f6_bigtech = 0
+        _f6_om = 0
+    _f6_focus = _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+    _f6_devnoise_count = _f6_focus.get("non_bigtech_dev_noise_count", 0)
 
-    # --- Step 3: SOURCE_DIVERSITY check (no DBE fallback in FAST_600_MODE) ---
+    # --- Step 3: SOURCE_DIVERSITY check ---
     if _f6_distinct < 3:
         _f6_fail(
             "SOURCE_DIVERSITY_FAIL",
             f"distinct_sources={_f6_distinct} < 3 (FAST_600_MODE: DBE rebuild disabled)",
         )
+
+    # --- Step 3b: iter40 BIGTECH_DOMINANCE_HARD + DEV_NOISE_CAP_HARD ---
+    if _is_daily or os.environ.get("BIGTECH_GATES_ENFORCE", "0") == "1":
+        if _f6_bigtech < 5:
+            _write_not_ready_report_md(
+                "BIGTECH_DOMINANCE_HARD_FAIL",
+                f"bigtech_hit={_f6_bigtech} official_or_media={_f6_om} (need bigtech>=5 om>=4)",
+                run_id=_run_id, selected_items_count=len(_selected),
+                selected_sources_distinct=_f6_distinct,
+                bigtech_hit_count=_f6_bigtech,
+                official_or_media_count=_f6_om,
+            )
+            _f6_fail(
+                "BIGTECH_DOMINANCE_HARD",
+                f"BIGTECH_DOMINANCE_HARD_FAIL: bigtech_hit={_f6_bigtech} official_or_media={_f6_om}",
+            )
+        if _f6_om < 4:
+            _write_not_ready_report_md(
+                "BIGTECH_DOMINANCE_HARD_FAIL",
+                f"official_or_media={_f6_om} < 4 (bigtech_hit={_f6_bigtech})",
+                run_id=_run_id, selected_items_count=len(_selected),
+                selected_sources_distinct=_f6_distinct,
+                bigtech_hit_count=_f6_bigtech,
+                official_or_media_count=_f6_om,
+            )
+            _f6_fail(
+                "BIGTECH_DOMINANCE_HARD",
+                f"BIGTECH_DOMINANCE_HARD_FAIL: bigtech_hit={_f6_bigtech} official_or_media={_f6_om}",
+            )
+        if _f6_devnoise_count > 1:
+            _write_not_ready_report_md(
+                "DEV_NOISE_CAP_HARD_FAIL",
+                f"non_bigtech_dev_noise={_f6_devnoise_count} > 1",
+                run_id=_run_id, selected_items_count=len(_selected),
+                selected_sources_distinct=_f6_distinct,
+                bigtech_hit_count=_f6_bigtech,
+                official_or_media_count=_f6_om,
+            )
+            _f6_fail(
+                "DEV_NOISE_CAP_HARD",
+                f"DEV_NOISE_CAP_HARD_FAIL: non_bigtech_dev_noise={_f6_devnoise_count}",
+            )
 
     # --- Step 4: build digest.md from card dicts ---
     stg["digest_write_start"] = time.time()
@@ -6829,9 +7015,12 @@ def _f600_run_fast_path(
             next_steps="全文不足/水化過薄，請調整 targeted hydration 取得完整內容後再翻譯",
         )
 
-    # --- Step 7: translate digest → latest_brief.md ---
+    # --- Step 7: translate digest → latest_brief.md (iter40: singleflight + hard timeout) ---
     _tfd_endpoint = os.environ.get("LLAMA_HOST", "http://127.0.0.1:8080")
     _tfd_model = "unknown"
+    # iter40: probe with singleflight lock (timeout 3s)
+    if not _llama_singleflight_acquire(timeout=5):
+        _f6_fail("LLAMA_LOCK_BUSY", "singleflight lock busy for model probe")
     try:
         import urllib.request as _f6_probe_r, json as _f6_probe_j
         with _f6_probe_r.urlopen(f"{_tfd_endpoint}/v1/models", timeout=3) as _f6_mr:
@@ -6841,15 +7030,23 @@ def _f600_run_fast_path(
             )
     except Exception:
         pass
+    finally:
+        _llama_singleflight_release()
 
     stg["translate_start"] = time.time()
     _xlat_stats: dict = {"calls_total": 0, "calls_retry": 0, "cache_hit": 0, "cache_miss": 0}
     _tfd_t0 = time.time()
-    _tfd_ok, _tfd_result, _tfd_pc, _tfd_oc, _xlat_stats = _assemble_zh_brief_from_cards(
-        [],  # no final_cards; digest_path drives 1:1 translation
-        _run_id,
-        _digest_path,
-    )
+    # iter40: singleflight for entire translation block
+    if not _llama_singleflight_acquire(timeout=10):
+        _f6_fail("LLAMA_LOCK_BUSY", "singleflight lock busy for translation")
+    try:
+        _tfd_ok, _tfd_result, _tfd_pc, _tfd_oc, _xlat_stats = _assemble_zh_brief_from_cards(
+            [],  # no final_cards; digest_path drives 1:1 translation
+            _run_id,
+            _digest_path,
+        )
+    finally:
+        _llama_singleflight_release()
     _tfd_latency_ms = (time.time() - _tfd_t0) * 1000
     stg["translate_end"] = time.time()
 
