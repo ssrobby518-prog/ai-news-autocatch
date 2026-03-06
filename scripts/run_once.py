@@ -6767,8 +6767,38 @@ def _f600_run_fast_path(
             f"before_translation={_elapsed_pre_xlat:.0f}s > {_pre_xlat_limit}s",
         )
 
-    # --- Step 6: DIGEST_DENSITY_FLOOR_HARD ---
+    # --- Step 6: DIGEST_DENSITY_FLOOR_HARD (with density-aware swap) ---
     _dd_ok, _dd_reason, _dd_meta = _f600_check_digest_density(_digest_path, _outputs, _run_id)
+    # If thin events exist, try swapping them with denser candidates (up to 2 rounds)
+    _dd_swap_pool = [it for it in _f6_tier(1200) if it not in _selected]
+    for _dd_round in range(2):
+        if _dd_ok or not _dd_meta.get("thin_events_count"):
+            break
+        if not _dd_swap_pool:
+            break
+        # Identify thin event indices from digest meta
+        _dd_thin_titles = set()
+        for _ddev in _dd_meta.get("events", []):
+            if _ddev.get("bullet_count", 0) < 5 and _ddev.get("chars", 0) < 1200:
+                _dd_thin_titles.add(_ddev.get("title", "")[:40])
+        if not _dd_thin_titles:
+            break
+        # Match thin titles to _selected items (by card_dict title prefix)
+        _dd_replaced = False
+        for _si, _sit in enumerate(_selected):
+            _sit_title = str(getattr(_sit, "title", "") or "")[:40]
+            if _sit_title in _dd_thin_titles and _dd_swap_pool:
+                _selected[_si] = _dd_swap_pool.pop(0)
+                _dd_replaced = True
+                _log.info("FAST_600_MODE: density swap round %d — replaced thin '%s'",
+                          _dd_round + 1, _sit_title[:60])
+                break  # one swap per round
+        if not _dd_replaced:
+            break
+        # Rebuild digest and re-check
+        _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+        _digest_path = _generate_digest_md(_card_dicts, _run_id)
+        _dd_ok, _dd_reason, _dd_meta = _f600_check_digest_density(_digest_path, _outputs, _run_id)
     if not _dd_ok:
         _f6_fail(
             "DIGEST_DENSITY_FLOOR_HARD",
