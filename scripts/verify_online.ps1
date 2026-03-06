@@ -796,12 +796,31 @@ if (-not $SkipPipeline) {
         Write-Output "  [FAST_300_BENCH] z0_collect_online 已略過（使用快取 z0 資料）"
     } elseif (-not $_forceZ0Fail) {
         $_z0OnlineStart = $_voStopwatch.Elapsed.TotalSeconds
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
-        $script:_z0OnlineSec = [int]([Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart))
-        if ($LASTEXITCODE -ne 0) {
-            Write-Output "[verify_online] Z0 collect FAILED (exit $LASTEXITCODE). Aborting."
-            exit 1
+        # iter40: FAST_300_DAILY — z0_deadline_sec=60 hard timeout on z0_collect
+        if ($_fast300Daily) {
+            $_z0DeadlineSec = 60
+            Write-Output ("  [FAST_300_DAILY] z0_collect 硬 deadline={0}s" -f $_z0DeadlineSec)
+            $_z0Job = Start-Job -ScriptBlock {
+                param($scriptPath)
+                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath
+                $LASTEXITCODE
+            } -ArgumentList (Join-Path $PSScriptRoot "z0_collect.ps1")
+            $_z0Done = Wait-Job -Job $_z0Job -Timeout $_z0DeadlineSec
+            if (-not $_z0Done) {
+                Write-Output ("  [FAST_300_DAILY] z0_collect 超時（>{0}s），使用已有資料" -f $_z0DeadlineSec)
+                Stop-Job -Job $_z0Job -ErrorAction SilentlyContinue
+            } else {
+                $_z0Exit = Receive-Job -Job $_z0Job
+            }
+            Remove-Job -Job $_z0Job -Force -ErrorAction SilentlyContinue
+        } else {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
+            if ($LASTEXITCODE -ne 0) {
+                Write-Output "[verify_online] Z0 collect FAILED (exit $LASTEXITCODE). Aborting."
+                exit 1
+            }
         }
+        $script:_z0OnlineSec = [int]([Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart))
     } else {
         Write-Output "  [FORCE_Z0_FAIL=1] Skipping z0_collect.ps1 (simulating collection failure)."
     }
