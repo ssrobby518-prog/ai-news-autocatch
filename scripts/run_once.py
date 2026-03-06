@@ -6912,7 +6912,18 @@ def _f600_run_fast_path(
     # --- Step 16: write stage timing (without card_build) ---
     _write_stage_timing_meta_f600(_run_id, stg)
 
-    # --- Step 17: write LAST_RUN_SUMMARY.txt ---
+    # --- Step 17: clean up stale meta files that fast path does not produce ---
+    # Prevents gates from reading stale values from previous normal-pipeline runs.
+    for _stale_meta in (
+        "exec_news_quality.meta.json",   # EXEC_NARRATIVE_FIDELITY_HARD reads this
+        "brief_template_leak.meta.json",  # BRIEF HARD GATES may read this
+    ):
+        try:
+            (_outputs / _stale_meta).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    # --- Step 18: write LAST_RUN_SUMMARY.txt ---
     # Sets report_mode=brief so verify_online.ps1 EXEC KPI GATES are suppressed ($kpi_affects_exit=false)
     try:
         from datetime import datetime as _f6_dt
