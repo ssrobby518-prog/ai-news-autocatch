@@ -7085,7 +7085,8 @@ def _f600_run_fast_path(
     # Use index-based matching: events in digest meta are in same order as _selected.
     _dd_swap_pool = [it for it in _f6_tier(1200) if it not in _selected]
     _dd_swap_pool += [it for it in _f6_tier(800) if it not in _selected and it not in _dd_swap_pool]
-    for _dd_round in range(3):
+    _dd_swap_pool += [it for it in _f6_tier(300) if it not in _selected and it not in _dd_swap_pool]  # iter42: wider fallback
+    for _dd_round in range(5):  # iter42: allow up to 5 density swap rounds
         if _dd_ok or not _dd_meta.get("thin_events_count"):
             break
         if not _dd_swap_pool:
