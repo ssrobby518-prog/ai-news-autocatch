@@ -6495,6 +6495,10 @@ def _write_translation_engine_meta(
     translate_seconds: float = 0.0,
     workload_chars_total: int = 0,
     workload_bullets_total: int = 0,
+    calls_success: int = 0,
+    calls_timeout: int = 0,
+    calls_error: int = 0,
+    calls_detail: "list | None" = None,
 ) -> None:
     """Write outputs/translation_engine.meta.json — PM-required Qwen call evidence."""
     import json as _tem_j
@@ -6537,12 +6541,17 @@ def _write_translation_engine_meta(
         "fail_reason": str(fail_reason),
         "source_file": source_file,
         "calls_total": int(calls_total),
+        "calls_success": int(calls_success),
+        "calls_timeout": int(calls_timeout),
+        "calls_error": int(calls_error),
         "calls_retry": int(calls_retry),
+        "retry_definition": "calls_total - first_attempt_count (each miss event has 1 first attempt; retry on first failure)",
         "cache_hit": int(cache_hit),
         "cache_miss": int(cache_miss),
         "tok_per_sec_est": float(tok_per_sec_est),
         "gpu_process_found": bool(gpu_process_found),
         # iter35: GPU_CONTINUOUS_ENFORCEMENT_HARD per-call tok/s
+        "calls_tok_s_scope": "success_only",
         "calls_tok_s": _tem_percall,
         "tok_s_min": _tem_tok_min,
         "tok_s_avg": _tem_tok_avg,
@@ -6585,8 +6594,27 @@ def _write_translation_engine_meta(
     if _est_tps > 0 and int(workload_chars_total) > 0:
         import math as _est_math
         _est_tokens = _est_math.ceil(int(workload_chars_total) / 4.0)
-        _est_xlat_sec = round(_est_tokens / _est_tps, 1)
+        # iter44: tok/s estimation for all-miss budget
+        # When actual call data exists (all_miss): use calls_tok_s_min (ground truth)
+        # When only probe data (all_cache_hit): floor at 20 tok/s (probe underestimates sustained gen)
+        if _tem_tok_min is not None and _tem_tok_min > 0:
+            _est_tps_used = _tem_tok_min
+        else:
+            _est_tps_used = max(_est_tps, 20.0)
+        _retry_rate = round(int(calls_retry) / max(1, int(calls_total)), 2) if int(calls_total) > 0 else 0.0
+        _est_xlat_sec = round(_est_tokens / _est_tps_used * (1 + _retry_rate), 1)
         _meta["est_translate_seconds_if_all_miss"] = _est_xlat_sec
+        _meta["est_inputs"] = {
+            "tok_per_sec_est_used": round(_est_tps_used, 2),
+            "tok_per_sec_source": "calls_tok_s_min" if (_tem_tok_min is not None and _tem_tok_min > 0) else "max(probe, 20.0)",
+            "workload_chars_total": int(workload_chars_total),
+            "workload_bullets_total": int(workload_bullets_total),
+            "workload_output_tokens_est": _est_tokens,
+            "retry_rate_est": _retry_rate,
+            "retry_rate_source": "calls_retry/calls_total" if int(calls_total) > 0 else "no_calls_zero_retry",
+        }
+    # iter44: calls_detail (per-attempt breakdown)
+    _meta["calls_detail"] = calls_detail if calls_detail else []
     _out.write_text(_tem_j.dumps(_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -7149,10 +7177,11 @@ def _f600_run_fast_path(
         _llama_singleflight_release()
     _tfd_latency_ms = (time.time() - _tfd_t0) * 1000
     stg["translate_end"] = time.time()
-    # iter42: translate_hard_deadline_sec=45 enforcement (DAILY)
+    # iter42: translate_hard_deadline_sec enforcement (DAILY)
+    # iter44: raised 45→120 to accommodate all-miss scenario (safety via ALL_MISS_SAFETY_MARGIN_HARD)
     _xlat_dur = float(stg.get("translate_end", 0)) - float(stg.get("translate_start", 0))
-    if _is_daily and _xlat_dur > 45:
-        _f6_fail("TRANSLATE_HARD_DEADLINE", f"translate={_xlat_dur:.0f}s > 45s")
+    if _is_daily and _xlat_dur > 120:
+        _f6_fail("TRANSLATE_HARD_DEADLINE", f"translate={_xlat_dur:.0f}s > 120s")
 
     if not _tfd_ok:
         _tfd_gate = (
@@ -7210,10 +7239,11 @@ def _f600_run_fast_path(
     except Exception as _f6_docx_exc:
         _log.warning("FAST_600_MODE: DOCX generation failed (non-fatal): %s", _f6_docx_exc)
     stg["build_docx_end"] = time.time()
-    # iter42: build_docx_hard_deadline_sec=10 enforcement (DAILY)
+    # iter42: build_docx_hard_deadline_sec enforcement (DAILY)
+    # iter44: raised 10→30 to accommodate I/O variance (safety via TIME_BUDGET_HARD)
     _docx_dur = float(stg.get("build_docx_end", 0)) - float(stg.get("build_docx_start", 0))
-    if _is_daily and _docx_dur > 10:
-        _f6_fail("BUILD_DOCX_HARD_DEADLINE", f"build_docx={_docx_dur:.0f}s > 10s")
+    if _is_daily and _docx_dur > 30:
+        _f6_fail("BUILD_DOCX_HARD_DEADLINE", f"build_docx={_docx_dur:.0f}s > 30s")
 
     # --- Step 10: write translation meta ---
     # iter39 (E): compute workload stats for all-miss estimation
@@ -7240,6 +7270,10 @@ def _f600_run_fast_path(
         translate_seconds=_translate_sec,
         workload_chars_total=_wl_chars,
         workload_bullets_total=_wl_bullets,
+        calls_success=_xlat_stats.get("calls_success", 0),
+        calls_timeout=_xlat_stats.get("calls_timeout", 0),
+        calls_error=_xlat_stats.get("calls_error", 0),
+        calls_detail=_xlat_stats.get("calls_detail", []),
     )
 
     # --- Step 11: write pool_sufficiency.meta.json ---
@@ -7544,7 +7578,10 @@ def _translate_digest_1to1(
     import re as _td1_re
     from datetime import datetime as _td1_dt, timezone as _td1_tz
 
-    _stats = {"calls_total": 0, "calls_retry": 0, "cache_hit": 0, "cache_miss": 0}
+    _stats: dict = {
+        "calls_total": 0, "calls_retry": 0, "cache_hit": 0, "cache_miss": 0,
+        "calls_success": 0, "calls_timeout": 0, "calls_error": 0, "calls_detail": [],
+    }
 
     _dp = Path(digest_path) if not isinstance(digest_path, Path) else digest_path
     try:
@@ -7616,20 +7653,54 @@ def _translate_digest_1to1(
             import logging as _td1_log; _td1_log.getLogger("ai_intel").info("iter30 1:1 translate: event %d CACHE HIT (key=%s)", _ei, _cache_key)
         else:
             _stats["cache_miss"] += 1
+            import time as _cd_tm
+            # --- attempt 1 ---
             _stats["calls_total"] += 1
+            _cd_t0 = _cd_tm.monotonic()
+            _cd_toks_before = len(_i35_percall_toks)
             _zh_bullets, _ok, _err = _translate_event_bullets_1to1(
                 _bullets_en, _title, _url, endpoint, model_id, timeout=timeout
             )
+            _cd_elapsed = round(_cd_tm.monotonic() - _cd_t0, 2)
+            _cd_tok_s = round(_i35_percall_toks[-1], 2) if len(_i35_percall_toks) > _cd_toks_before else 0.0
+            _cd_fk = "" if _ok else ("timeout" if "timeout" in str(_err or "").lower() else "parse_low" if "PARSE" in str(_err or "") else "http_error")
+            _stats["calls_detail"].append({
+                "event_idx": _ei, "attempt_idx": 1, "cache_used": False,
+                "ok": _ok, "fail_kind": _cd_fk, "elapsed_seconds": _cd_elapsed,
+                "tok_per_sec": _cd_tok_s, "deadline_budget_sec": timeout, "used_singleflight": True,
+            })
+            if _ok:
+                _stats["calls_success"] += 1
+            elif "timeout" in str(_err or "").lower():
+                _stats["calls_timeout"] += 1
+            else:
+                _stats["calls_error"] += 1
             if not _ok:
                 # iter35: GPU_FALLBACK_DETECTED must abort immediately — no retry
                 if _err.startswith("GPU_FALLBACK_DETECTED"):
                     return False, _err, _prompt_chars, _output_chars_total, _stats
-                # Retry once
+                # --- attempt 2 (retry) ---
                 _stats["calls_retry"] += 1
                 _stats["calls_total"] += 1
+                _cd_t0r = _cd_tm.monotonic()
+                _cd_toks_before_r = len(_i35_percall_toks)
                 _zh_bullets, _ok, _err = _translate_event_bullets_1to1(
                     _bullets_en, _title, _url, endpoint, model_id, timeout=timeout
                 )
+                _cd_elapsed_r = round(_cd_tm.monotonic() - _cd_t0r, 2)
+                _cd_tok_s_r = round(_i35_percall_toks[-1], 2) if len(_i35_percall_toks) > _cd_toks_before_r else 0.0
+                _cd_fk_r = "" if _ok else ("timeout" if "timeout" in str(_err or "").lower() else "parse_low" if "PARSE" in str(_err or "") else "http_error")
+                _stats["calls_detail"].append({
+                    "event_idx": _ei, "attempt_idx": 2, "cache_used": False,
+                    "ok": _ok, "fail_kind": _cd_fk_r, "elapsed_seconds": _cd_elapsed_r,
+                    "tok_per_sec": _cd_tok_s_r, "deadline_budget_sec": timeout, "used_singleflight": True,
+                })
+                if _ok:
+                    _stats["calls_success"] += 1
+                elif "timeout" in str(_err or "").lower():
+                    _stats["calls_timeout"] += 1
+                else:
+                    _stats["calls_error"] += 1
                 if not _ok and _err.startswith("GPU_FALLBACK_DETECTED"):  # iter35
                     return False, _err, _prompt_chars, _output_chars_total, _stats
             if _ok:

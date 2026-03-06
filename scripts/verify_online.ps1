@@ -28,6 +28,9 @@ $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.
 # iter41: z0 deadline vars (initialized here; set in z0 collect block for DAILY)
 $script:_z0DeadlineSoftSec = $null
 $script:_z0DeadlineHardSec = $null
+$script:_z0StopNewRequestsAtSec = $null
+$script:_z0InflightDrainedSec = $null
+$script:_z0WallClockSec = $null
 $script:_z0StopReason      = $null
 
 # iter41: -Mode daily activates FAST_300_DAILY automatically
@@ -141,6 +144,13 @@ function Write-RunTimingMeta {
     }
     if ($script:_z0OnlineSec -ne $null) {
         $meta["z0_collect_online_seconds"] = [int]$script:_z0OnlineSec
+    }
+    # iter44: Z0 dual-semantics fields (stop_issuing vs wallclock)
+    if ($script:_z0WallClockSec -ne $null) {
+        $meta["z0_stop_new_requests_at_sec"] = [double]$script:_z0StopNewRequestsAtSec
+        $meta["z0_inflight_drained_seconds"]  = [double]$script:_z0InflightDrainedSec
+        $meta["z0_wall_clock_seconds"]        = [double]$script:_z0WallClockSec
+        $meta["z0_deadline_semantics"]        = "stop_issuing_vs_wallclock"
     }
     # iter42: z0_data_source for DAILY evidence
     if ($script:_z0DeadlineSoftSec) {
@@ -851,8 +861,8 @@ if (-not $SkipPipeline) {
         $_z0OnlineStart = $_voStopwatch.Elapsed.TotalSeconds
         # iter41: FAST_300_DAILY — z0 soft/hard two-stage deadline
         if ($_fast300Daily) {
-            $script:_z0DeadlineSoftSec = 35
-            $script:_z0DeadlineHardSec = 50
+            $script:_z0DeadlineSoftSec = 30
+            $script:_z0DeadlineHardSec = 40
             $script:_z0StopReason = "unknown"
             Write-Output ("  [FAST_300_DAILY] Z0 軟截止={0}s / 硬截止={1}s  z0_data_source=online" -f $script:_z0DeadlineSoftSec, $script:_z0DeadlineHardSec)
             $_z0Job = Start-Job -ScriptBlock {
@@ -864,6 +874,7 @@ if (-not $SkipPipeline) {
             $_z0Done = Wait-Job -Job $_z0Job -Timeout $script:_z0DeadlineSoftSec
             if ($_z0Done) {
                 $script:_z0StopReason = "quota_met"
+                $script:_z0StopNewRequestsAtSec = [Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart, 1)
                 $_z0Exit = Receive-Job -Job $_z0Job
             } else {
                 # Soft deadline exceeded — wait for hard deadline
@@ -872,15 +883,22 @@ if (-not $SkipPipeline) {
                 $_z0Done2 = Wait-Job -Job $_z0Job -Timeout $_z0Remaining
                 if ($_z0Done2) {
                     $script:_z0StopReason = "quota_met"
+                    $script:_z0StopNewRequestsAtSec = [Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart, 1)
                     $_z0Exit = Receive-Job -Job $_z0Job
                 } else {
                     $script:_z0StopReason = "hard_deadline"
+                    # iter44: record when we stopped issuing new requests (= hard deadline elapsed)
+                    $script:_z0StopNewRequestsAtSec = [Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart, 1)
                     Write-Output ("  [FAST_300_DAILY] 硬截止到期（>{0}s），使用已有資料" -f $script:_z0DeadlineHardSec)
                     Stop-Job -Job $_z0Job -ErrorAction SilentlyContinue
                 }
             }
             Remove-Job -Job $_z0Job -Force -ErrorAction SilentlyContinue
+            # iter44: compute wallclock and inflight drain
+            $script:_z0WallClockSec = [Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart, 1)
+            $script:_z0InflightDrainedSec = [Math]::Round($script:_z0WallClockSec - $script:_z0StopNewRequestsAtSec, 1)
             Write-Output ("  [FAST_300_DAILY] Z0 stop_reason={0}  z0_data_source=online" -f $script:_z0StopReason)
+            Write-Output ("  [FAST_300_DAILY] Z0 口徑：stop_new_requests_at={0:F1}s  inflight_drain={1:F1}s  wallclock={2:F1}s" -f $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec, $script:_z0WallClockSec)
         } else {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
             if ($LASTEXITCODE -ne 0) {
@@ -4349,13 +4367,18 @@ if (Test-Path $_teMetaPatchPath) {
         $_runOnceFallback = [bool]$_teObj["cpu_fallback_detected"]
         $_teObj["cpu_fallback_detected"] = ((Test-Path $_gpuFallbackFlag) -or $_runOnceFallback)
         $_teObj["gpu_required"] = $true
-        # iter39 (E): compute est_total_seconds_if_all_miss = (total - translate_seconds) + est_translate_seconds_if_all_miss
+        # iter39 (E): compute est_total_seconds_if_all_miss
+        # iter44: when translate_mode=all_miss, actual total IS the all-miss measurement
         $_teXlatSec = if ($_teObj.Contains("translate_seconds")) { [double]$_teObj["translate_seconds"] } else { 0 }
         $_teEstMiss = if ($_teObj.Contains("est_translate_seconds_if_all_miss")) { [double]$_teObj["est_translate_seconds_if_all_miss"] } else { 0 }
-        if ($_teEstMiss -gt 0) {
+        $_teMode    = if ($_teObj.Contains("translate_mode")) { [string]$_teObj["translate_mode"] } else { "" }
+        if ($_teMode -eq "all_miss") {
+            # actual run WAS all-miss; total_seconds is the ground-truth measurement
+            $_teObj["est_total_seconds_if_all_miss"] = [int]$_sSecTot
+        } elseif ($_teEstMiss -gt 0) {
             $_teObj["est_total_seconds_if_all_miss"] = [int][Math]::Round(($_sSecTot - $_teXlatSec + $_teEstMiss), 0)
         }
-        $_teObj | ConvertTo-Json -Depth 5 -Compress | Set-Content $_teMetaPatchPath -Encoding UTF8
+        $_teObj | ConvertTo-Json -Depth 8 -Compress | Set-Content $_teMetaPatchPath -Encoding UTF8
         Write-Output ("  [iter35] translation_engine.meta.json 已更新 tok_per_sec_est={0:F1}  calls_tok_s_count={1}  cpu_fallback={2}" `
             -f $_gpuTokPerSec, @($_teObj["calls_tok_s"]).Count, $_teObj["cpu_fallback_detected"])
     } catch {
@@ -4428,6 +4451,96 @@ if (Test-Path $_amEstPath) {
     }
 } else {
     Write-Output "ALL_MISS_BUDGET_ESTIMATE_HARD: SKIP (translation_engine.meta.json not found)"
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter44: ALL_MISS_SAFETY_MARGIN_HARD
+# est_total_seconds_if_all_miss must be <= (budget - 15) for safety margin
+# ---------------------------------------------------------------------------
+$_smPath = Join-Path $repoRoot "outputs\translation_engine.meta.json"
+if (Test-Path $_smPath) {
+    try {
+        $_smMeta = Get-Content $_smPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $_smEst  = if ($null -ne $_smMeta.est_total_seconds_if_all_miss) { [int]$_smMeta.est_total_seconds_if_all_miss } else { 0 }
+        $_smMargin = 15
+        $_smLimit  = $_voBudgetSec - $_smMargin
+        Write-Output "ALL_MISS_SAFETY_MARGIN_HARD:"
+        Write-Output ("  est_total_seconds_if_all_miss={0}  budget={1}  margin={2}  limit={3}" -f $_smEst, $_voBudgetSec, $_smMargin, $_smLimit)
+        if ($_smEst -gt 0 -and $_smEst -le $_smLimit) {
+            Write-Output ("  => ALL_MISS_SAFETY_MARGIN_HARD: PASS (est={0}s <= limit={1}s)" -f $_smEst, $_smLimit)
+        } elseif ($_smEst -gt $_smLimit) {
+            Write-Output ("  => ALL_MISS_SAFETY_MARGIN_HARD: FAIL (est={0}s > limit={1}s)" -f $_smEst, $_smLimit)
+            Invoke-VerifyOnlineFailFast -Gate "ALL_MISS_SAFETY_MARGIN_HARD" `
+                -Reason ("ALL_MISS_SAFETY_MARGIN_HARD: est={0}s > {1}s (budget={2} margin={3})" -f $_smEst, $_smLimit, $_voBudgetSec, $_smMargin)
+        } else {
+            Write-Output ("  => ALL_MISS_SAFETY_MARGIN_HARD: SKIP (est={0})" -f $_smEst)
+        }
+    } catch {
+        Write-Output ("  ALL_MISS_SAFETY_MARGIN_HARD: WARN (parse error: {0})" -f $_)
+    }
+} else {
+    Write-Output "ALL_MISS_SAFETY_MARGIN_HARD: SKIP (meta not found)"
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter44: TRANSLATION_META_COHERENCE_HARD
+# Validates internal consistency of translation_engine.meta.json
+# ---------------------------------------------------------------------------
+$_tmcPath = Join-Path $repoRoot "outputs\translation_engine.meta.json"
+if (Test-Path $_tmcPath) {
+    try {
+        $_tmcMeta = Get-Content $_tmcPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $_tmcFails = @()
+        $_tmcCT = [int]$_tmcMeta.calls_total
+        $_tmcCS = [int]$_tmcMeta.calls_success
+        $_tmcCTO = [int]$_tmcMeta.calls_timeout
+        $_tmcCE = [int]$_tmcMeta.calls_error
+        $_tmcMode = [string]$_tmcMeta.translate_mode
+        $_tmcDetail = @($_tmcMeta.calls_detail)
+        $_tmcTokS = @($_tmcMeta.calls_tok_s)
+        # Check 1: calls_success + calls_timeout + calls_error == calls_total
+        if (($_tmcCS + $_tmcCTO + $_tmcCE) -ne $_tmcCT) {
+            $_tmcFails += ("success({0})+timeout({1})+error({2})={3} != calls_total({4})" -f $_tmcCS, $_tmcCTO, $_tmcCE, ($_tmcCS+$_tmcCTO+$_tmcCE), $_tmcCT)
+        }
+        # Check 2: len(calls_detail) == calls_total (cache entries excluded from calls_total)
+        $_tmcDetailLen = $_tmcDetail.Count
+        # calls_detail may include cache entries; non-cache entries should == calls_total
+        $_tmcDetailCalls = @($_tmcDetail | Where-Object { -not $_.cache_used }).Count
+        if ($_tmcDetailCalls -ne $_tmcCT) {
+            $_tmcFails += ("calls_detail_non_cache({0}) != calls_total({1})" -f $_tmcDetailCalls, $_tmcCT)
+        }
+        # Check 3: all_cache_hit consistency
+        if ($_tmcMode -eq "all_cache_hit") {
+            if ($_tmcCT -ne 0) { $_tmcFails += "all_cache_hit but calls_total=$_tmcCT != 0" }
+            if (-not $_tmcMeta.translate_skipped_reason) { $_tmcFails += "all_cache_hit but no translate_skipped_reason" }
+        }
+        # Check 4: cache_miss > 0 consistency
+        $_tmcCM = [int]$_tmcMeta.cache_miss
+        if ($_tmcCM -gt 0) {
+            if ($_tmcCT -le 0) { $_tmcFails += "cache_miss=$_tmcCM but calls_total=0" }
+            $_tmcTS = [double]$_tmcMeta.translate_seconds
+            if ($_tmcTS -le 0) { $_tmcFails += "cache_miss=$_tmcCM but translate_seconds=$_tmcTS" }
+        }
+        # Check 5: calls_tok_s_scope
+        if ([string]$_tmcMeta.calls_tok_s_scope -ne "success_only") {
+            $_tmcFails += ("calls_tok_s_scope='{0}' != 'success_only'" -f [string]$_tmcMeta.calls_tok_s_scope)
+        }
+        Write-Output "TRANSLATION_META_COHERENCE_HARD:"
+        if ($_tmcFails.Count -gt 0) {
+            foreach ($_f in $_tmcFails) { Write-Output ("  FAIL: {0}" -f $_f) }
+            Invoke-VerifyOnlineFailFast -Gate "TRANSLATION_META_COHERENCE_HARD" `
+                -Reason ("TRANSLATION_META_COHERENCE_HARD: " + ($_tmcFails -join "; "))
+        } else {
+            Write-Output ("  calls_total={0} success={1} timeout={2} error={3} detail_len={4} tok_s_scope=success_only" -f $_tmcCT, $_tmcCS, $_tmcCTO, $_tmcCE, $_tmcDetailLen)
+            Write-Output "  => TRANSLATION_META_COHERENCE_HARD: PASS"
+        }
+    } catch {
+        Write-Output ("  TRANSLATION_META_COHERENCE_HARD: WARN (parse error: {0})" -f $_)
+    }
+} else {
+    Write-Output "TRANSLATION_META_COHERENCE_HARD: SKIP (meta not found)"
 }
 Write-Output ""
 
