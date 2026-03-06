@@ -26,6 +26,16 @@ $_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 600 }  # iter33: reduced hard cap to 600s (soft-warn 480s below)
 $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
 
+# iter37: FAST_600_MODE — activated when budget<=600 OR FAST_600_MODE="1"
+# Disables card_build + DBE rebuild in run_once.py; runs direct hydration→digest→translate path.
+$_fast600Mode = ($env:FAST_600_MODE -eq "1") -or ($_voBudgetSec -le 600)
+if ($_fast600Mode) {
+    $env:FAST_600_MODE = "1"
+    Write-Output "FAST_600_MODE=1（禁用 card_build/DBE，預算=${_voBudgetSec}s）"
+} else {
+    $env:FAST_600_MODE = "0"
+}
+
 # ---------------------------------------------------------------------------
 # iter29: 計時 helper functions
 #   Append-TimingFooterToMd : 在指定 .md 末尾追加繁中耗時附錄
@@ -55,7 +65,7 @@ function Append-TimingFooterToMd {
     # iter31: stage breakdown (if available)
     if ($StageSec -and $StageSec.Count -gt 0) {
         $footer.Add("- 分段耗時：")
-        foreach ($k in @("z0_collect","hydrate","card_build","translate","build_docx","gates")) {  # iter33: hydration→hydrate, no build_pptx
+        foreach ($k in @("z0_collect","hydrate","card_build","translate","build_docx","gates")) {  # iter33: hydration→hydrate, no build_pptx; iter37: card_build absent in FAST_600_MODE
             if ($StageSec.ContainsKey($k)) {
                 $footer.Add(("  - {0}：{1} 秒" -f $k, $StageSec[$k]))
             }
@@ -258,7 +268,8 @@ foreach ($_mrFile in @(
     "outputs\gpu_probe_history.meta.json",
     "outputs\run_timing.meta.json",
     "outputs\LAST_RUN_SUMMARY.txt",
-    "outputs\stage_timing.meta.json"
+    "outputs\stage_timing.meta.json",
+    "outputs\digest_density.meta.json"
 )) {
     $_mrPath = Join-Path $repoRoot $_mrFile
     if (Test-Path $_mrPath) {
@@ -1536,6 +1547,45 @@ if (Test-Path $poolSuffPath) {
 } else {
     Write-Output "  POOL_SUFFICIENCY_HARD: FAIL (pool_sufficiency.meta.json not found — pipeline did not complete)"
     exit 1
+}
+
+# ---------------------------------------------------------------------------
+# iter37: DIGEST_DENSITY_FLOOR_HARD evidence section
+#   Reads outputs/digest_density.meta.json written by FAST_600_MODE fast path.
+#   If FAIL, the fast path already wrote NOT_READY.md; POOL_SUFFICIENCY_HARD above
+#   will have caught it. This section provides audit evidence only.
+# ---------------------------------------------------------------------------
+$_ddMetaPath = Join-Path $repoRoot "outputs\digest_density.meta.json"
+Write-Output ""
+Write-Output "DIGEST_DENSITY_FLOOR_HARD:"
+if ($_fast600Mode) {
+    if (Test-Path $_ddMetaPath) {
+        try {
+            $_ddMeta  = Get-Content $_ddMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_ddGate  = if ($_ddMeta.PSObject.Properties['gate_result'])    { $_ddMeta.gate_result }    else { "UNKNOWN" }
+            $_ddEvts  = if ($_ddMeta.PSObject.Properties['events_checked']) { [int]$_ddMeta.events_checked } else { 0 }
+            $_ddThin  = if ($_ddMeta.PSObject.Properties['thin_events_count']) { [int]$_ddMeta.thin_events_count } else { 0 }
+            Write-Output ("  gate_result      : {0}" -f $_ddGate)
+            Write-Output ("  events_checked   : {0}" -f $_ddEvts)
+            Write-Output ("  thin_events_count: {0}" -f $_ddThin)
+            Write-Output ("  threshold        : bullets>=5 OR chars>=1200 per event")
+            if ($_ddGate -eq "FAIL") {
+                Write-Output "  => DIGEST_DENSITY_FLOOR_HARD: FAIL (HYDRATION_TOO_THIN)"
+                Write-Output "  Next Steps: 全文不足/水化過薄，請調整 targeted hydration 取得完整內容後再翻譯"
+                Invoke-VerifyOnlineFailFast -Gate "DIGEST_DENSITY_FLOOR_HARD" `
+                    -Reason "HYDRATION_TOO_THIN: thin_events=$_ddThin events_checked=$_ddEvts" `
+                    -NextSteps "全文不足/水化過薄，請調整 targeted hydration 取得完整內容後再翻譯"
+            } else {
+                Write-Output ("  => DIGEST_DENSITY_FLOOR_HARD: PASS (events={0} thin=0)" -f $_ddEvts)
+            }
+        } catch {
+            Write-Output ("  DIGEST_DENSITY_FLOOR_HARD: WARN-OK (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  DIGEST_DENSITY_FLOOR_HARD: SKIP (not FAST_600_MODE run or meta not written)"
+    }
+} else {
+    Write-Output "  DIGEST_DENSITY_FLOOR_HARD: SKIP (FAST_600_MODE not active)"
 }
 
 # ---------------------------------------------------------------------------

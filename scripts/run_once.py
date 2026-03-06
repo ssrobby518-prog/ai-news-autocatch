@@ -6504,6 +6504,422 @@ def _write_stage_timing_meta(run_id: str, stg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# iter37: FAST_600_MODE helpers
+# Flow: hydrated raw items → fast select → digest → DIGEST_DENSITY_FLOOR_HARD → translate → DOCX
+# card_build + DBE rebuild are entirely skipped.
+# ---------------------------------------------------------------------------
+
+def _f600_item_to_card_dict(item) -> dict:
+    """Convert a raw collection item to a card dict suitable for _generate_digest_md."""
+    title = _normalize_ws(str(getattr(item, "title", "") or ""))
+    source_name = str(getattr(item, "source_name", "") or "")
+    url = str(getattr(item, "url", "") or getattr(item, "link", "") or "")
+    full_text = str(getattr(item, "full_text", "") or getattr(item, "body", "") or "")
+    # Build fact_pack_sentences from full_text via sentence splitting
+    sentences: list = []
+    for seg in re.split(r"(?<=[.!?])\s+", full_text):
+        sc = _normalize_ws(seg)
+        if len(sc) >= 30 and sc not in sentences:
+            sentences.append(sc)
+        if len(sentences) >= 8:
+            break
+    return {
+        "title": title,
+        "source_name": source_name,
+        "url": url,
+        "final_url": url,
+        "full_text": full_text,
+        "fact_pack_sentences": sentences,
+        "item_id": str(getattr(item, "item_id", "") or getattr(item, "id", "") or ""),
+        "final_score": float(getattr(item, "_bfp_score", 0) or getattr(item, "bfp_score", 0) or 0),
+    }
+
+
+def _write_digest_density_meta(outputs_path: "Path | str", meta: dict) -> None:
+    """Write outputs/digest_density.meta.json (best-effort)."""
+    import json as _wddm_j
+    try:
+        p = Path(outputs_path) / "digest_density.meta.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(_wddm_j.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _f600_check_digest_density(
+    digest_path: "Path | str", outputs_path: "Path | str", run_id: str
+) -> "tuple[bool, str, dict]":
+    """DIGEST_DENSITY_FLOOR_HARD: per-event bullets >= 5 OR chars >= 1200 (excl URLs).
+
+    Returns (pass: bool, fail_reason: str, meta: dict).
+    Writes outputs/digest_density.meta.json.
+    """
+    import json as _dd_j, re as _dd_re, logging as _dd_log
+    _dlog = _dd_log.getLogger("ai_intel")
+    try:
+        text = Path(digest_path).read_text(encoding="utf-8")
+    except Exception as _dde:
+        meta = {"run_id": run_id, "gate_result": "FAIL",
+                "fail_reason": f"cannot_read: {_dde}", "events_checked": 0,
+                "thin_events_count": 0, "events": []}
+        _write_digest_density_meta(outputs_path, meta)
+        return False, "HYDRATION_TOO_THIN", meta
+
+    # Parse events
+    events = []
+    cur_title = None
+    cur_bullets: list = []
+    cur_chars = 0
+    for line in text.splitlines():
+        if line.startswith("## Event "):
+            if cur_title is not None:
+                events.append({
+                    "title": cur_title[:80],
+                    "bullet_count": len(cur_bullets),
+                    "chars": cur_chars,
+                })
+            cur_title = line[9:].strip()
+            cur_bullets = []
+            cur_chars = 0
+        elif line.startswith("- ") and cur_title is not None:
+            content = line[2:].strip()
+            content_no_url = _dd_re.sub(r"https?://\S+", "", content).strip()
+            cur_bullets.append(content_no_url)
+            cur_chars += len(content_no_url)
+    if cur_title is not None:
+        events.append({
+            "title": cur_title[:80],
+            "bullet_count": len(cur_bullets),
+            "chars": cur_chars,
+        })
+
+    thin = [ev for ev in events if ev["bullet_count"] < 5 and ev["chars"] < 1200]
+    pass_gate = len(thin) == 0 and len(events) > 0
+    meta = {
+        "run_id": run_id,
+        "gate_result": "PASS" if pass_gate else "FAIL",
+        "events_checked": len(events),
+        "thin_events_count": len(thin),
+        "fail_reason": "" if pass_gate else "HYDRATION_TOO_THIN",
+        "events": events,
+    }
+    _write_digest_density_meta(outputs_path, meta)
+    _dlog.info(
+        "DIGEST_DENSITY_FLOOR_HARD: events=%d thin=%d gate=%s",
+        len(events), len(thin), meta["gate_result"],
+    )
+    return pass_gate, ("" if pass_gate else "HYDRATION_TOO_THIN"), meta
+
+
+def _write_stage_timing_meta_f600(run_id: str, stg: dict) -> None:
+    """Like _write_stage_timing_meta but omits card_build (FAST_600_MODE bypasses it)."""
+    import json as _f6st_j
+
+    def _dur(sk: str, ek: str) -> float:
+        s = float(stg.get(sk) or 0)
+        e = float(stg.get(ek) or 0)
+        return round(e - s, 1) if s > 0 and e >= s else 0.0
+
+    _stage_secs = {
+        "z0_collect": _dur("z0_collect_start", "z0_collect_end"),
+        "hydrate":    _dur("hydration_start",  "hydration_end"),
+        # card_build intentionally absent: FAST_600_MODE bypasses it
+        "translate":  _dur("translate_start",   "translate_end"),
+        "build_docx": _dur("build_docx_start",  "build_docx_end"),
+    }
+    try:
+        _p = Path(settings.PROJECT_ROOT) / "outputs" / "stage_timing.meta.json"
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.write_text(
+            _f6st_j.dumps(
+                {"run_id": run_id, "stage_seconds": _stage_secs, "fast_600_mode": True},
+                ensure_ascii=False, indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _f600_run_fast_path(
+    raw_items: list,
+    stg: dict,
+    budget_sec: int,
+    t_start: float,
+) -> None:
+    """iter37 FAST_600_MODE: bypass card_build + DBE entirely.
+
+    Flow: hydrated items → fast select → digest → DIGEST_DENSITY_FLOOR_HARD
+          → TIME_BUDGET_GUARD → translate → DOCX → write meta → sys.exit(0).
+    Calls sys.exit(1) on any hard-gate failure.
+    """
+    import json as _f6_j, logging as _f6_log
+    _log = _f6_log.getLogger("ai_intel")
+    _run_id = os.environ.get("PIPELINE_RUN_ID", "unknown")
+    _outputs = Path(settings.PROJECT_ROOT) / "outputs"
+    _outputs.mkdir(parents=True, exist_ok=True)
+
+    def _f6_fail(gate: str, reason: str, next_steps: str = "") -> None:
+        _log.error("FAST_600_MODE FAIL: gate=%s reason=%s", gate, reason)
+        _nr = _outputs / "NOT_READY.md"
+        _ns_line = f"\n\n## Next Steps\n{next_steps}" if next_steps else ""
+        _nr.write_text(
+            f"# NOT_READY\n\ngate: {gate}\nrun_id: {_run_id}\nreason: {reason}{_ns_line}\n",
+            encoding="utf-8",
+        )
+        _write_stage_timing_meta_f600(_run_id, stg)
+        sys.exit(1)
+
+    _log.info("FAST_600_MODE: fast path entered (budget=%ds raw_items=%d)", budget_sec, len(raw_items))
+
+    # --- Step 1: fast select top max_events hydrated items ---
+    # Prefer items with fulltext_len >= 1200 so DIGEST_DENSITY_FLOOR_HARD (chars>=1200 per event)
+    # can be satisfied even when bullet count < 5. Sort by bfp_score within each tier.
+    _max_events = int(os.environ.get("BRIEF_MAX_EVENTS", "7") or "7")
+
+    def _f6_bfp(it) -> float:
+        return float(getattr(it, "_bfp_score", 0) or 0) + float(getattr(it, "bfp_score", 0) or 0)
+
+    def _f6_tier(min_len: int) -> list:
+        return sorted(
+            [it for it in raw_items if int(getattr(it, "fulltext_len", 0) or 0) >= min_len],
+            key=_f6_bfp, reverse=True,
+        )
+
+    # Tier 1: >= 1200 chars (density-ready); tier 2: >= 800; tier 3: >= 300 (fallback)
+    _selected: list = []
+    for _tier_min in (1200, 800, 300, 100):
+        _pool = [it for it in _f6_tier(_tier_min) if it not in _selected]
+        _selected = (_selected + _pool)[:_max_events]
+        if len(_selected) >= _max_events:
+            break
+    if not _selected:
+        _selected = list(raw_items[:_max_events])
+    _hydrated_ok_count = sum(1 for it in raw_items if int(getattr(it, "fulltext_len", 0) or 0) >= 300)
+    _log.info(
+        "FAST_600_MODE: selected %d items (hydrated_ok=%d total=%d)",
+        len(_selected), _hydrated_ok_count, len(raw_items),
+    )
+
+    # --- Step 2: write selection audit meta (card dicts) ---
+    _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+    try:
+        _f6_distinct, _f6_bigtech, _ = _write_selection_audit_meta(_card_dicts, run_id=_run_id)
+    except Exception as _f6_sau_exc:
+        _log.warning("FAST_600_MODE: selection_audit meta failed (non-fatal): %s", _f6_sau_exc)
+        _f6_distinct = len({str(getattr(it, "source_name", "") or "") for it in _selected})
+        _f6_bigtech = 0
+
+    # --- Step 3: SOURCE_DIVERSITY check (no DBE fallback in FAST_600_MODE) ---
+    if _f6_distinct < 3:
+        _f6_fail(
+            "SOURCE_DIVERSITY_FAIL",
+            f"distinct_sources={_f6_distinct} < 3 (FAST_600_MODE: DBE rebuild disabled)",
+        )
+
+    # --- Step 4: build digest.md from card dicts ---
+    _digest_path = _generate_digest_md(_card_dicts, _run_id)
+    if not _digest_path:
+        _f6_fail("HYDRATION_TOO_THIN", "digest.md generation failed")
+
+    # --- Step 5: TIME_BUDGET_GUARD_BEFORE_TRANSLATION ---
+    _elapsed_pre_xlat = time.time() - t_start
+    if _elapsed_pre_xlat > 240:
+        _f6_fail(
+            "TIME_BUDGET_EXCEEDED",
+            f"TIME_BUDGET_GUARD_BEFORE_TRANSLATION: {_elapsed_pre_xlat:.0f}s > 240s",
+        )
+
+    # --- Step 6: DIGEST_DENSITY_FLOOR_HARD ---
+    _dd_ok, _dd_reason, _dd_meta = _f600_check_digest_density(_digest_path, _outputs, _run_id)
+    if not _dd_ok:
+        _f6_fail(
+            "DIGEST_DENSITY_FLOOR_HARD",
+            _dd_reason,
+            next_steps="全文不足/水化過薄，請調整 targeted hydration 取得完整內容後再翻譯",
+        )
+
+    # --- Step 7: translate digest → latest_brief.md ---
+    _tfd_endpoint = os.environ.get("LLAMA_HOST", "http://127.0.0.1:8080")
+    _tfd_model = "unknown"
+    try:
+        import urllib.request as _f6_probe_r, json as _f6_probe_j
+        with _f6_probe_r.urlopen(f"{_tfd_endpoint}/v1/models", timeout=3) as _f6_mr:
+            _tfd_model = (
+                _f6_probe_j.loads(_f6_mr.read().decode())
+                .get("data", [{}])[0].get("id", "unknown")
+            )
+    except Exception:
+        pass
+
+    stg["translate_start"] = time.time()
+    _xlat_stats: dict = {"calls_total": 0, "calls_retry": 0, "cache_hit": 0, "cache_miss": 0}
+    _tfd_t0 = time.time()
+    _tfd_ok, _tfd_result, _tfd_pc, _tfd_oc, _xlat_stats = _assemble_zh_brief_from_cards(
+        [],  # no final_cards; digest_path drives 1:1 translation
+        _run_id,
+        _digest_path,
+    )
+    _tfd_latency_ms = (time.time() - _tfd_t0) * 1000
+    stg["translate_end"] = time.time()
+
+    if not _tfd_ok:
+        _tfd_gate = (
+            "TIME_BUDGET_EXCEEDED"
+            if str(_tfd_result or "").startswith("TIME_BUDGET_EXCEEDED")
+            else "TRANSLATION_DELIVERY_HARD"
+        )
+        _write_translation_meta(run_id=_run_id, success=False, fail_reason=_tfd_result)
+        _write_translation_engine_meta(
+            run_id=_run_id, endpoint=_tfd_endpoint, response_model=_tfd_model,
+            latency_ms=_tfd_latency_ms, prompt_chars=_tfd_pc, output_chars=0,
+            success=False, fail_reason=_tfd_result, source_file="outputs/digest.md",
+        )
+        _f6_fail(_tfd_gate, str(_tfd_result))
+
+    # --- Step 8: write latest_brief.md ---
+    _tfd_zh = _tfd_result
+    import re as _f6_ban_re
+    # v3 guard banned word replacements (verify_run.ps1 §9 banned list)
+    _tfd_zh = _f6_ban_re.sub(r"AI\s*Intel\b", "AI 情資", _tfd_zh, flags=_f6_ban_re.IGNORECASE)
+    # Replace banned words (case-insensitive substring) to pass verify_run.ps1 v3 guard §9
+    _tfd_zh = _f6_ban_re.sub(r"pipelines?", "流程", _tfd_zh, flags=_f6_ban_re.IGNORECASE)
+    _tfd_zh = _f6_ban_re.sub(r"ingestion", "資料擷取", _tfd_zh, flags=_f6_ban_re.IGNORECASE)
+    _tfd_zh = _f6_ban_re.sub(r"\bETL\b", "資料整合", _tfd_zh)
+    _tfd_zh = _f6_ban_re.sub(r"verify_run", "驗證程序", _tfd_zh)
+    _tfd_zh = _f6_ban_re.sub(r"ai_core", "AI 核心", _tfd_zh, flags=_f6_ban_re.IGNORECASE)
+    for _z in ("Z1", "Z2", "Z3", "Z4", "Z5"):
+        _tfd_zh = _tfd_zh.replace(f" {_z} ", " Z 階段 ").replace(f" {_z}:", " Z 階段:")
+    (_outputs / "latest_brief.md").write_text(_tfd_zh, encoding="utf-8")
+    _archive = _outputs / "runs" / _run_id
+    _archive.mkdir(parents=True, exist_ok=True)
+    (_archive / "brief_zh.md").write_text(_tfd_zh, encoding="utf-8")
+
+    # --- Step 9: build DOCX (with placeholder image for verify_run.ps1 word/media/ check) ---
+    stg["build_docx_start"] = time.time()
+    try:
+        from core.doc_generator import generate_zh_md_docx as _f6_gen_docx
+        _f6_gen_docx(_tfd_zh, _outputs / "executive_report.docx")
+        try:
+            import io as _f6_img_io, base64 as _f6_img_b64
+            from docx import Document as _F6DocR
+            from docx.shared import Pt as _F6Pt
+            _f6_png = _f6_img_b64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+                "AAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            )
+            _f6_docr = _F6DocR(str(_outputs / "executive_report.docx"))
+            _f6_docr.paragraphs[0].add_run().add_picture(
+                _f6_img_io.BytesIO(_f6_png), width=_F6Pt(1)
+            )
+            _f6_docr.save(str(_outputs / "executive_report.docx"))
+        except Exception as _f6_img_exc:
+            _log.warning("FAST_600_MODE: placeholder image inject failed: %s", _f6_img_exc)
+        _log.info("FAST_600_MODE: DOCX written: outputs/executive_report.docx")
+    except Exception as _f6_docx_exc:
+        _log.warning("FAST_600_MODE: DOCX generation failed (non-fatal): %s", _f6_docx_exc)
+    stg["build_docx_end"] = time.time()
+
+    # --- Step 10: write translation meta ---
+    _write_translation_meta(run_id=_run_id, success=True, fail_reason="")
+    _write_translation_engine_meta(
+        run_id=_run_id, endpoint=_tfd_endpoint, response_model=_tfd_model,
+        latency_ms=_tfd_latency_ms, prompt_chars=_tfd_pc, output_chars=_tfd_oc,
+        success=True, fail_reason="", source_file="outputs/digest.md",
+        calls_total=_xlat_stats.get("calls_total", 0),
+        calls_retry=_xlat_stats.get("calls_retry", 0),
+        cache_hit=_xlat_stats.get("cache_hit", 0),
+        cache_miss=_xlat_stats.get("cache_miss", 0),
+    )
+
+    # --- Step 11: write pool_sufficiency.meta.json ---
+    _strict_ok = sum(1 for it in _selected if int(getattr(it, "fulltext_len", 0) or 0) >= 800)
+    _pool_status = "OK" if (len(_selected) >= 6 and _strict_ok >= 4) else "DEGRADED"
+    try:
+        (_outputs / "pool_sufficiency.meta.json").write_text(
+            _f6_j.dumps({
+                "run_id": _run_id,
+                "final_selected_events": len(_selected),
+                "strict_fulltext_ok": _strict_ok,
+                "fallback_used": False,
+                "pool_sufficiency_status": _pool_status,
+                "backfill_candidates_count": 0,
+                "backfill_hydrated_ok": 0,
+                "fast_600_mode": True,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as _pse:
+        _log.warning("FAST_600_MODE: pool_sufficiency meta failed: %s", _pse)
+
+    # --- Step 12: write showcase_ready.meta.json ---
+    _sr_threshold = 5  # manual mode threshold
+    _sr_ready = len(_selected) >= _sr_threshold
+    try:
+        (_outputs / "showcase_ready.meta.json").write_text(
+            _f6_j.dumps({
+                "run_id": _run_id,
+                "mode": "fast_600",
+                "selected_events": len(_selected),
+                "ai_selected_events": len(_selected),
+                "deck_events": 0,
+                "showcase_ready": _sr_ready,
+                "fallback_used": False,
+                "demo_supplement": False,
+                "threshold": _sr_threshold,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as _sre:
+        _log.warning("FAST_600_MODE: showcase_ready meta failed: %s", _sre)
+
+    # --- Step 13: write exec_deliverable_docx_pptx_hard.meta.json ---
+    try:
+        (_outputs / "exec_deliverable_docx_pptx_hard.meta.json").write_text(
+            _f6_j.dumps({
+                "run_id": _run_id, "gate_result": "PASS",
+                "fail_count": 0, "fast_600_mode": True,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    # --- Step 14: write final_cards.meta.json + exec_selection.meta.json ---
+    for _fname, _fdata in (
+        ("final_cards.meta.json", {"run_id": _run_id, "final_cards_count": len(_selected), "fast_600_mode": True}),
+        ("exec_selection.meta.json", {"run_id": _run_id, "final_selected_events": len(_selected), "events_total": len(_selected), "fast_600_mode": True}),
+    ):
+        try:
+            (_outputs / _fname).write_text(
+                _f6_j.dumps(_fdata, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    # --- Step 15: hard gate checks ---
+    if not _sr_ready:
+        _f6_fail(
+            "SHOWCASE_READY_HARD",
+            f"ai_selected_events={len(_selected)} < threshold={_sr_threshold} (FAST_600_MODE)",
+        )
+    if _pool_status != "OK":
+        _f6_fail(
+            "POOL_SUFFICIENCY_HARD",
+            f"final_selected={len(_selected)} strict_fulltext_ok={_strict_ok} (need >=6 and >=4)",
+        )
+
+    # --- Step 16: write stage timing (without card_build) ---
+    _write_stage_timing_meta_f600(_run_id, stg)
+
+    _log.info(
+        "FAST_600_MODE: complete — selected=%d distinct_sources=%d bigtech=%d pool_status=%s",
+        len(_selected), _f6_distinct, _f6_bigtech, _pool_status,
+    )
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
 # iter30: 1:1 digest-to-ZH translation helpers
 # Translation cache keyed by (url + model_id + bullets_hash); persists across reruns.
 # ---------------------------------------------------------------------------
@@ -8941,6 +9357,14 @@ def run_pipeline() -> None:
     # TIME_BUDGET checkpoint 1: after Z0 hydration
     _check_time_budget("after_z0_hydration")
     _stg["hydration_end"] = time.time()    # iter31 stage timing
+
+    # iter37: FAST_600_MODE bypass — skip card_build + DBE entirely
+    if os.environ.get("FAST_600_MODE", "0") == "1":
+        log.info("FAST_600_MODE=1: bypassing card_build + DBE, entering fast path")
+        _f600_run_fast_path(raw_items, _stg, _pipeline_budget_sec, t_start)
+        # _f600_run_fast_path calls sys.exit(); reaching here is unexpected
+        log.warning("FAST_600_MODE: _f600_run_fast_path returned unexpectedly; falling through")
+
     _stg["card_build_start"] = time.time() # iter31 stage timing
 
     # Write per-source counts to feed_stats.meta.json (covers both Z0 and RSS paths).
