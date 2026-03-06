@@ -773,7 +773,11 @@ if (-not $SkipPipeline) {
 
     $_forceZ0Fail = ($env:FORCE_Z0_FAIL -eq "1")
 
-    if (-not $_forceZ0Fail) {
+    if ($_fast300Mode -and (Test-Path $_z0Latest)) {
+        # iter39: FAST_300_MODE skips z0_collect_online (takes ~350s); uses cached z0 data
+        $script:_z0OnlineSec = 0
+        Write-Output "  [FAST_300_MODE] z0_collect_online 已略過（使用快取 z0 資料）"
+    } elseif (-not $_forceZ0Fail) {
         $_z0OnlineStart = $_voStopwatch.Elapsed.TotalSeconds
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
         $script:_z0OnlineSec = [int]([Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart))
