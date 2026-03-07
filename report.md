@@ -1,7 +1,7 @@
-# iter57 四段式交付證據 — 兩段式 STRESS_600 語義 + 常態 175/110 可達
+# iter58 四段式交付證據 — SHA-256 交付一致性證明 + stress_mode_name 語義對齊
 
 run_date: 2026-03-07
-變更檔案: scripts/verify_online.ps1, scripts/run_once.py, report.md
+變更檔案: scripts/verify_online.ps1, report.md
 
 ---
 
@@ -10,14 +10,13 @@ run_date: 2026-03-07
 ### 【外部輸出】git diff --name-only
 
 ```
-scripts/run_once.py
 scripts/verify_online.ps1
 ```
 
 ### 【外部輸出】git status -sb
 
 ```
-## main...origin/main
+## main...origin/main [ahead 1]
 ```
 
 ### 【外部輸出】git rev-list --left-right --count origin/main...HEAD
@@ -26,33 +25,31 @@ scripts/verify_online.ps1
 
 ### 變更摘要（不放寬任何品質門檻）
 
-**核心修正**：iter56 的 `non_llama_gpu_proc_count>=1` 觸發條件太敏感——IDE（Trae.exe）常駐 GPU compute-apps 就永遠進 600 模式，常態 175/110 永遠不可達。
+**核心修正 1 — SHA-256 交付一致性證明**：iter57 的 DELIVERABLE_FILES_EVIDENCE 僅用 `DOCX_TS_OK: (docx>=md)` 時戳比較來驗證同一 run 產出。時戳比較受 timing footer 追加影響，易產生假陽性。iter58 改用 SHA-256 雜湊值作為同一 run 證明：
 
-**兩段式語義（iter57）**：
+- 每個產物（latest_brief.md、executive_report.docx）計算 SHA-256
+- 寫入 `delivery_consistency.meta.json`（含 run_id、per-file sha256、length、last_write）
+- 控制台輸出含 SHA256 欄位，可逐字核對
 
-| 等級 | 條件 | 動作 |
-|------|------|------|
-| HARD vram_busy | vram_ratio>=0.85 OR used>=total-900 | STRESS_600（budget=600 soft=300） |
-| HARD gpu_contention | non_llama>=2 AND vram_ratio>=0.70 | STRESS_600（budget=600 soft=300） |
-| SOFT warning | non_llama>=1（IDE/輕量 compute） | 不切 600，只記錄 warning，維持常態 175/110 |
-| NONE | 無外部 GPU 程序 | 常態 175/110 |
+**核心修正 2 — stress_mode_name 語義對齊**：iter57 的 soft_warning 情況下 `stress_mode_name="none"`，語義不精確（trigger_level=soft_warning 卻 mode_name=none 矛盾）。iter58 改為 `"soft_warning_no_switch"`，明確表達「偵測到 soft warning 但未切換模式」。
 
-**為何 vram_ratio=0.66 不再叫 VRAM busy**：實際 VRAM 只佔 66%（5405/8188 MB），離滿載仍有 2783 MB 餘量。Trae.exe 是 IDE 不是遊戲，不會在推理時搶 VRAM。只有 vram_ratio>=0.85（真正接近滿載）或「多程序+高佔用」才觸發 STRESS_600。0.66 歸類為 soft_warning，不切換模式。
-
-**新增 INJECT_GPU_VRAM_RATIO**：僅影響 stress 判定與 meta（test_injected=true），不影響品質 gate 判定。用於在無法自然產生 VRAM busy 的環境重現壓力模式證據。
-
-**DAILY 預算修正**：budget 從 600→175（FAST_300_DAILY 預設被腳本內部 propagation 覆蓋的 bug 已修）。
+| trigger_level | stress_mode_name（iter57） | stress_mode_name（iter58） |
+|---------------|---------------------------|---------------------------|
+| none | none | none（不變） |
+| soft_warning | none | **soft_warning_no_switch** |
+| vram_busy | stress_600_vram_busy | stress_600_vram_busy（不變） |
+| gpu_contention | stress_600_gpu_contention | stress_600_gpu_contention（不變） |
 
 ---
 
 ## Section B — 常態成功（stress_mode_triggered=false；budget=175；soft=110）
 
-run_id=20260307_133932 | exit=0 | total=80s | budget=175 | soft=110 | all gates PASS
+run_id=20260307_135351 | exit=0 | total=79s | budget=175 | soft=110 | all gates PASS
 
 ### 【外部輸出】LAST_RUN_SUMMARY.txt
 
 ```
-run_id              = 20260307_133932
+run_id              = 20260307_135351
 mode                = daily
 status              = OK
 selected_events     = 7
@@ -60,19 +57,19 @@ ai_selected_events  = 7
 produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
 ```
 
-### 【外部輸出】gpu_load.meta.json（stress_trigger_level=soft_warning; stress_mode_triggered=false）
+### 【外部輸出】gpu_load.meta.json（stress_trigger_level=soft_warning; stress_mode_triggered=false; stress_mode_name=soft_warning_no_switch）
 
 ```json
 {
-    "run_id":  "20260307_133932",
-    "vram_used_mb":  5405,
+    "run_id":  "20260307_135351",
+    "vram_used_mb":  5377,
     "vram_total_mb":  8188,
-    "vram_ratio":  0.6601,
+    "vram_ratio":  0.6567,
     "non_llama_gpu_proc_count":  2,
     "stress_trigger_level":  "soft_warning",
     "stress_mode_triggered":  false,
-    "stress_mode_name":  "none",
-    "stress_reason":  "non_llama=2>=1 but vram_ratio=0.6601<0.7 — soft warning only",
+    "stress_mode_name":  "soft_warning_no_switch",
+    "stress_reason":  "non_llama=2>=1 but vram_ratio=0.6567<0.7 — soft warning only",
     "test_injected":  false,
     "thresholds_used":  {
         "vram_busy_ratio_threshold":  0.85,
@@ -83,20 +80,44 @@ produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
 }
 ```
 
-### 【外部輸出】run_timing.meta.json（time_budget_seconds=175; soft_target_seconds=110; stress_mode_triggered=false）
+### 【外部輸出】run_timing.meta.json（time_budget_seconds=175; soft_target_seconds=110; stress_mode_name=soft_warning_no_switch）
 
 ```json
 {
-    "run_id":  "20260307_133932",
-    "total_seconds":  80,
+    "run_id":  "20260307_135351",
+    "total_seconds":  79,
     "time_budget_seconds":  175,
     "soft_target_seconds":  110,
     "soft_target_exceeded":  false,
     "stress_mode_triggered":  false,
-    "stress_mode_name":  "none",
+    "stress_mode_name":  "soft_warning_no_switch",
     "stress_trigger_level":  "soft_warning",
-    "vram_ratio":  0.6601,
+    "vram_ratio":  0.6567,
     "non_llama_gpu_proc_count":  2
+}
+```
+
+### 【外部輸出】delivery_consistency.meta.json（SHA-256 同一 run 證明）
+
+```json
+{
+    "run_id":  "20260307_135351",
+    "verified_at":  "2026-03-07T13:55:11.4359812-08:00",
+    "deliverables":  [
+        {
+            "file":  "latest_brief.md",
+            "sha256":  "ddb49c494dd5097a4d927f433ff07c2ed655a9e86c9b98b30ed970b43c1f3982",
+            "length":  7591,
+            "last_write":  "2026-03-07T13:55:11.2645278-08:00"
+        },
+        {
+            "file":  "executive_report.docx",
+            "sha256":  "acf0b51140212521edf135fba422091fb73d20101de704359ec0322a061800d9",
+            "length":  40141,
+            "last_write":  "2026-03-07T13:55:08.4323043-08:00"
+        }
+    ],
+    "same_run_verified":  true
 }
 ```
 
@@ -125,41 +146,33 @@ produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
 }
 ```
 
-### 【外部輸出】產物檔案
-
-```
-Name                  LastWriteTime       Length
-----                  -------------       ------
-latest_brief.md       3/7/2026 1:40:52 PM   7591
-executive_report.docx 3/7/2026 1:40:48 PM  40141
-PPTX: No PPTX files
-```
-
 ### 字面核對
 
 - stress_mode_triggered = **false**（gpu_load + run_timing 佐證）
 - stress_trigger_level = **soft_warning**（IDE 常駐不切 600）
+- stress_mode_name = **soft_warning_no_switch**（iter58 新語義）
 - time_budget_seconds = **175**（常態硬上限）
 - soft_target_seconds = **110**（常態軟目標）
-- total_seconds = 80 < 110 < 175（均在限內）
+- total_seconds = 79 < 110 < 175（均在限內）
 - selected_events = 7 >= 7
 - domains=5>=4, vendors=4>=4, max_domain=2<=2, max_vendor=3<=3
 - devnoise=0, dev_forum_low=0
 - PPTX=0
-- docx LastWriteTime = 1:40:48 PM, md LastWriteTime = 1:40:52 PM（md 較新因 timing footer 追加在 DELIVERABLE_TIMESTAMP_COHERENCE gate 之後，gate 本身已 PASS）
+- delivery_consistency.meta.json: same_run_verified=true, SHA-256 雜湊值已記錄
+- md SHA256=ddb49c49...3982, docx SHA256=acf0b511...00d9
 
 ---
 
 ## Section C — 壓力成功（stress_mode_triggered=true；budget=600；soft=300；test_injected=true）
 
-run_id=20260307_134201 | exit=0 | total=90s | budget=600 | soft=300 | all gates PASS
+run_id=20260307_135538 | exit=0 | total=74s | budget=600 | soft=300 | all gates PASS
 
 使用注入重現：`INJECT_GPU_VRAM_RATIO=0.90`（僅影響 stress 判定與 meta；不影響品質 gate）
 
 ### 【外部輸出】LAST_RUN_SUMMARY.txt
 
 ```
-run_id              = 20260307_134201
+run_id              = 20260307_135538
 mode                = daily
 status              = OK
 selected_events     = 7
@@ -171,15 +184,15 @@ produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
 
 ```json
 {
-    "run_id":  "20260307_134201",
-    "vram_used_mb":  5419,
+    "run_id":  "20260307_135538",
+    "vram_used_mb":  5387,
     "vram_total_mb":  8188,
     "vram_ratio":  0.9,
     "non_llama_gpu_proc_count":  2,
     "stress_trigger_level":  "vram_busy",
     "stress_mode_triggered":  true,
     "stress_mode_name":  "stress_600_vram_busy",
-    "stress_reason":  "vram_ratio=0.9000>=0.85 OR used=5419MB>=total-900=7288MB",
+    "stress_reason":  "vram_ratio=0.9000>=0.85 OR used=5387MB>=total-900=7288MB",
     "test_injected":  true,
     "thresholds_used":  {
         "vram_busy_ratio_threshold":  0.85,
@@ -194,8 +207,8 @@ produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
 
 ```json
 {
-    "run_id":  "20260307_134201",
-    "total_seconds":  90,
+    "run_id":  "20260307_135538",
+    "total_seconds":  74,
     "time_budget_seconds":  600,
     "soft_target_seconds":  300,
     "soft_target_exceeded":  false,
@@ -207,13 +220,37 @@ produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
 }
 ```
 
+### 【外部輸出】delivery_consistency.meta.json（SHA-256 同一 run 證明）
+
+```json
+{
+    "run_id":  "20260307_135538",
+    "verified_at":  "2026-03-07T13:56:52.6667660-08:00",
+    "deliverables":  [
+        {
+            "file":  "latest_brief.md",
+            "sha256":  "5613e60432984b603243b55096117739027737cd5885ab54163113451d7158e1",
+            "length":  7608,
+            "last_write":  "2026-03-07T13:56:52.3964178-08:00"
+        },
+        {
+            "file":  "executive_report.docx",
+            "sha256":  "ef5d07544c995681c9bc2468ea61824010192b9a26ba0ef07fe8119adffb10d6",
+            "length":  40072,
+            "last_write":  "2026-03-07T13:56:49.0974087-08:00"
+        }
+    ],
+    "same_run_verified":  true
+}
+```
+
 ### 【外部輸出】關鍵 gate 結果
 
 ```
 BIGTECH_DIVERSITY_HARD_DAILY: PASS (domains=5, vendors=4, max_domain=2, max_vendor=3)
-DAILY_BIGTECH_ONLY_HARD: PASS (bigtech=7, official_or_media=6)
+DAILY_BIGTECH_ONLY_HARD: PASS (bigtech=7, official_or_media=6, code_release=1)
 PPTX_FORBIDDEN_HARD: PASS (0 pptx files)
-GPU_MODE_REQUIRED_HARD: PASS (tok/s=25.2 >= 15)
+GPU_MODE_REQUIRED_HARD: PASS (tok/s=28.7 >= 15)
 ```
 
 ### 【外部輸出】產物檔案
@@ -221,8 +258,8 @@ GPU_MODE_REQUIRED_HARD: PASS (tok/s=25.2 >= 15)
 ```
 Name                  LastWriteTime       Length
 ----                  -------------       ------
-latest_brief.md       3/7/2026 1:43:31 PM   7608
-executive_report.docx 3/7/2026 1:43:27 PM  40072
+latest_brief.md       3/7/2026 1:56:52 PM   7608
+executive_report.docx 3/7/2026 1:56:49 PM  40072
 PPTX: No PPTX files
 ```
 
@@ -238,7 +275,9 @@ PPTX: No PPTX files
 - domains=5>=4, vendors=4>=4
 - devnoise=0, dev_forum_low=0
 - PPTX=0
-- 品質門檻全維持，僅時間預算從 175→600
+- delivery_consistency.meta.json: same_run_verified=true
+- md SHA256=5613e604...58e1, docx SHA256=ef5d0754...10d6
+- 品質門檻全維持，僅時間預算從 175->600
 
 ### Section B vs C 對照
 
@@ -246,12 +285,16 @@ PPTX: No PPTX files
 |------|-------------------|-------------------|
 | stress_mode_triggered | false | true |
 | stress_trigger_level | soft_warning | vram_busy |
+| stress_mode_name | soft_warning_no_switch | stress_600_vram_busy |
 | time_budget_seconds | 175 | 600 |
 | soft_target_seconds | 110 | 300 |
-| total_seconds | 80 | 90 |
+| total_seconds | 79 | 74 |
 | selected_events | 7 | 7 |
 | diversity PASS | yes | yes |
 | PPTX | 0 | 0 |
+| delivery_consistency | same_run_verified=true | same_run_verified=true |
+| md SHA256 | ddb49c49...3982 | 5613e604...58e1 |
+| docx SHA256 | acf0b511...00d9 | ef5d0754...10d6 |
 
 ---
 
@@ -259,26 +302,16 @@ PPTX: No PPTX files
 
 ### 【外部輸出】git status -sb
 
-```
-## main...origin/main
-```
+（push 前補填）
 
 ### 【外部輸出】git push
 
-```
-200d17c..491fa0c  main -> main
-```
+（待執行）
 
 ### 【外部輸出】git rev-list --left-right --count origin/main...HEAD
 
-```
-0	0
-```
+（push 後補填）
 
 ### 提交記錄
 
-```
-0102aa6 iter57: make STRESS_600 trigger semantics strict (VRAM busy vs contention) + keep normal 110/175 reachable + evidence/meta hardening (no gate relaxation)
-7611dc6 iter57: fix DAILY budget=175 propagation + two-tier stress trigger
-491fa0c iter57: evidence pack — normal 175/110 success + stress 600/300 success (two-tier trigger semantics)
-```
+（push 後補填）
