@@ -7240,16 +7240,30 @@ def _f600_run_fast_path(
                     _worst_idx, _worst_it = min(_dom_items, key=lambda x: _f6_bfp(x[1]))
             if _worst_it is None or _worst_idx < 0:
                 break
-            # Find replacement that improves diversity
+            # Find replacement that STRICTLY improves diversity
             _repl_found = False
+            # iter54e: identify which dimension is over-limit to require strict improvement
+            _worst_dom_name = _d_counts.most_common(1)[0][0] if _max_dc > _DIV_MAX_DOMAIN else None
+            _worst_ven_name = _v_counts.most_common(1)[0][0] if _max_vc > _DIV_MAX_VENDOR else None
             for _bi, _bcand in enumerate(_div_backup):
                 _cand_dk = _f6_domain_key(_bcand)
                 _cand_vk = _f6_vendor_key(_bcand)
-                # Must not worsen domain/vendor caps
+                # iter54e: skip candidates from the over-concentrated domain/vendor
+                if _worst_dom_name and _cand_dk == _worst_dom_name:
+                    continue
+                if _worst_ven_name and _cand_vk == _worst_ven_name:
+                    continue
                 _test_sel = [s for j, s in enumerate(_selected) if j != _worst_idx] + [_bcand]
                 _test_dc = _DivCounter(_f6_domain_key(s) for s in _test_sel)
                 _test_vc = _DivCounter(_f6_vendor_key(s) for s in _test_sel)
-                if _test_dc.most_common(1)[0][1] <= max(_DIV_MAX_DOMAIN, _max_dc) and _test_vc.most_common(1)[0][1] <= max(_DIV_MAX_VENDOR, _max_vc):
+                _test_max_dc = _test_dc.most_common(1)[0][1]
+                _test_max_vc = _test_vc.most_common(1)[0][1]
+                # iter54e: require strict improvement on the violated dimension
+                if _max_dc > _DIV_MAX_DOMAIN and _test_max_dc >= _max_dc:
+                    continue
+                if _max_vc > _DIV_MAX_VENDOR and _test_max_vc >= _max_vc:
+                    continue
+                if _test_max_dc <= max(_DIV_MAX_DOMAIN, _max_dc) and _test_max_vc <= max(_DIV_MAX_VENDOR, _max_vc):
                     _sample = {"title": str(getattr(_worst_it, "title", ""))[:120],
                                "domain": _f6_domain_key(_worst_it), "vendor": _f6_vendor_key(_worst_it),
                                "reason": "domain_cap" if _max_dc > _DIV_MAX_DOMAIN else ("vendor_cap" if _max_vc > _DIV_MAX_VENDOR else "diversity_increase")}
@@ -7651,11 +7665,24 @@ def _f600_run_fast_path(
             if _worst_it2 is None or _worst_idx2 < 0:
                 break
             _repl_found2 = False
+            # iter54e: skip candidates from over-concentrated domain/vendor
+            _worst_dom_name2 = _d_counts2.most_common(1)[0][0] if _max_dc2 > _DIV_MAX_DOMAIN else None
+            _worst_ven_name2 = _v_counts2.most_common(1)[0][0] if _max_vc2 > _DIV_MAX_VENDOR else None
             for _bi2, _bcand2 in enumerate(_div_backup2):
+                if _worst_dom_name2 and _f6_domain_key(_bcand2) == _worst_dom_name2:
+                    continue
+                if _worst_ven_name2 and _f6_vendor_key(_bcand2) == _worst_ven_name2:
+                    continue
                 _test_sel2 = [s for j, s in enumerate(_selected) if j != _worst_idx2] + [_bcand2]
                 _test_dc2 = _DivCounter(_f6_domain_key(s) for s in _test_sel2)
                 _test_vc2 = _DivCounter(_f6_vendor_key(s) for s in _test_sel2)
-                if _test_dc2.most_common(1)[0][1] <= max(_DIV_MAX_DOMAIN, _max_dc2) and _test_vc2.most_common(1)[0][1] <= max(_DIV_MAX_VENDOR, _max_vc2):
+                _test_max_dc2 = _test_dc2.most_common(1)[0][1]
+                _test_max_vc2 = _test_vc2.most_common(1)[0][1]
+                if _max_dc2 > _DIV_MAX_DOMAIN and _test_max_dc2 >= _max_dc2:
+                    continue
+                if _max_vc2 > _DIV_MAX_VENDOR and _test_max_vc2 >= _max_vc2:
+                    continue
+                if _test_max_dc2 <= max(_DIV_MAX_DOMAIN, _max_dc2) and _test_max_vc2 <= max(_DIV_MAX_VENDOR, _max_vc2):
                     _selected[_worst_idx2] = _bcand2
                     _div_backup2.pop(_bi2)
                     _repl_found2 = True
@@ -10529,7 +10556,35 @@ def run_pipeline() -> None:
                     ),
                 )
                 _hydrate_n = min(max(_probe_target * 4, 30), len(raw_items))
-                _targeted_pool = raw_items[:_hydrate_n]  # already sorted by _bfp_score
+                _targeted_pool = list(raw_items[:_hydrate_n])  # already sorted by _bfp_score
+                # iter54e: DAILY domain diversity injection — ensure hydration pool
+                # includes items from 6+ distinct domains so selection can satisfy
+                # max_domain=2 + min_vendors=4. Without this, Google-heavy Z0 data
+                # causes all 30 hydrated items to come from ~3 domains.
+                if _is_daily and len(raw_items) > _hydrate_n:
+                    from urllib.parse import urlparse as _hy_up
+                    from collections import Counter as _HyCounter
+                    _hy_dom_counts = _HyCounter()
+                    _hy_pool_ids = set()
+                    for _hy_it in _targeted_pool:
+                        _hy_u = str(getattr(_hy_it, "url", "") or getattr(_hy_it, "link", "") or "")
+                        _hy_dk = _hy_up(_hy_u).netloc.lower().lstrip("www.") if _hy_u else ""
+                        _hy_dom_counts[_hy_dk] += 1
+                        _hy_pool_ids.add(id(_hy_it))
+                    _hy_injected = 0
+                    for _hy_it in raw_items[_hydrate_n:]:
+                        if _hy_injected >= 20:
+                            break
+                        _hy_u = str(getattr(_hy_it, "url", "") or getattr(_hy_it, "link", "") or "")
+                        _hy_dk = _hy_up(_hy_u).netloc.lower().lstrip("www.") if _hy_u else ""
+                        if _hy_dk and _hy_dom_counts[_hy_dk] < 2 and id(_hy_it) not in _hy_pool_ids:
+                            _targeted_pool.append(_hy_it)
+                            _hy_pool_ids.add(id(_hy_it))
+                            _hy_dom_counts[_hy_dk] += 1
+                            _hy_injected += 1
+                    if _hy_injected:
+                        log.info("DAILY hydration diversity: injected %d items from %d under-represented domains",
+                                 _hy_injected, len([d for d, c in _hy_dom_counts.items() if c <= 2 and d]))
                 # iter42: DAILY uses per-url=4s, batch_timeout=55s (hydrate_hard_deadline)
                 _hy_timeout = 4 if _is_daily else 8
                 _hy_batch   = 55 if _is_daily else 180
