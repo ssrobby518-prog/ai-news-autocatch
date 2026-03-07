@@ -7945,10 +7945,13 @@ def _f600_run_fast_path(
                 _f6_img_io.BytesIO(_f6_png), width=_F6Pt(1)
             )
             _f6_docr.save(str(_docx_tmp))
+            del _f6_docr  # iter54e: release file lock before move
         except Exception as _f6_img_exc:
             _log.warning("FAST_600_MODE: placeholder image inject failed: %s", _f6_img_exc)
         # iter54: atomic replace — move tmp → final, then touch timestamp
         import shutil as _f6_sh
+        if _docx_final.exists():
+            _docx_final.unlink()  # iter54e: remove target first (Windows lock workaround)
         _f6_sh.move(str(_docx_tmp), str(_docx_final))
         _now_ts = time.time()
         os.utime(str(_docx_final), (_now_ts, _now_ts))
