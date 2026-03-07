@@ -236,4 +236,9 @@ WARMUP_6: tok_s=1.6 wall=7.57s
 
 ## Section D：Git 提交證據
 
-（push 後補填）
+```
+commit: a01d951
+message: iter55e: harden evidence pack (GPU warmup stability proof + same-run B/C outputs + docx>=md timestamp)
+push: d35deb2..a01d951  main -> main
+rev-list --left-right --count origin/main...HEAD: 0  0
+```
