@@ -42,7 +42,7 @@ $_fast300Daily = ($env:FAST_300_DAILY -eq "1")
 # iter39: FAST_300_MODE — hard cap 300s, auto-enables FAST_600_MODE
 $_fast300Mode = ($env:FAST_300_MODE -eq "1") -or $_fast300Daily
 if ($_fast300Daily) {
-    $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 200 }
+    $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 170 }
     $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec
     $env:FAST_600_MODE = "1"
     $env:FAST_300_DAILY = "1"
@@ -69,7 +69,7 @@ if ($_fast600Mode) {
 # iter41: soft target — DAILY default 200s; FAST_300_MODE default 270s; FAST_600_MODE default 300s
 $_voSoftTargetSec = if ($env:PIPELINE_SOFT_TARGET_SEC -and $env:PIPELINE_SOFT_TARGET_SEC -ne "") {
     [int]$env:PIPELINE_SOFT_TARGET_SEC
-} elseif ($_fast300Daily) { 160 } elseif ($_fast300Mode) { 270 } elseif ($_fast600Mode) { 300 } else { 0 }
+} elseif ($_fast300Daily) { 110 } elseif ($_fast300Mode) { 270 } elseif ($_fast600Mode) { 300 } else { 0 }
 if ($_voSoftTargetSec -gt 0) {
     Write-Output ("soft_target={0}s（超過只警告，不 FAIL）" -f $_voSoftTargetSec)
 }
@@ -160,11 +160,14 @@ function Write-RunTimingMeta {
     if ($script:_z0DeadlineSoftSec) {
         $meta["z0_soft_deadline_sec"]         = [int]$script:_z0DeadlineSoftSec
         $meta["z0_hard_deadline_sec"]         = [int]$script:_z0DeadlineHardSec
-        $meta["hydrate_hard_deadline_sec"]    = 55
-        $meta["translate_hard_deadline_sec"]  = 120
-        $meta["build_docx_hard_deadline_sec"] = 30
-        $meta["gates_hard_deadline_sec"]      = 10
-        $meta["before_translation_limit_sec"] = 120
+        $meta["hydrate_hard_deadline_sec"]    = 40
+        $meta["translate_hard_deadline_sec"]  = 55
+        $meta["build_docx_hard_deadline_sec"] = 8
+        $meta["gates_hard_deadline_sec"]      = 8
+        $meta["before_translation_limit_sec"] = 70
+        $meta["z0_stop_new_requests_hard_sec"] = 30
+        $meta["z0_inflight_drain_cap_sec"]     = 12
+        $meta["z0_wall_clock_cap_sec"]         = 42
     }
     # iter42: before_translation_seconds from stage_timing
     if ($StageSec -and $StageSec.ContainsKey("before_translation")) {
@@ -878,7 +881,7 @@ if (-not $SkipPipeline) {
         $_z0UseDeadline = $_fast300Daily -or ($_voBudgetSec -le 200)
         if ($_z0UseDeadline) {
             $script:_z0DeadlineSoftSec = 30
-            $script:_z0DeadlineHardSec = 40
+            $script:_z0DeadlineHardSec = 30
             $script:_z0StopReason = "unknown"
             $_z0Label = if ($_fast300Daily) { "FAST_300_DAILY" } else { "Z0_DEADLINE" }
             Write-Output ("  [{0}] Z0 軟截止={1}s / 硬截止={2}s  z0_data_source=online" -f $_z0Label, $script:_z0DeadlineSoftSec, $script:_z0DeadlineHardSec)
@@ -916,6 +919,12 @@ if (-not $SkipPipeline) {
             $script:_z0InflightDrainedSec = [Math]::Round($script:_z0WallClockSec - $script:_z0StopNewRequestsAtSec, 1)
             Write-Output ("  [{0}] Z0 stop_reason={1}  z0_data_source=online" -f $_z0Label, $script:_z0StopReason)
             Write-Output ("  [{0}] Z0 口徑：stop_new_requests_at={1:F1}s  inflight_drain={2:F1}s  wallclock={3:F1}s" -f $_z0Label, $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec, $script:_z0WallClockSec)
+            # iter54: Z0_WALLCLOCK_EXCEEDED — fail-fast if wallclock > 42s (DAILY)
+            $_z0WallClockCapSec = 42
+            if ($_fast300Daily -and $script:_z0WallClockSec -gt $_z0WallClockCapSec) {
+                Invoke-VerifyOnlineFailFast -Gate "Z0_WALLCLOCK_EXCEEDED" `
+                    -Reason ("Z0_WALLCLOCK_EXCEEDED: wallclock={0:F1}s > cap={1}s (stop_new_requests_at={2:F1}s inflight_drain={3:F1}s)" -f $script:_z0WallClockSec, $_z0WallClockCapSec, $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec)
+            }
         } else {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
             if ($LASTEXITCODE -ne 0) {
@@ -4513,18 +4522,21 @@ if (Test-Path $_smPath) {
     try {
         $_smMeta = Get-Content $_smPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $_smEst  = if ($null -ne $_smMeta.est_total_seconds_if_all_miss) { [int]$_smMeta.est_total_seconds_if_all_miss } else { 0 }
-        $_smMargin = 15
-        $_smLimit  = $_voBudgetSec - $_smMargin
+        $_smLimit  = 175
         Write-Output "ALL_MISS_SAFETY_MARGIN_HARD:"
-        Write-Output ("  est_total_seconds_if_all_miss={0}  budget={1}  margin={2}  limit={3}" -f $_smEst, $_voBudgetSec, $_smMargin, $_smLimit)
+        Write-Output ("  est_total_seconds_if_all_miss={0}  limit={1}" -f $_smEst, $_smLimit)
         if ($_smEst -gt 0 -and $_smEst -le $_smLimit) {
             Write-Output ("  => ALL_MISS_SAFETY_MARGIN_HARD: PASS (est={0}s <= limit={1}s)" -f $_smEst, $_smLimit)
         } elseif ($_smEst -gt $_smLimit) {
             Write-Output ("  => ALL_MISS_SAFETY_MARGIN_HARD: FAIL (est={0}s > limit={1}s)" -f $_smEst, $_smLimit)
             Invoke-VerifyOnlineFailFast -Gate "ALL_MISS_SAFETY_MARGIN_HARD" `
-                -Reason ("ALL_MISS_SAFETY_MARGIN_HARD: est={0}s > {1}s (budget={2} margin={3})" -f $_smEst, $_smLimit, $_voBudgetSec, $_smMargin)
+                -Reason ("ALL_MISS_SAFETY_MARGIN_HARD: est={0}s > {1}s" -f $_smEst, $_smLimit)
         } else {
             Write-Output ("  => ALL_MISS_SAFETY_MARGIN_HARD: SKIP (est={0})" -f $_smEst)
+        }
+        # iter54: ALL_MISS_OVER_HARDCAP_WARN — warn if est > hard_cap (170)
+        if ($_smEst -gt $_voBudgetSec) {
+            Write-Output ("  [WARN] ALL_MISS_OVER_HARDCAP: est={0}s > hard_cap={1}s" -f $_smEst, $_voBudgetSec)
         }
     } catch {
         Write-Output ("  ALL_MISS_SAFETY_MARGIN_HARD: WARN (parse error: {0})" -f $_)
@@ -4652,6 +4664,36 @@ if ($_fast300Daily) {
         }
     } else {
         Write-Output "  BIGTECH_DIVERSITY_HARD_DAILY: WARN (selection_audit.meta.json not found — pipeline may not have written diversity fields)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter54: DAILY_BIGTECH_ONLY_HARD — all 7 must be bigtech_hit=true AND official_or_media=true
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_btoMetaPath = Join-Path $repoRoot "outputs\selection_audit.meta.json"
+    Write-Output "DAILY_BIGTECH_ONLY_HARD:"
+    if (Test-Path $_btoMetaPath) {
+        try {
+            $_btoMeta = Get-Content $_btoMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_btoBT = if ($_btoMeta.PSObject.Properties['bigtech_hit_count']) { [int]$_btoMeta.bigtech_hit_count } else { 0 }
+            $_btoOM = if ($_btoMeta.PSObject.Properties['official_or_media_count']) { [int]$_btoMeta.official_or_media_count } else { 0 }
+            $_btoSel = if ($_btoMeta.PSObject.Properties['selected_items_count']) { [int]$_btoMeta.selected_items_count } else { 0 }
+            Write-Output ("  bigtech_hit_count         : {0}" -f $_btoBT)
+            Write-Output ("  official_or_media_count   : {0}" -f $_btoOM)
+            Write-Output ("  selected_items_count      : {0}" -f $_btoSel)
+            if ($_btoBT -lt $_btoSel -or $_btoOM -lt $_btoSel) {
+                $_btoFail = ("DAILY_BIGTECH_ONLY_HARD_FAIL: bigtech={0} official_or_media={1} selected={2} (all {2} must be both)" -f $_btoBT, $_btoOM, $_btoSel)
+                Write-Output ("  => FAIL: {0}" -f $_btoFail)
+                Invoke-VerifyOnlineFailFast -Gate "DAILY_BIGTECH_ONLY_HARD" -Reason $_btoFail
+            }
+            Write-Output "  => DAILY_BIGTECH_ONLY_HARD: PASS"
+        } catch {
+            Write-Output ("  DAILY_BIGTECH_ONLY_HARD: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  DAILY_BIGTECH_ONLY_HARD: WARN (selection_audit.meta.json not found)"
     }
 }
 Write-Output ""

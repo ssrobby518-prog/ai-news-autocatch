@@ -7072,6 +7072,8 @@ def _f600_run_fast_path(
     _om_pool = [it for it in _f6_tier(300) if not _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
     _other_pool = [it for it in _f6_tier(300) if it not in _bt_pool and it not in _om_pool and not _f6_is_dev_noise(it)]
     _devnoise_pool = [it for it in _f6_tier(300) if _f6_is_dev_noise(it)]
+    # iter54: DAILY_BIGTECH_ONLY — pool of items that are both bigtech AND official_or_media
+    _bt_om_pool = [it for it in _f6_tier(300) if _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
 
     # iter53: domain/vendor quota-aware selection
     _DIV_MAX_DOMAIN = 2
@@ -7089,27 +7091,49 @@ def _f600_run_fast_path(
         return _d_counts[_dk] < _DIV_MAX_DOMAIN and _v_counts[_vk] < _DIV_MAX_VENDOR
 
     _selected: list = []
-    # Greedy fill from prioritized pools, respecting domain/vendor caps
-    for _pool in [_bt_pool, _om_pool, _other_pool]:
-        if len(_selected) >= _max_events:
-            break
-        for it in _pool:
-            if it in _selected:
-                continue
-            if _div_can_add(it, _selected):
+    if _is_daily:
+        # iter54: DAILY must select only bigtech+official_or_media items
+        # Primary: fill from bt_om_pool with diversity caps
+        for it in _bt_om_pool:
+            if len(_selected) >= _max_events:
+                break
+            if it not in _selected and _div_can_add(it, _selected):
                 _selected.append(it)
-                if len(_selected) >= _max_events:
-                    break
-    # Fallback pass: if under 7, relax caps (still honor existing bigtech/noise rules)
-    if len(_selected) < _max_events:
-        for _pool in [_bt_pool, _om_pool, _other_pool]:
-            for it in _pool:
+        # Fallback: relax diversity caps but still require bigtech+om
+        if len(_selected) < _max_events:
+            for it in _bt_om_pool:
                 if it not in _selected:
                     _selected.append(it)
                     if len(_selected) >= _max_events:
                         break
+        # Last fallback: bigtech items (even non-official) to reach 7
+        if len(_selected) < _max_events:
+            for it in _bt_pool:
+                if it not in _selected:
+                    _selected.append(it)
+                    if len(_selected) >= _max_events:
+                        break
+    else:
+        # Non-daily: original pool priority
+        for _pool in [_bt_pool, _om_pool, _other_pool]:
             if len(_selected) >= _max_events:
                 break
+            for it in _pool:
+                if it in _selected:
+                    continue
+                if _div_can_add(it, _selected):
+                    _selected.append(it)
+                    if len(_selected) >= _max_events:
+                        break
+        if len(_selected) < _max_events:
+            for _pool in [_bt_pool, _om_pool, _other_pool]:
+                for it in _pool:
+                    if it not in _selected:
+                        _selected.append(it)
+                        if len(_selected) >= _max_events:
+                            break
+                if len(_selected) >= _max_events:
+                    break
     # Last resort: dev noise (DAILY: never; non-daily: max 1)
     if not _is_daily and len(_selected) < _max_events and _devnoise_pool:
         _selected.append(_devnoise_pool[0])
@@ -7389,6 +7413,23 @@ def _f600_run_fast_path(
             _f6_fail(
                 "DEV_NOISE_CAP_HARD",
                 f"DEV_NOISE_CAP_HARD_FAIL: non_bigtech_dev_noise={_f6_devnoise_count}",
+            )
+
+    # --- Step 3b1b: iter54 DAILY_BIGTECH_ONLY_HARD — all selected must be bigtech+official_or_media ---
+    if _is_daily:
+        _non_bt_om = sum(1 for it in _selected if not (_f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")))
+        if _non_bt_om > 0:
+            _write_not_ready_report_md(
+                "DAILY_BIGTECH_ONLY_HARD_FAIL",
+                f"non_bigtech_or_non_official_count={_non_bt_om} (DAILY requires all 7 to be bigtech+official_or_media)",
+                run_id=_run_id, selected_items_count=len(_selected),
+                selected_sources_distinct=_f6_distinct,
+                bigtech_hit_count=_f6_bigtech,
+                official_or_media_count=_f6_om,
+            )
+            _f6_fail(
+                "DAILY_BIGTECH_ONLY_HARD",
+                f"DAILY_BIGTECH_ONLY_HARD_FAIL: {_non_bt_om} items not bigtech+official_or_media (bt={_f6_bigtech} om={_f6_om})",
             )
 
     # --- Step 3b2: iter46 DEV_FORUM_LOW_VALUE_CAP_HARD + DEV_FORUM_HIGH_VALUE_CAP_HARD ---
@@ -7697,7 +7738,7 @@ def _f600_run_fast_path(
     # --- Step 5: TIME_BUDGET_GUARD_BEFORE_TRANSLATION (iter42: DAILY 120s; else 150s) ---
     _elapsed_pre_xlat = time.time() - t_start
     stg["before_translation_seconds"] = round(_elapsed_pre_xlat, 1)
-    _pre_xlat_limit = 120 if _is_daily else 150
+    _pre_xlat_limit = 70 if _is_daily else 150
     if _elapsed_pre_xlat > _pre_xlat_limit:
         _f6_fail(
             "TIME_BUDGET_GUARD_BEFORE_TRANSLATION",
@@ -7777,8 +7818,8 @@ def _f600_run_fast_path(
     # iter42: translate_hard_deadline_sec enforcement (DAILY)
     # iter44: raised 45→120 to accommodate all-miss scenario (safety via ALL_MISS_SAFETY_MARGIN_HARD)
     _xlat_dur = float(stg.get("translate_end", 0)) - float(stg.get("translate_start", 0))
-    if _is_daily and _xlat_dur > 120:
-        _f6_fail("TRANSLATE_HARD_DEADLINE", f"translate={_xlat_dur:.0f}s > 120s")
+    if _is_daily and _xlat_dur > 55:
+        _f6_fail("TRANSLATE_HARD_DEADLINE", f"translate={_xlat_dur:.0f}s > 55s")
 
     if not _tfd_ok:
         _tfd_gate = (
@@ -7812,11 +7853,13 @@ def _f600_run_fast_path(
     _archive.mkdir(parents=True, exist_ok=True)
     (_archive / "brief_zh.md").write_text(_tfd_zh, encoding="utf-8")
 
-    # --- Step 9: build DOCX (with placeholder image for verify_run.ps1 word/media/ check) ---
+    # --- Step 9: build DOCX (atomic replace + os.utime for timestamp coherence) ---
     stg["build_docx_start"] = time.time()
+    _docx_final = _outputs / "executive_report.docx"
+    _docx_tmp = _outputs / f"_tmp_executive_report_{_run_id}.docx"
     try:
         from core.doc_generator import generate_zh_md_docx as _f6_gen_docx
-        _f6_gen_docx(_tfd_zh, _outputs / "executive_report.docx")
+        _f6_gen_docx(_tfd_zh, _docx_tmp)
         try:
             import io as _f6_img_io, base64 as _f6_img_b64
             from docx import Document as _F6DocR
@@ -7825,22 +7868,32 @@ def _f600_run_fast_path(
                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
                 "AAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
             )
-            _f6_docr = _F6DocR(str(_outputs / "executive_report.docx"))
+            _f6_docr = _F6DocR(str(_docx_tmp))
             _f6_docr.paragraphs[0].add_run().add_picture(
                 _f6_img_io.BytesIO(_f6_png), width=_F6Pt(1)
             )
-            _f6_docr.save(str(_outputs / "executive_report.docx"))
+            _f6_docr.save(str(_docx_tmp))
         except Exception as _f6_img_exc:
             _log.warning("FAST_600_MODE: placeholder image inject failed: %s", _f6_img_exc)
-        _log.info("FAST_600_MODE: DOCX written: outputs/executive_report.docx")
+        # iter54: atomic replace — move tmp → final, then touch timestamp
+        import shutil as _f6_sh
+        _f6_sh.move(str(_docx_tmp), str(_docx_final))
+        _now_ts = time.time()
+        os.utime(str(_docx_final), (_now_ts, _now_ts))
+        _log.info("FAST_600_MODE: DOCX written: outputs/executive_report.docx (utime set)")
     except Exception as _f6_docx_exc:
         _log.warning("FAST_600_MODE: DOCX generation failed (non-fatal): %s", _f6_docx_exc)
+        # cleanup tmp if it exists
+        try:
+            _docx_tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
     stg["build_docx_end"] = time.time()
     # iter42: build_docx_hard_deadline_sec enforcement (DAILY)
     # iter44: raised 10→30 to accommodate I/O variance (safety via TIME_BUDGET_HARD)
     _docx_dur = float(stg.get("build_docx_end", 0)) - float(stg.get("build_docx_start", 0))
-    if _is_daily and _docx_dur > 30:
-        _f6_fail("BUILD_DOCX_HARD_DEADLINE", f"build_docx={_docx_dur:.0f}s > 30s")
+    if _is_daily and _docx_dur > 8:
+        _f6_fail("BUILD_DOCX_HARD_DEADLINE", f"build_docx={_docx_dur:.0f}s > 8s")
 
     # --- Step 10: write translation meta ---
     # iter39 (E): compute workload stats for all-miss estimation
