@@ -7088,10 +7088,16 @@ def _f600_run_fast_path(
         _non_df_backup.sort(key=_f6_sort_key, reverse=True)
         # Pass 0: iter50: replace ALL code_release/social/code items (including bigtech)
         #   DEV_NOISE_CAP_HARD counts all 4 types; replacement must match gate scope
+        #   Diversity-aware: skip replacement if it would drop distinct_sources < 3
         for _i in range(len(_selected)):
             _it = _selected[_i]
             _st0 = _f6_src_type(_it)
             if _st0 in ("code_release", "social", "code") and _non_df_backup:
+                _src_it = _f6_src(_it)
+                _other_srcs = {_f6_src(s) for j, s in enumerate(_selected) if j != _i}
+                if _src_it not in _other_srcs and len(_other_srcs) < 3:
+                    _log.info("FAST_600_MODE iter50: skipped %s idx=%d (would break diversity)", _st0, _i)
+                    continue
                 _repl = _non_df_backup.pop(0)
                 _log.info("FAST_600_MODE iter50: replaced %s idx=%d (bigtech=%s)", _st0, _i, _f6_is_bigtech(_it))
                 _selected[_i] = _repl
