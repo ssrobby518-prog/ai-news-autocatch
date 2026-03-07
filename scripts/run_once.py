@@ -7166,13 +7166,14 @@ def _f600_run_fast_path(
         )
 
     # --- Step 3b: iter41 BIGTECH_DOMINANCE_HARD + DEV_NOISE_CAP_HARD ---
-    # iter41: compute dev_forum_count from card_dicts (DAILY requires =0)
+    # iter49: narrow to "dev_forum" only (code_release from bigtech is not dev noise;
+    #   replacement loop only handles dev_forum, so gate must match)
     _f6_df_count = sum(
         1 for fc in _card_dicts
         if _classify_source_type(
             str(fc.get("source_name", "") or ""),
             str(fc.get("final_url", "") or "")
-        ) in ("dev_forum", "code_release", "social", "code")
+        ) == "dev_forum"
     )
     if _is_daily or os.environ.get("BIGTECH_GATES_ENFORCE", "0") == "1":
         if _f6_bigtech < 5:
