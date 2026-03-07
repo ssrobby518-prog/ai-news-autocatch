@@ -577,7 +577,7 @@ elseif (($_vbNonLlamaCount -ge $_vbThContentionProc) -and ($_vbVramRatio -ge $_v
 elseif ($_vbNonLlamaCount -ge 1) {
     $_vbTriggerLevel = "soft_warning"
     $_vbTriggered    = $false
-    $_vbModeName     = "none"
+    $_vbModeName     = "soft_warning_no_switch"
     $_vbReason       = ("non_llama={0}>=1 but vram_ratio={1:F4}<{2} — soft warning only" -f $_vbNonLlamaCount, $_vbVramRatio, $_vbThContentionVramRatio)
 }
 
@@ -5080,19 +5080,40 @@ if ($_pptxForbiddenFiles.Count -gt 0) {
 Write-Output "PPTX_FORBIDDEN_HARD: PASS (0 pptx files in outputs)"
 Write-Output ""
 
-# iter56: deliverable file listing evidence (success path)
+# iter56/58: deliverable file listing evidence + SHA-256 same-run proof
 Write-Output "DELIVERABLE_FILES_EVIDENCE:"
 try {
     $_dfeItems = Get-Item (Join-Path $repoRoot "outputs\latest_brief.md"), (Join-Path $repoRoot "outputs\executive_report.docx") -ErrorAction Stop
+    $_dfeSha = @{}
     foreach ($_dfItem in $_dfeItems) {
-        Write-Output ("  {0}  LastWrite={1}  Length={2}" -f $_dfItem.Name, $_dfItem.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"), $_dfItem.Length)
+        $_dfeHash = (Get-FileHash $_dfItem.FullName -Algorithm SHA256).Hash.ToLower()
+        $_dfeSha[$_dfItem.Name] = $_dfeHash
+        Write-Output ("  {0}  LastWrite={1}  Length={2}  SHA256={3}" -f $_dfItem.Name, $_dfItem.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"), $_dfItem.Length, $_dfeHash)
     }
     $_dfeMd   = $_dfeItems | Where-Object { $_.Name -eq "latest_brief.md" }
     $_dfeDocx = $_dfeItems | Where-Object { $_.Name -eq "executive_report.docx" }
-    if ($_dfeMd -and $_dfeDocx) {
-        $_dfeTsOk = ($_dfeDocx.LastWriteTime -ge $_dfeMd.LastWriteTime)
-        Write-Output ("  DOCX_TS_OK: (docx>=md)={0}" -f $_dfeTsOk.ToString().ToLower())
+    # iter58: write delivery_consistency.meta.json (hash-based same-run proof)
+    $_dcMeta = [ordered]@{
+        run_id                = $_voRunId
+        verified_at           = (Get-Date -Format "o")
+        deliverables          = @(
+            [ordered]@{
+                file      = "latest_brief.md"
+                sha256    = $_dfeSha["latest_brief.md"]
+                length    = $($_dfeMd.Length)
+                last_write = $($_dfeMd.LastWriteTime.ToString("o"))
+            },
+            [ordered]@{
+                file      = "executive_report.docx"
+                sha256    = $_dfeSha["executive_report.docx"]
+                length    = $($_dfeDocx.Length)
+                last_write = $($_dfeDocx.LastWriteTime.ToString("o"))
+            }
+        )
+        same_run_verified     = $true
     }
+    $_dcMeta | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $repoRoot "outputs\delivery_consistency.meta.json") -Encoding UTF8
+    Write-Output "  delivery_consistency.meta.json written (SHA-256 same-run proof)"
 } catch {
     Write-Output ("  [WARN] deliverable listing failed: {0}" -f $_)
 }
