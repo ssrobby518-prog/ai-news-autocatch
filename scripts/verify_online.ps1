@@ -161,8 +161,8 @@ function Write-RunTimingMeta {
         $meta["z0_soft_deadline_sec"]         = [int]$script:_z0DeadlineSoftSec
         $meta["z0_hard_deadline_sec"]         = [int]$script:_z0DeadlineHardSec
         $meta["hydrate_hard_deadline_sec"]    = 55
-        $meta["translate_hard_deadline_sec"]  = 45
-        $meta["build_docx_hard_deadline_sec"] = 10
+        $meta["translate_hard_deadline_sec"]  = 120
+        $meta["build_docx_hard_deadline_sec"] = 30
         $meta["gates_hard_deadline_sec"]      = 10
         $meta["before_translation_limit_sec"] = 120
     }
@@ -174,7 +174,7 @@ function Write-RunTimingMeta {
     if ($StageSec -and $StageSec.Count -gt 0) {
         $meta["stage_seconds"] = $StageSec
     }
-    $payload = $meta | ConvertTo-Json -Depth 6
+    $payload = $meta | ConvertTo-Json -Depth 8
     $dir = Split-Path -Parent $OutPath
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     Set-Content -LiteralPath $OutPath -Value $payload -Encoding utf8

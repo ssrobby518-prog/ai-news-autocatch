@@ -10,10 +10,10 @@ chcp 65001 | Out-Null
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $taskName = "AIIntelScraper_Daily_0900_BJ"
-$scriptPath = Join-Path $repoRoot "scripts\desktop_button.ps1"
+$scriptPath = Join-Path $repoRoot "scripts\verify_online.ps1"
 
 if (-not (Test-Path $scriptPath)) {
-    Write-Host "ERROR: desktop_button.ps1 not found at $scriptPath"
+    Write-Host "ERROR: verify_online.ps1 not found at $scriptPath"
     exit 1
 }
 
