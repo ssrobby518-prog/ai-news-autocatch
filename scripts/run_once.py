@@ -599,6 +599,7 @@ def _write_not_ready_report_md(
             f"| official_or_media_count | {official_or_media_count} |", "",
         ]
         if int(os.environ.get("INJECT_DEV_FORUM_LOW_VALUE", "0")) > 0:
+            _nrw_lines.insert(8, "| test_injected | `true` |")
             _nrw_lines += [
                 "## Next Steps", "",
                 "本次為受控注入測試（test_injected=true），用於驗證 DEV_FORUM_LOW_VALUE_CAP_HARD 攔截。", "",

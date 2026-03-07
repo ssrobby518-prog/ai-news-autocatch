@@ -4598,6 +4598,15 @@ if (Test-Path $_dfaJsonPath) {
     $_dfaJsonCheck = & $_dfaVenvPy -c "import json,sys; json.load(open(sys.argv[1],'r',encoding='utf-8')); print('VALID')" "$_dfaJsonPath" 2>&1
     if ("$_dfaJsonCheck" -match "VALID") {
         Write-Output "DEV_FORUM_AUDIT_JSON_VALID_HARD: PASS"
+        # iter49: json.tool evidence + exit code (not a gate, just auditable proof)
+        & $_dfaVenvPy -m json.tool "$_dfaJsonPath" > $null 2>&1
+        $_dfaToolEc = $LASTEXITCODE
+        Write-Output ("  DEV_FORUM_AUDIT_JSON_TOOL_EXIT_CODE={0}" -f $_dfaToolEc)
+        if ($_dfaToolEc -eq 0) {
+            Write-Output "  DEV_FORUM_AUDIT_JSON_TOOL=OK"
+        } else {
+            Write-Output "  DEV_FORUM_AUDIT_JSON_TOOL=FAIL"
+        }
     } else {
         Write-Output ("DEV_FORUM_AUDIT_JSON_VALID_HARD: FAIL — {0}" -f "$_dfaJsonCheck")
         Invoke-VerifyOnlineFailFast -Gate "DEV_FORUM_AUDIT_JSON_VALID_HARD" `
