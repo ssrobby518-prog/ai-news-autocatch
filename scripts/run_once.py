@@ -13730,7 +13730,11 @@ if __name__ == "__main__":
                 f"| mode | {_nr2_run_mode} |",
                 f"| report_mode | {_nr2_rpt_mode} |",
                 "| status | **FAIL** |",
-                f"| generated_at | {_nr2_now} |", "",
+                f"| generated_at | {_nr2_now} |",
+            ]
+            if int(os.environ.get("INJECT_DEV_FORUM_LOW_VALUE", "0")) > 0:
+                _nr2_lines.append("| test_injected | `true` |")
+            _nr2_lines += ["",
                 "## Failure", "",
                 f"- gate: `{_gate_name}`",
                 f"- fail_reason: {_fail_reason}", "",
@@ -13752,7 +13756,10 @@ if __name__ == "__main__":
                 _nr2_lines.append(f"- **{_nr2_t}**")
                 if _nr2_u:
                     _nr2_lines.append(f"  <{_nr2_u}>")
-            _nr2_lines += ["", "## Next Steps", "", f"- {_next_steps}", ""]
+            _nr2_lines += ["", "## Next Steps", "", f"- {_next_steps}"]
+            if int(os.environ.get("INJECT_DEV_FORUM_LOW_VALUE", "0")) > 0:
+                _nr2_lines.append("- 本次為受控注入測試（test_injected=true），用於驗證 DEV_FORUM_LOW_VALUE_CAP_HARD 攔截。")
+            _nr2_lines.append("")
             _nr2_path = _outputs / "NOT_READY_report.md"
             _nr2_path.write_text("\n".join(_nr2_lines), encoding="utf-8")
             print(f"NOT_READY_report.md written: {_nr2_path}")
