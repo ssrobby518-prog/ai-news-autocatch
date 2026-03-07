@@ -6988,7 +6988,7 @@ def _f600_run_fast_path(
         "azure.microsoft.com": "Microsoft", "blogs.microsoft.com": "Microsoft", "microsoft.com": "Microsoft",
         "ai.meta.com": "Meta", "engineering.fb.com": "Meta", "about.fb.com": "Meta",
         "machinelearning.apple.com": "Apple", "apple.com": "Apple",
-        "github.com": "Microsoft",
+        # github.com: handled specially in _f6_vendor_key via org extraction
         "deepseek.com": "DeepSeek", "api-docs.deepseek.com": "DeepSeek",
         "qwenlm.github.io": "Alibaba", "huggingface.co": "HuggingFace",
         "discuss.huggingface.co": "HuggingFace",
@@ -7013,9 +7013,45 @@ def _f600_run_fast_path(
         (re.compile(r"\bIntel\b", re.I), "Intel"),
     ]
 
+    # iter54e: GitHub org → vendor map (extract org from URL path)
+    _GITHUB_ORG_VENDOR = {
+        "openai": "OpenAI", "google": "Google", "google-research": "Google",
+        "google-deepmind": "Google", "googlecloudplatform": "Google",
+        "anthropics": "Anthropic", "anthropic-ai": "Anthropic",
+        "nvidia": "NVIDIA", "nv-tlabs": "NVIDIA",
+        "microsoft": "Microsoft", "azure": "Microsoft",
+        "meta-llama": "Meta", "facebookresearch": "Meta", "facebookincubator": "Meta",
+        "apple": "Apple",
+        "huggingface": "HuggingFace",
+        "aws": "Amazon", "awslabs": "Amazon", "amazon-science": "Amazon",
+        "deepseek-ai": "DeepSeek",
+        "qwenlm": "Alibaba", "alibaba": "Alibaba",
+        "xai-org": "xAI", "mistralai": "Mistral",
+        "stabilityai": "StabilityAI", "runwayml": "Runway",
+        "samsung": "Samsung", "intel": "Intel", "baidu": "Baidu",
+    }
+
     def _f6_vendor_key(it) -> str:
         """Map item to vendor name for diversity enforcement."""
         _dk = _f6_domain_key(it)
+        # iter54e: GitHub — extract org from URL path for accurate vendor
+        if _dk == "github.com":
+            _u = str(getattr(it, "url", "") or getattr(it, "link", "") or "")
+            try:
+                from urllib.parse import urlparse as _vk_up
+                _path_parts = _vk_up(_u).path.strip("/").split("/")
+                if _path_parts:
+                    _org = _path_parts[0].lower()
+                    if _org in _GITHUB_ORG_VENDOR:
+                        return _GITHUB_ORG_VENDOR[_org]
+            except Exception:
+                pass
+            # fallback: check title/source keywords, then default Microsoft
+            _combined = _f6_title(it) + " " + _f6_src(it)
+            for _rx, _vname in _VENDOR_TITLE_KW:
+                if _rx.search(_combined):
+                    return _vname
+            return "Microsoft"
         # Domain map lookup (try exact, then parent)
         if _dk in _VENDOR_DOMAIN_MAP:
             return _VENDOR_DOMAIN_MAP[_dk]
