@@ -4595,22 +4595,16 @@ $_dfaJsonPath = Join-Path $repoRoot "outputs\dev_forum_audit.meta.json"
 if (Test-Path $_dfaJsonPath) {
     $_dfaVenvPy = Join-Path $repoRoot "venv\Scripts\python.exe"
     if (-not (Test-Path $_dfaVenvPy)) { $_dfaVenvPy = "python" }
-    $_dfaJsonCheck = & $_dfaVenvPy -c "import json,sys; json.load(open(sys.argv[1],'r',encoding='utf-8')); print('VALID')" "$_dfaJsonPath" 2>&1
-    if ("$_dfaJsonCheck" -match "VALID") {
+    # iter50: unified — use python -m json.tool as sole validator; gate on $LASTEXITCODE
+    & $_dfaVenvPy -m json.tool "$_dfaJsonPath" > $null 2>&1
+    $_dfaToolEc = $LASTEXITCODE
+    Write-Output ("  DEV_FORUM_AUDIT_JSON_TOOL_EXIT_CODE={0}" -f $_dfaToolEc)
+    if ($_dfaToolEc -eq 0) {
         Write-Output "DEV_FORUM_AUDIT_JSON_VALID_HARD: PASS"
-        # iter49: json.tool evidence + exit code (not a gate, just auditable proof)
-        & $_dfaVenvPy -m json.tool "$_dfaJsonPath" > $null 2>&1
-        $_dfaToolEc = $LASTEXITCODE
-        Write-Output ("  DEV_FORUM_AUDIT_JSON_TOOL_EXIT_CODE={0}" -f $_dfaToolEc)
-        if ($_dfaToolEc -eq 0) {
-            Write-Output "  DEV_FORUM_AUDIT_JSON_TOOL=OK"
-        } else {
-            Write-Output "  DEV_FORUM_AUDIT_JSON_TOOL=FAIL"
-        }
     } else {
-        Write-Output ("DEV_FORUM_AUDIT_JSON_VALID_HARD: FAIL — {0}" -f "$_dfaJsonCheck")
+        Write-Output "DEV_FORUM_AUDIT_JSON_VALID_HARD: FAIL (json.tool exit=$_dfaToolEc)"
         Invoke-VerifyOnlineFailFast -Gate "DEV_FORUM_AUDIT_JSON_VALID_HARD" `
-            -Reason "DEV_FORUM_AUDIT_JSON_INVALID: dev_forum_audit.meta.json is not valid JSON"
+            -Reason "DEV_FORUM_AUDIT_JSON_INVALID: python -m json.tool failed (exit=$_dfaToolEc)"
     }
 } else {
     Write-Output "DEV_FORUM_AUDIT_JSON_VALID_HARD: FAIL — file not found"

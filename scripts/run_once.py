@@ -5710,8 +5710,8 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "", selec
         distinct_sources = len({r["source_domain"] for r in audit_rows})
         bigtech_count = sum(1 for r in audit_rows if r["bigtech_hit"])
         official_or_media_count = sum(1 for r in audit_rows if r["official_or_media"])
-        # iter49: narrowed to dev_forum only (code_release from bigtech is not dev noise)
-        dev_forum_count = sum(1 for r in audit_rows if r["source_type"] == "dev_forum")
+        # iter50: restored to original 4-type scope (matches DEV_NOISE_CAP_HARD gate semantics)
+        dev_forum_count = sum(1 for r in audit_rows if r["source_type"] in ("dev_forum", "code_release", "social", "code"))
         non_bigtech_dev_noise_count = sum(
             1 for r in audit_rows
             if r["source_type"] in ("dev_forum", "code_release", "social", "code") and not r["bigtech_hit"]
@@ -7083,16 +7083,17 @@ def _f600_run_fast_path(
         _non_df_backup = [
             it for it in _f6_tier(300)
             if it not in _selected
-            and _f6_src_type(it) not in ("dev_forum",)
-            and not _f6_is_dev_noise(it)
+            and _f6_src_type(it) not in ("dev_forum", "code_release", "social", "code")
         ]
         _non_df_backup.sort(key=_f6_sort_key, reverse=True)
-        # Pass 0: replace any non-bigtech code_release/social/code items (counted as dev_noise by old gate)
+        # Pass 0: iter50: replace ALL code_release/social/code items (including bigtech)
+        #   DEV_NOISE_CAP_HARD counts all 4 types; replacement must match gate scope
         for _i in range(len(_selected)):
             _it = _selected[_i]
-            if _f6_is_dev_noise(_it) and _f6_src_type(_it) != "dev_forum" and _non_df_backup:
+            _st0 = _f6_src_type(_it)
+            if _st0 in ("code_release", "social", "code") and _non_df_backup:
                 _repl = _non_df_backup.pop(0)
-                _log.info("FAST_600_MODE iter47: replaced dev_noise (%s) idx=%d", _f6_src_type(_it), _i)
+                _log.info("FAST_600_MODE iter50: replaced %s idx=%d (bigtech=%s)", _st0, _i, _f6_is_bigtech(_it))
                 _selected[_i] = _repl
         # Pass 1: replace all low_value dev_forum items
         for _i in range(len(_selected)):
@@ -7157,6 +7158,11 @@ def _f600_run_fast_path(
         _f6_om = 0
     _f6_focus = _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
     _f6_devnoise_count = _f6_focus.get("non_bigtech_dev_noise_count", 0)
+    # iter50: injection test support for DEV_NOISE_CAP_HARD
+    _dn_inject_n = int(os.environ.get("INJECT_DEV_NOISE_COUNT", "0"))
+    if _dn_inject_n > 0:
+        _f6_devnoise_count += _dn_inject_n
+        _log.info("INJECT_DEV_NOISE_COUNT=%d: devnoise_count inflated to %d", _dn_inject_n, _f6_devnoise_count)
 
     # --- Step 3: SOURCE_DIVERSITY check ---
     if _f6_distinct < 3:
@@ -7166,14 +7172,13 @@ def _f600_run_fast_path(
         )
 
     # --- Step 3b: iter41 BIGTECH_DOMINANCE_HARD + DEV_NOISE_CAP_HARD ---
-    # iter49: narrow to "dev_forum" only (code_release from bigtech is not dev noise;
-    #   replacement loop only handles dev_forum, so gate must match)
+    # iter50: restored to original 4-type scope (dev_forum + code_release + social + code)
     _f6_df_count = sum(
         1 for fc in _card_dicts
         if _classify_source_type(
             str(fc.get("source_name", "") or ""),
             str(fc.get("final_url", "") or "")
-        ) == "dev_forum"
+        ) in ("dev_forum", "code_release", "social", "code")
     )
     if _is_daily or os.environ.get("BIGTECH_GATES_ENFORCE", "0") == "1":
         if _f6_bigtech < 5:
