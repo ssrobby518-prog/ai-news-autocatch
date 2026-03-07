@@ -1,3 +1,295 @@
+# Progress Report — Iter63 Evidence Pack (Auto-pick Normal/Stress delivery_dir)
+
+run_date: 2026-03-07
+
+## Section A — Git（commit 前快照）
+
+```
+> git diff --name-only
+（空白）
+
+> git status -sb
+## main...origin/main
+
+> git rev-list --left-right --count origin/main...HEAD
+0	0
+```
+
+## Auto-pick 結果
+
+```
+AUTO_PICK_NORMAL_DIR=C:\Projects\ai捕捉資訊\ai-intel-scraper-mvp\outputs\deliveries\20260307_153400_d6c254eee5c101361ea7cb9630986d428f194478
+AUTO_PICK_STRESS_DIR=C:\Projects\ai捕捉資訊\ai-intel-scraper-mvp\outputs\deliveries\20260307_145152_a7ab743ca6c38635112783a7264f6bce238f97e8
+```
+
+## Section B — Normal（soft_warning_no_switch / triggered=false；以 delivery_dir 為主）
+
+語意釘死：stress_mode_name=soft_warning_no_switch 表示僅 soft_warning 觀測、未切換 stress budget，因此 stress_mode_triggered=false。
+
+### 【外部輸出】type outputs\deliveries\20260307_153400_d6c254eee5c101361ea7cb9630986d428f194478\LAST_RUN_SUMMARY.txt
+
+```
+run_id              = 20260307_153148
+started_at          = 2026-03-07T15:34:00.7052640-08:00
+finished_at         = 2026-03-07T15:34:00.7052640-08:00
+mode                = daily
+report_mode         = brief
+status              = OK
+selected_events     = 7
+ai_selected_events  = 7
+canonical_output_dir = outputs
+produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
+```
+
+### 【外部輸出】type outputs\deliveries\20260307_153400_d6c254eee5c101361ea7cb9630986d428f194478\gpu_load.meta.json
+
+```json
+{
+    "run_id":  "20260307_153148",
+    "vram_used_mb":  5409,
+    "vram_total_mb":  8188,
+    "vram_ratio":  0.6606,
+    "non_llama_gpu_proc_count":  2,
+    "top_processes":  [
+                          {
+                              "pid":  20408,
+                              "name":  "C:\\Users\\s_robby518\\AppData\\Local\\Programs\\Trae\\Trae.exe",
+                              "used_mb":  0
+                          },
+                          {
+                              "pid":  2248,
+                              "name":  "[Insufficient Permissions]",
+                              "used_mb":  0
+                          },
+                          {
+                              "pid":  81512,
+                              "name":  "C:\\Projects\\ai捕捉資訊\\qwen_inference_node_4060\\llama-b8123-bin-win-cuda-12.4-x64\\llama-server.exe",
+                              "used_mb":  0
+                          }
+                      ],
+    "stress_trigger_level":  "soft_warning",
+    "stress_mode_triggered":  false,
+    "stress_mode_name":  "soft_warning_no_switch",
+    "stress_reason":  "non_llama=2>=1 but vram_ratio=0.6606<0.7 — soft warning only",
+    "test_injected":  false,
+    "thresholds_used":  {
+                            "vram_busy_ratio_threshold":  0.85,
+                            "vram_busy_mb_reserve":  900,
+                            "contention_proc_threshold":  2,
+                            "contention_vram_ratio_threshold":  0.7
+                        },
+    "detected_at":  "2026-03-07T15:31:48.2108444-08:00"
+}
+```
+
+### 【外部輸出】type outputs\deliveries\20260307_153400_d6c254eee5c101361ea7cb9630986d428f194478\delivery_consistency.meta.json
+
+```json
+{
+    "run_id":  "20260307_153148",
+    "verified_at":  "2026-03-07T15:34:00.9961408-08:00",
+    "deliverables":  [
+                         {
+                             "file":  "latest_brief.md",
+                             "sha256":  "3880ed4d8cdeea5c0d21bd4c7f93ee816005c8b9f107edde86595bda2278a90e",
+                             "length":  7486,
+                             "last_write":  "2026-03-07T15:34:00.7558727-08:00"
+                         },
+                         {
+                             "file":  "executive_report.docx",
+                             "sha256":  "b2bab354a8591283d5327bceb3deeecbbfeaadf04d201bdd985a5f8939c7afc6",
+                             "length":  39972,
+                             "last_write":  "2026-03-07T15:33:57.6760444-08:00"
+                         }
+                     ],
+    "same_run_verified":  true
+}
+```
+
+## Section C — Stress（stress_600_vram_busy / triggered=true；以 delivery_dir 為主）
+
+### 【外部輸出】type outputs\deliveries\20260307_145152_a7ab743ca6c38635112783a7264f6bce238f97e8\LAST_RUN_SUMMARY.txt
+
+```
+run_id              = 20260307_145024
+started_at          = 2026-03-07T14:51:52.7969830-08:00
+finished_at         = 2026-03-07T14:51:52.7969830-08:00
+mode                = daily
+report_mode         = brief
+status              = OK
+selected_events     = 7
+ai_selected_events  = 7
+canonical_output_dir = outputs
+produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
+```
+
+### 【外部輸出】type outputs\deliveries\20260307_145152_a7ab743ca6c38635112783a7264f6bce238f97e8\gpu_load.meta.json
+
+```json
+{
+    "run_id":  "20260307_145024",
+    "vram_used_mb":  5447,
+    "vram_total_mb":  8188,
+    "vram_ratio":  0.9,
+    "non_llama_gpu_proc_count":  2,
+    "top_processes":  [
+                          {
+                              "pid":  20408,
+                              "name":  "C:\\Users\\s_robby518\\AppData\\Local\\Programs\\Trae\\Trae.exe",
+                              "used_mb":  0
+                          },
+                          {
+                              "pid":  2248,
+                              "name":  "[Insufficient Permissions]",
+                              "used_mb":  0
+                          },
+                          {
+                              "pid":  81512,
+                              "name":  "C:\\Projects\\ai捕捉資訊\\qwen_inference_node_4060\\llama-b8123-bin-win-cuda-12.4-x64\\llama-server.exe",
+                              "used_mb":  0
+                          }
+                      ],
+    "stress_trigger_level":  "vram_busy",
+    "stress_mode_triggered":  true,
+    "stress_mode_name":  "stress_600_vram_busy",
+    "stress_reason":  "vram_ratio=0.9000>=0.85 OR used=5447MB>=total-900=7288MB",
+    "test_injected":  true,
+    "thresholds_used":  {
+                            "vram_busy_ratio_threshold":  0.85,
+                            "vram_busy_mb_reserve":  900,
+                            "contention_proc_threshold":  2,
+                            "contention_vram_ratio_threshold":  0.7
+                        },
+    "detected_at":  "2026-03-07T14:50:25.1224815-08:00"
+}
+```
+
+### 【外部輸出】type outputs\deliveries\20260307_145152_a7ab743ca6c38635112783a7264f6bce238f97e8\delivery_consistency.meta.json
+
+```json
+{
+    "run_id":  "20260307_145024",
+    "verified_at":  "2026-03-07T14:51:53.0751262-08:00",
+    "deliverables":  [
+                         {
+                             "file":  "latest_brief.md",
+                             "sha256":  "709146d7396f8230cb447ad7e1466e2c4502a7a634ffd8a5ebf658e956082a25",
+                             "length":  7608,
+                             "last_write":  "2026-03-07T14:51:52.8818475-08:00"
+                         },
+                         {
+                             "file":  "executive_report.docx",
+                             "sha256":  "11992465200e9a0385724f5e838b97debcd41acc1ca3f196062420c151cb8011",
+                             "length":  40072,
+                             "last_write":  "2026-03-07T14:51:49.3887360-08:00"
+                         }
+                     ],
+    "same_run_verified":  true
+}
+```
+
+## Section D — Canonical 現況（可能被後續 run 覆寫；以 delivery_dir 交叉證據為準）
+
+### 【外部輸出】type outputs\LAST_RUN_SUMMARY.txt
+
+```
+run_id              = 20260307_153148
+started_at          = 2026-03-07T15:34:00.7052640-08:00
+finished_at         = 2026-03-07T15:34:00.7052640-08:00
+mode                = daily
+report_mode         = brief
+status              = OK
+selected_events     = 7
+ai_selected_events  = 7
+canonical_output_dir = outputs
+produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
+```
+
+### 【外部輸出】type outputs\gpu_load.meta.json
+
+```json
+{
+    "run_id":  "20260307_153148",
+    "vram_used_mb":  5409,
+    "vram_total_mb":  8188,
+    "vram_ratio":  0.6606,
+    "non_llama_gpu_proc_count":  2,
+    "top_processes":  [
+                          {
+                              "pid":  20408,
+                              "name":  "C:\\Users\\s_robby518\\AppData\\Local\\Programs\\Trae\\Trae.exe",
+                              "used_mb":  0
+                          },
+                          {
+                              "pid":  2248,
+                              "name":  "[Insufficient Permissions]",
+                              "used_mb":  0
+                          },
+                          {
+                              "pid":  81512,
+                              "name":  "C:\\Projects\\ai捕捉資訊\\qwen_inference_node_4060\\llama-b8123-bin-win-cuda-12.4-x64\\llama-server.exe",
+                              "used_mb":  0
+                          }
+                      ],
+    "stress_trigger_level":  "soft_warning",
+    "stress_mode_triggered":  false,
+    "stress_mode_name":  "soft_warning_no_switch",
+    "stress_reason":  "non_llama=2>=1 but vram_ratio=0.6606<0.7 — soft warning only",
+    "test_injected":  false,
+    "thresholds_used":  {
+                            "vram_busy_ratio_threshold":  0.85,
+                            "vram_busy_mb_reserve":  900,
+                            "contention_proc_threshold":  2,
+                            "contention_vram_ratio_threshold":  0.7
+                        },
+    "detected_at":  "2026-03-07T15:31:48.2108444-08:00"
+}
+```
+
+### 【外部輸出】type outputs\delivery_consistency.meta.json
+
+```json
+{
+    "run_id":  "20260307_153148",
+    "verified_at":  "2026-03-07T15:34:00.9961408-08:00",
+    "deliverables":  [
+                         {
+                             "file":  "latest_brief.md",
+                             "sha256":  "3880ed4d8cdeea5c0d21bd4c7f93ee816005c8b9f107edde86595bda2278a90e",
+                             "length":  7486,
+                             "last_write":  "2026-03-07T15:34:00.7558727-08:00"
+                         },
+                         {
+                             "file":  "executive_report.docx",
+                             "sha256":  "b2bab354a8591283d5327bceb3deeecbbfeaadf04d201bdd985a5f8939c7afc6",
+                             "length":  39972,
+                             "last_write":  "2026-03-07T15:33:57.6760444-08:00"
+                         }
+                     ],
+    "same_run_verified":  true
+}
+```
+
+### 【外部輸出】Get-Item outputs\latest_brief.md, outputs\executive_report.docx | Select Name,LastWriteTime,Length | Format-Table -AutoSize
+
+```
+Name                  LastWriteTime       Length
+latest_brief.md       3/7/2026 3:34:00 PM   7486
+executive_report.docx 3/7/2026 3:33:57 PM  39972
+```
+
+## 交付物一致性（以 SHA-256 + same_run_verified 為準；不做 docx>=md 硬比較）
+
+依據 Normal/Stress 的 delivery_consistency.meta.json：same_run_verified=true，且每個 deliverable 具備 sha256/length/last_write，可核對為同 run 產物。
+
+## Section E — Commit/Push
+
+```
+（commit 後填入）
+```
+
+---
+
 # iter62: Evidence Hardening — git logs + all-miss daily + docx timestamp proof
 
 run_date: 2026-03-07
