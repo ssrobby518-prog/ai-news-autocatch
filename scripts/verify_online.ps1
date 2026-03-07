@@ -1427,6 +1427,29 @@ produced_files      = $_voNrProdStr
 fail_reason         = $_voFailReason
 "@ | Out-File $_voLrsFailPath -Encoding UTF8 -NoNewline
         Write-Output "LAST_RUN_SUMMARY.txt written: status=FAIL"
+
+        # iter55: ensure translation_engine.meta.json stub on pipeline failure path too
+        $_pfTeMetaPath = Join-Path $repoRoot "outputs\translation_engine.meta.json"
+        if (-not (Test-Path $_pfTeMetaPath)) {
+            try {
+                @{
+                    run_id         = $_voRunId
+                    generated_at   = (Get-Date -Format "o")
+                    endpoint       = "http://127.0.0.1:8080"
+                    success        = $false
+                    fail_reason    = $_voFailReason
+                    translate_mode = "not_started"
+                    events_total   = 0
+                    calls_total    = 0
+                    cache_hit      = 0
+                    cache_miss     = 0
+                } | ConvertTo-Json -Compress | Set-Content $_pfTeMetaPath -Encoding UTF8
+                Write-Output ("  [pipeline-fail] translation_engine.meta.json stub written (fail_reason={0})" -f $_voFailReason)
+            } catch {
+                Write-Output ("  [pipeline-fail] WARN: translation_engine stub write failed: {0}" -f $_)
+            }
+        }
+
         exit $exitCode
     }
 }
