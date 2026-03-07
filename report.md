@@ -238,7 +238,9 @@ produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
 
 ```
 > git log --oneline -3
-(after push)
+b3efcfd iter62: evidence hardening — git logs + all-miss daily + docx timestamp proof
+d6c254e iter61: progress report (auto-pick normal/stress delivery_dir; full sha256; no placeholders; no behavior change)
+65d1810 iter60: evidence pack — normal+stress canonical & delivery_dir cross-proof (full sha256, no placeholders)
 
 > git rev-list --left-right --count origin/main...HEAD
 0	0
