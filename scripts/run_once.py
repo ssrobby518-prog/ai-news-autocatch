@@ -7925,13 +7925,13 @@ def _f600_run_fast_path(
     _archive.mkdir(parents=True, exist_ok=True)
     (_archive / "brief_zh.md").write_text(_tfd_zh, encoding="utf-8")
 
-    # --- Step 9: build DOCX (atomic replace + os.utime for timestamp coherence) ---
+    # --- Step 9: build DOCX (direct write + os.utime for timestamp coherence) ---
     stg["build_docx_start"] = time.time()
     _docx_final = _outputs / "executive_report.docx"
-    _docx_tmp = _outputs / f"_tmp_executive_report_{_run_id}.docx"
     try:
         from core.doc_generator import generate_zh_md_docx as _f6_gen_docx
-        _f6_gen_docx(_tfd_zh, _docx_tmp)
+        # iter54e: write directly to final path (avoids WinError 32 from shutil.move)
+        _f6_gen_docx(_tfd_zh, _docx_final)
         try:
             import io as _f6_img_io, base64 as _f6_img_b64
             from docx import Document as _F6DocR
@@ -7940,29 +7940,19 @@ def _f600_run_fast_path(
                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
                 "AAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
             )
-            _f6_docr = _F6DocR(str(_docx_tmp))
+            _f6_docr = _F6DocR(str(_docx_final))
             _f6_docr.paragraphs[0].add_run().add_picture(
                 _f6_img_io.BytesIO(_f6_png), width=_F6Pt(1)
             )
-            _f6_docr.save(str(_docx_tmp))
-            del _f6_docr  # iter54e: release file lock before move
+            _f6_docr.save(str(_docx_final))
+            del _f6_docr
         except Exception as _f6_img_exc:
             _log.warning("FAST_600_MODE: placeholder image inject failed: %s", _f6_img_exc)
-        # iter54: atomic replace — move tmp → final, then touch timestamp
-        import shutil as _f6_sh
-        if _docx_final.exists():
-            _docx_final.unlink()  # iter54e: remove target first (Windows lock workaround)
-        _f6_sh.move(str(_docx_tmp), str(_docx_final))
         _now_ts = time.time()
         os.utime(str(_docx_final), (_now_ts, _now_ts))
         _log.info("FAST_600_MODE: DOCX written: outputs/executive_report.docx (utime set)")
     except Exception as _f6_docx_exc:
         _log.warning("FAST_600_MODE: DOCX generation failed (non-fatal): %s", _f6_docx_exc)
-        # cleanup tmp if it exists
-        try:
-            _docx_tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
     stg["build_docx_end"] = time.time()
     # iter42: build_docx_hard_deadline_sec enforcement (DAILY)
     # iter44: raised 10→30 to accommodate I/O variance (safety via TIME_BUDGET_HARD)
