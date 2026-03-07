@@ -257,4 +257,28 @@ PPTX: No PPTX files
 
 ## Section D — Git 提交與 Push
 
-（push 後補填）
+### 【外部輸出】git status -sb
+
+```
+## main...origin/main
+```
+
+### 【外部輸出】git push
+
+```
+200d17c..491fa0c  main -> main
+```
+
+### 【外部輸出】git rev-list --left-right --count origin/main...HEAD
+
+```
+0	0
+```
+
+### 提交記錄
+
+```
+0102aa6 iter57: make STRESS_600 trigger semantics strict (VRAM busy vs contention) + keep normal 110/175 reachable + evidence/meta hardening (no gate relaxation)
+7611dc6 iter57: fix DAILY budget=175 propagation + two-tier stress trigger
+491fa0c iter57: evidence pack — normal 175/110 success + stress 600/300 success (two-tier trigger semantics)
+```
