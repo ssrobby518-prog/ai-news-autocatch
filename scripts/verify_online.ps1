@@ -37,9 +37,10 @@ $script:_z0InflightDrainCapSec = $null
 $script:_z0InflightCutoffApplied = $false
 $script:_z0WallClockCapSec = $null
 $script:_z0WallClockJitterEpsilon = 0.9
-# iter56: VRAM-busy stress mode tracking
+# iter56/57: VRAM-busy stress mode tracking (two-tier: vram_busy / gpu_contention / soft_warning / none)
 $script:_stressModeTriggered    = $false
-$script:_stressModeName         = "normal"
+$script:_stressModeName         = "none"
+$script:_stressTriggerLevel     = "none"
 $script:_vramRatio              = 0.0
 $script:_nonLlamaGpuProcCount   = 0
 
@@ -52,7 +53,7 @@ $_fast300Daily = ($env:FAST_300_DAILY -eq "1")
 # iter39: FAST_300_MODE — hard cap 300s, auto-enables FAST_600_MODE
 $_fast300Mode = ($env:FAST_300_MODE -eq "1") -or $_fast300Daily
 if ($_fast300Daily) {
-    $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 170 }
+    $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 175 }
     $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec
     $env:FAST_600_MODE = "1"
     $env:FAST_300_DAILY = "1"
@@ -187,9 +188,10 @@ function Write-RunTimingMeta {
     if ($StageSec -and $StageSec.ContainsKey("before_translation")) {
         $meta["before_translation_seconds"] = [double]$StageSec["before_translation"]
     }
-    # iter56: stress mode fields
+    # iter56/57: stress mode fields (two-tier)
     $meta["stress_mode_triggered"]      = [bool]$script:_stressModeTriggered
     $meta["stress_mode_name"]           = [string]$script:_stressModeName
+    $meta["stress_trigger_level"]       = [string]$script:_stressTriggerLevel
     $meta["vram_ratio"]                 = [double]$script:_vramRatio
     $meta["non_llama_gpu_proc_count"]   = [int]$script:_nonLlamaGpuProcCount
     # iter31: include stage_seconds if available
@@ -291,6 +293,7 @@ reason: $Reason
     $env:SKIP_EDUCATION_RENDERER    = "1"
     # iter56: pass stress mode info to run_once.py for NOT_READY_report.md
     $env:STRESS_MODE_TRIGGERED      = if ($script:_stressModeTriggered) { "1" } else { "0" }
+    $env:STRESS_TRIGGER_LEVEL       = [string]$script:_stressTriggerLevel
     $env:STRESS_VRAM_RATIO          = [string]$script:_vramRatio
     $env:STRESS_NON_LLAMA_PROCS     = [string]$script:_nonLlamaGpuProcCount
     try {
@@ -463,11 +466,14 @@ foreach ($_voPreClean in @(
 }
 
 # ---------------------------------------------------------------------------
-# iter56: VRAM-busy detection → auto STRESS_600_MODE
-#   Uses nvidia-smi to detect non-llama GPU consumers (games, IDE, etc.)
-#   If VRAM busy → override budget=600s, soft_target=300s (quality gates unchanged)
+# iter56/57: GPU load detection → two-tier STRESS_600_MODE trigger
+#   HARD VRAM_BUSY:      vram_ratio>=0.85 OR vram_used>=total-900  → STRESS_600 (budget=600 soft=300)
+#   HARD GPU_CONTENTION: non_llama>=2 AND vram_ratio>=0.70         → STRESS_600 (budget=600 soft=300)
+#   SOFT WARNING:        non_llama>=1 (IDE/light compute)          → normal mode (budget=175 soft=110), warning only
+#   NONE:                clean GPU                                 → normal mode (budget=175 soft=110)
+#   Quality gates are NEVER affected — only time budget changes.
 # ---------------------------------------------------------------------------
-Write-Output "[VRAM_BUSY_DETECT] GPU 負載偵測..."
+Write-Output "[GPU_LOAD] GPU 負載偵測（兩段式語義）..."
 $_vbOutputsDir = Join-Path $repoRoot "outputs"
 New-Item -ItemType Directory -Force -Path $_vbOutputsDir -ErrorAction SilentlyContinue | Out-Null
 $_vbVramUsedMb   = 0
@@ -476,6 +482,13 @@ $_vbVramRatio    = 0.0
 $_vbNonLlamaCount = 0
 $_vbTopProcs     = @()
 $_vbNvsmiOk      = $null -ne (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue)
+$_vbTestInjected = $false
+
+# iter57: thresholds (hardcoded, recorded in meta for auditability)
+$_vbThVramBusyRatio      = 0.85
+$_vbThVramBusyMbReserve  = 900
+$_vbThContentionProc     = 2
+$_vbThContentionVramRatio = 0.70
 
 if ($_vbNvsmiOk) {
     # Query total/used VRAM
@@ -493,7 +506,7 @@ if ($_vbNvsmiOk) {
             }
         }
     } catch {
-        Write-Output ("  [VRAM_BUSY_DETECT] nvidia-smi memory query failed: {0}" -f $_)
+        Write-Output ("  [GPU_LOAD] nvidia-smi memory query failed: {0}" -f $_)
     }
 
     # Query compute apps
@@ -508,7 +521,6 @@ if ($_vbNvsmiOk) {
                 $_vbMem  = $Matches[3].Trim()
                 $_vbMemInt = 0
                 [int]::TryParse(($_vbMem -replace '[^\d]',''), [ref]$_vbMemInt) | Out-Null
-                # Exclude llama-server and python (our processes)
                 $_vbIsOurs = ($false)
                 if ($_vbName -match 'llama' -or $_vbName -match 'python') {
                     $_vbIsOurs = $true
@@ -523,24 +535,46 @@ if ($_vbNvsmiOk) {
             }
         }
     } catch {
-        Write-Output ("  [VRAM_BUSY_DETECT] nvidia-smi compute-apps query failed: {0}" -f $_)
+        Write-Output ("  [GPU_LOAD] nvidia-smi compute-apps query failed: {0}" -f $_)
     }
 } else {
-    Write-Output "  [VRAM_BUSY_DETECT] nvidia-smi not found — skip"
+    Write-Output "  [GPU_LOAD] nvidia-smi not found — skip"
 }
 
-# Determine VRAM busy
-$_vbBusy = $false
-$_vbReason = "none"
-if ($_vbVramRatio -ge 0.80) {
-    $_vbBusy = $true
-    $_vbReason = "vram_ratio={0:F4}>0.80" -f $_vbVramRatio
-} elseif ($_vbVramTotalMb -gt 0 -and $_vbVramUsedMb -ge ($_vbVramTotalMb - 900)) {
-    $_vbBusy = $true
-    $_vbReason = "vram_used={0}MB>=total-900={1}MB" -f $_vbVramUsedMb, ($_vbVramTotalMb - 900)
-} elseif ($_vbNonLlamaCount -ge 1) {
-    $_vbBusy = $true
-    $_vbReason = "non_llama_gpu_proc_count={0}>=1" -f $_vbNonLlamaCount
+# iter57: INJECT_GPU_VRAM_RATIO — test-only override for evidence reproducibility
+if ($env:INJECT_GPU_VRAM_RATIO -and $env:INJECT_GPU_VRAM_RATIO -ne "") {
+    $_vbVramRatio = [double]$env:INJECT_GPU_VRAM_RATIO
+    $_vbTestInjected = $true
+    Write-Output ("  [GPU_LOAD] INJECT_GPU_VRAM_RATIO={0:F4} (test_injected=true)" -f $_vbVramRatio)
+}
+
+# iter57: two-tier trigger determination
+$_vbTriggerLevel = "none"
+$_vbTriggered    = $false
+$_vbModeName     = "none"
+$_vbReason       = "none"
+
+# HARD VRAM_BUSY: vram_ratio>=0.85 OR vram_used>=total-900
+if (($_vbVramRatio -ge $_vbThVramBusyRatio) -or
+    ($_vbVramTotalMb -gt 0 -and $_vbVramUsedMb -ge ($_vbVramTotalMb - $_vbThVramBusyMbReserve))) {
+    $_vbTriggerLevel = "vram_busy"
+    $_vbTriggered    = $true
+    $_vbModeName     = "stress_600_vram_busy"
+    $_vbReason       = ("vram_ratio={0:F4}>=0.85 OR used={1}MB>=total-{2}={3}MB" -f $_vbVramRatio, $_vbVramUsedMb, $_vbThVramBusyMbReserve, ($_vbVramTotalMb - $_vbThVramBusyMbReserve))
+}
+# HARD GPU_CONTENTION: non_llama>=2 AND vram_ratio>=0.70
+elseif (($_vbNonLlamaCount -ge $_vbThContentionProc) -and ($_vbVramRatio -ge $_vbThContentionVramRatio)) {
+    $_vbTriggerLevel = "gpu_contention"
+    $_vbTriggered    = $true
+    $_vbModeName     = "stress_600_gpu_contention"
+    $_vbReason       = ("non_llama={0}>={1} AND vram_ratio={2:F4}>={3}" -f $_vbNonLlamaCount, $_vbThContentionProc, $_vbVramRatio, $_vbThContentionVramRatio)
+}
+# SOFT WARNING: non_llama>=1 (IDE/light compute — no mode switch)
+elseif ($_vbNonLlamaCount -ge 1) {
+    $_vbTriggerLevel = "soft_warning"
+    $_vbTriggered    = $false
+    $_vbModeName     = "none"
+    $_vbReason       = ("non_llama={0}>=1 but vram_ratio={1:F4}<{2} — soft warning only" -f $_vbNonLlamaCount, $_vbVramRatio, $_vbThContentionVramRatio)
 }
 
 # Write gpu_load.meta.json
@@ -551,20 +585,33 @@ $_vbMeta = [ordered]@{
     vram_ratio                = $_vbVramRatio
     non_llama_gpu_proc_count  = $_vbNonLlamaCount
     top_processes             = @($_vbTopProcs)
-    stress_mode_triggered     = $_vbBusy
+    stress_trigger_level      = $_vbTriggerLevel
+    stress_mode_triggered     = $_vbTriggered
+    stress_mode_name          = $_vbModeName
     stress_reason             = $_vbReason
+    test_injected             = $_vbTestInjected
+    thresholds_used           = [ordered]@{
+        vram_busy_ratio_threshold      = $_vbThVramBusyRatio
+        vram_busy_mb_reserve           = $_vbThVramBusyMbReserve
+        contention_proc_threshold      = $_vbThContentionProc
+        contention_vram_ratio_threshold = $_vbThContentionVramRatio
+    }
     detected_at               = (Get-Date -Format "o")
 }
 $_vbMeta | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $_vbOutputsDir "gpu_load.meta.json") -Encoding UTF8
-Write-Output ("  vram={0}/{1}MB ratio={2:F4} non_llama_procs={3}" -f $_vbVramUsedMb, $_vbVramTotalMb, $_vbVramRatio, $_vbNonLlamaCount)
 
 # Store in script-level vars for Write-RunTimingMeta
-$script:_stressModeTriggered  = $_vbBusy
+$script:_stressModeTriggered  = $_vbTriggered
+$script:_stressModeName       = $_vbModeName
+$script:_stressTriggerLevel   = $_vbTriggerLevel
 $script:_vramRatio            = $_vbVramRatio
 $script:_nonLlamaGpuProcCount = $_vbNonLlamaCount
 
-if ($_vbBusy) {
-    $script:_stressModeName = "stress_600_vram_busy"
+# Console log (grep-friendly)
+Write-Output ("  [GPU_LOAD] vram_ratio={0:F4} non_llama_gpu_proc_count={1} trigger_level={2} triggered={3} budget={4} soft={5}" `
+    -f $_vbVramRatio, $_vbNonLlamaCount, $_vbTriggerLevel, $_vbTriggered, $_voBudgetSec, $_voSoftTargetSec)
+
+if ($_vbTriggered) {
     $_voBudgetSec     = 600
     $_voSoftTargetSec = 300
     $env:PIPELINE_TIME_BUDGET_SEC  = "600"
@@ -573,7 +620,11 @@ if ($_vbBusy) {
     Write-Output ("  STRESS_600_MODE=1 (reason={0})" -f $_vbReason)
     Write-Output ("  PIPELINE_TIME_BUDGET_SEC=600  PIPELINE_SOFT_TARGET_SEC=300")
 } else {
-    Write-Output "  VRAM_BUSY: false — normal mode"
+    if ($_vbTriggerLevel -eq "soft_warning") {
+        Write-Output ("  GPU_CONTENTION soft warning: {0} — normal mode kept (budget={1} soft={2})" -f $_vbReason, $_voBudgetSec, $_voSoftTargetSec)
+    } else {
+        Write-Output ("  GPU clean — normal mode (budget={0} soft={1})" -f $_voBudgetSec, $_voSoftTargetSec)
+    }
 }
 Write-Output ""
 
@@ -987,10 +1038,10 @@ if (-not $_gpuTokPass) {
     $_gpuHardReason = ("GPU_MODE_REQUIRED_HARD: tok_per_sec_est={0:F1} < {1} (CPU mode detected — GPU inference not active)" `
         -f $_gpuTokPerSec, $_gpuTokThreshold)
     Write-Output ("  => 失敗: {0}" -f $_gpuHardReason)
-    # iter56: append VRAM busy context to next steps
+    # iter56/57: append VRAM busy context to next steps
     $_gpuNextSteps = "請用 GPU 參數啟動 llama-server（-ngl 999 或 --n-gpu-layers 999）並確認 tok_per_sec_est >= 15。参考: scripts\llama_server.ps1 已内建 --n-gpu-layers -1 啟動邏輯，CUDA build 路徑為 C:\llama_node\llama-b8123-bin-win-cuda-12.4-x64\llama-server.exe。"
     if ($script:_stressModeTriggered) {
-        $_gpuNextSteps += "`nVRAM busy detected -> STRESS_600_MODE activated, but tok/s still below threshold. Close GPU-heavy apps (game) or reduce settings."
+        $_gpuNextSteps += "`nVRAM busy detected (trigger_level={0}) -> STRESS_600_MODE activated, but tok/s still below threshold. Close GPU-heavy apps (game) or reduce settings." -f $script:_stressTriggerLevel
     }
     Invoke-VerifyOnlineFailFast -Gate "GPU_MODE_REQUIRED_HARD" -Reason $_gpuHardReason `
         -NextSteps $_gpuNextSteps

@@ -14202,6 +14202,7 @@ if __name__ == "__main__":
             # iter56: stress mode fields
             _nr2_stress = os.environ.get("STRESS_MODE_TRIGGERED", "0") == "1"
             _nr2_lines.append(f"| stress_mode_triggered | `{str(_nr2_stress).lower()}` |")
+            _nr2_lines.append(f"| stress_trigger_level | {os.environ.get('STRESS_TRIGGER_LEVEL', 'none')} |")
             _nr2_lines.append(f"| vram_ratio | {os.environ.get('STRESS_VRAM_RATIO', '0')} |")
             _nr2_lines.append(f"| non_llama_gpu_proc_count | {os.environ.get('STRESS_NON_LLAMA_PROCS', '0')} |")
             _nr2_lines += ["",
