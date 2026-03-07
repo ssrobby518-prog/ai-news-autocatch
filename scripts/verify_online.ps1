@@ -1790,6 +1790,36 @@ if ($_btGatesEnforce -and (Test-Path $_saMetaPath)) {
             Invoke-VerifyOnlineFailFast -Gate "DEV_NOISE_CAP_HARD" -Reason $_dnFailReason
         }
         Write-Output "  => DEV_NOISE_CAP_HARD: PASS"
+        # iter46: DEV_FORUM_LOW_VALUE_CAP_HARD + DEV_FORUM_HIGH_VALUE_CAP_HARD
+        $_dfLvCount = if ($_saMeta.PSObject.Properties['dev_forum_low_value_count']) { [int]$_saMeta.dev_forum_low_value_count } else { 0 }
+        $_dfHvCount = if ($_saMeta.PSObject.Properties['dev_forum_high_value_count']) { [int]$_saMeta.dev_forum_high_value_count } else { 0 }
+        Write-Output ""
+        Write-Output "DEV_FORUM_VALUE_GATES (iter46):"
+        Write-Output ("  dev_forum_low_value_count    : {0}" -f $_dfLvCount)
+        Write-Output ("  dev_forum_high_value_count   : {0}" -f $_dfHvCount)
+        # Print engagement details for high-value forum items
+        if ($_saMeta.PSObject.Properties['items']) {
+            foreach ($_saItem in $_saMeta.items) {
+                if ($_saItem.dev_forum -eq $true -and $_saItem.dev_forum_value -eq "high") {
+                    $_eng = $_saItem.engagement
+                    Write-Output ("  [高權重論壇] {0}" -f $_saItem.title)
+                    Write-Output ("    engagement: views={0} likes={1} replies={2} source={3}" -f $_eng.view_count, $_eng.like_count, $_eng.reply_count, $_eng.source)
+                    Write-Output ("    why_selected: {0}" -f $_saItem.why_selected)
+                }
+            }
+        }
+        if ($_dfLvCount -gt 0) {
+            $_dfLvFail = ("DEV_FORUM_LOW_VALUE_CAP_HARD_FAIL: dev_forum_low_value_count={0} (must be 0)" -f $_dfLvCount)
+            Write-Output ("  => FAIL: {0}" -f $_dfLvFail)
+            Invoke-VerifyOnlineFailFast -Gate "DEV_FORUM_LOW_VALUE_CAP_HARD" -Reason $_dfLvFail
+        }
+        Write-Output "  => DEV_FORUM_LOW_VALUE_CAP_HARD: PASS"
+        if ($_dfHvCount -gt 1) {
+            $_dfHvFail = ("DEV_FORUM_HIGH_VALUE_CAP_HARD_FAIL: dev_forum_high_value_count={0} > 1" -f $_dfHvCount)
+            Write-Output ("  => FAIL: {0}" -f $_dfHvFail)
+            Invoke-VerifyOnlineFailFast -Gate "DEV_FORUM_HIGH_VALUE_CAP_HARD" -Reason $_dfHvFail
+        }
+        Write-Output "  => DEV_FORUM_HIGH_VALUE_CAP_HARD: PASS"
     } catch {
         Write-Output ("  BIGTECH gates: WARN-OK (parse error: {0})" -f $_)
     }

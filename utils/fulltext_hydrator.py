@@ -303,6 +303,103 @@ def _resolve_google_news_url(html: str) -> str | None:
     return None
 
 
+def _extract_discourse_engagement(html: str) -> dict:
+    """Extract engagement stats from Discourse HTML (discuss.huggingface.co).
+
+    Tries JSON-LD interactionStatistic first, then regex fallback.
+    Returns {view_count, like_count, reply_count, source}.
+    """
+    result = {"view_count": 0, "like_count": 0, "reply_count": 0, "source": "none"}
+
+    # --- Try JSON-LD ---
+    try:
+        ld_blocks = re.findall(
+            r'<script[^>]*type\s*=\s*["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+            html, re.DOTALL | re.IGNORECASE,
+        )
+        for block in ld_blocks:
+            try:
+                data = json.loads(block)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            # Could be a list or single object
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                stats = item.get("interactionStatistic", [])
+                if not isinstance(stats, list):
+                    stats = [stats]
+                found_any = False
+                for stat in stats:
+                    itype = str(stat.get("interactionType", "")).lower()
+                    val = int(stat.get("userInteractionCount", 0) or 0)
+                    if "comment" in itype or "reply" in itype:
+                        result["reply_count"] = max(result["reply_count"], val)
+                        found_any = True
+                    elif "like" in itype:
+                        result["like_count"] = max(result["like_count"], val)
+                        found_any = True
+                    elif "view" in itype or "read" in itype:
+                        result["view_count"] = max(result["view_count"], val)
+                        found_any = True
+                # Also check commentCount / interactionCount at top level
+                for key, field in [("commentCount", "reply_count"), ("interactionCount", "view_count")]:
+                    if key in item:
+                        try:
+                            v = int(item[key])
+                            result[field] = max(result[field], v)
+                            found_any = True
+                        except (ValueError, TypeError):
+                            pass
+                if found_any:
+                    result["source"] = "ld_json"
+                    return result
+    except Exception:
+        pass
+
+    # --- Regex fallback for Discourse HTML ---
+    try:
+        # Discourse embeds data in meta tags and topic-map
+        # <meta itemprop="interactionCount" content="UserComments:42">
+        for m in re.finditer(r'content\s*=\s*["\']User(\w+):(\d+)["\']', html, re.IGNORECASE):
+            kind, val = m.group(1).lower(), int(m.group(2))
+            if "comment" in kind or "repl" in kind:
+                result["reply_count"] = max(result["reply_count"], val)
+                result["source"] = "regex"
+            elif "like" in kind:
+                result["like_count"] = max(result["like_count"], val)
+                result["source"] = "regex"
+
+        # Discourse topic-map: <span class="number">123</span> / views / likes / replies
+        # Try: "123 views", "45 replies", "67 likes" patterns
+        for m in re.finditer(r'(\d[\d,]+)\s*(?:</\w+>)?\s*(views?|replies?|likes?|posts?)', html, re.IGNORECASE):
+            val = int(m.group(1).replace(",", ""))
+            kind = m.group(2).lower()
+            if kind.startswith("view"):
+                result["view_count"] = max(result["view_count"], val)
+                result["source"] = "regex"
+            elif kind.startswith("repl") or kind.startswith("post"):
+                result["reply_count"] = max(result["reply_count"], val)
+                result["source"] = "regex"
+            elif kind.startswith("like"):
+                result["like_count"] = max(result["like_count"], val)
+                result["source"] = "regex"
+    except Exception:
+        pass
+
+    return result
+
+
+# Dev forum domains for engagement extraction
+_DISCOURSE_DOMAINS = frozenset({"discuss.huggingface.co"})
+
+def _is_discourse_domain(url: str) -> bool:
+    try:
+        netloc = urlparse(url).netloc.lower().lstrip("www.")
+        return netloc in _DISCOURSE_DOMAINS
+    except Exception:
+        return False
+
+
 def _quick_zh_ratio(text: str) -> float:
     """Fast zh_ratio for internal use only."""
     if not text:
@@ -383,6 +480,13 @@ def hydrate_fulltext(url: str, timeout_s: int = 8) -> dict:
             result["status"] = "skip"
             result["reason"] = "js_only"
             return result
+
+        # Phase 3b: Discourse engagement extraction (no extra HTTP request)
+        _cur_final = result.get("final_url", "") or url
+        if _is_discourse_domain(_cur_final) or _is_discourse_domain(url):
+            result["engagement"] = _extract_discourse_engagement(html)
+        else:
+            result["engagement"] = {"view_count": 0, "like_count": 0, "reply_count": 0, "source": "none"}
 
         # Phase 4: text extraction
         text, fidelity = _extract_text(html)
@@ -547,6 +651,7 @@ def hydrate_items_batch(
             setattr(item, "final_url", res.get("final_url", url))
             setattr(item, "fulltext_reason", res.get("reason", ""))
             setattr(item, "fulltext_fidelity", fidelity)
+            setattr(item, "_engagement", res.get("engagement", {"view_count": 0, "like_count": 0, "reply_count": 0, "source": "none"}))
 
             # Enrich item.body when full_text is substantial
             if fulltext_len >= _ENRICH_MIN:

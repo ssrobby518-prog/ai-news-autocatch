@@ -459,16 +459,32 @@ def _classify_source_type(source_name: str, final_url: str) -> str:
     """Classify source as official/media/dev_forum/code_release/paper for quota enforcement.
 
     iter40: dev_forum replaces social; code_release replaces code.
+    iter46: domain-based dev_forum detection (discuss.huggingface.co, reddit, ycombinator, etc.)
     """
     _sn = (source_name or "").lower()
     _url = (final_url or "").lower()
     # Paper: arxiv
     if "arxiv" in _sn or "arxiv.org" in _url:
         return "paper"
-    # code_release: github releases / commits
+    # code_release: github releases/commits (but NOT github issues/discussions → dev_forum)
     if "github" in _sn or "github.com" in _url:
+        if "/issues" in _url or "/discussions" in _url:
+            return "dev_forum"
         return "code_release"
-    # dev_forum: forums / discussion / community
+    # iter46: domain-based dev_forum detection
+    _DEV_FORUM_DOMAINS = (
+        "discuss.huggingface.co", "reddit.com", "news.ycombinator.com",
+        "dev.to", "stackoverflow.com", "community.openai.com",
+        "forums.developer.nvidia.com",
+    )
+    try:
+        from urllib.parse import urlparse as _cst_urlparse
+        _netloc = _cst_urlparse(_url).netloc.lower().lstrip("www.")
+    except Exception:
+        _netloc = ""
+    if any(_netloc == d or _netloc.endswith("." + d) for d in _DEV_FORUM_DOMAINS):
+        return "dev_forum"
+    # dev_forum: keyword fallback for source_name
     _SOCIAL_KW = ("reddit", "hackernews", "hacker news", "forum", "discuss.",
                   "ycombinator", "community", "/r/", "huggingface forum",
                   "hugging face forum", "dev.to", "stackoverflow")
@@ -493,6 +509,58 @@ def _classify_source_type(source_name: str, final_url: str) -> str:
     if any(x in _sn for x in _MEDIA_KW) or any(x in _url for x in _MEDIA_DOM):
         return "media"
     return "media"
+
+
+# iter46: CVE / security pattern for dev_forum high-value exception
+_CVE_SECURITY_RE = re.compile(
+    r"(CVE-\d{4}-\d+|vulnerability|vuln|0-day|zero.?day|security.?advisory|security.?alert)",
+    re.IGNORECASE,
+)
+
+
+def _assess_dev_forum_value(item) -> str:
+    """Assess dev_forum item as 'high' or 'low' based on engagement.
+
+    iter46: high-value requires engagement thresholds (reply>=30, like>=80, view>=10000)
+    or CVE/security + reply>=10.
+    Returns 'high', 'low', or 'n/a' (if not dev_forum).
+    """
+    src_type = _classify_source_type(
+        str(getattr(item, "source_name", "") or ""),
+        str(getattr(item, "url", "") or getattr(item, "link", "") or ""),
+    )
+    if src_type != "dev_forum":
+        return "n/a"
+
+    eng = getattr(item, "_engagement", None) or {}
+    view_count = int(eng.get("view_count", 0) or 0)
+    like_count = int(eng.get("like_count", 0) or 0)
+    reply_count = int(eng.get("reply_count", 0) or 0)
+    eng_source = str(eng.get("source", "none"))
+
+    # No engagement data → low
+    if eng_source == "none":
+        return "low"
+
+    # Engagement thresholds (any one passes → high)
+    if reply_count >= 30 or like_count >= 80 or view_count >= 10000:
+        return "high"
+
+    # CVE/security exception: title or body contains CVE pattern + reply >= 10
+    title = str(getattr(item, "title", "") or "")
+    body = str(getattr(item, "body", "") or "")[:2000]
+    if _CVE_SECURITY_RE.search(title + " " + body) and reply_count >= 10:
+        return "high"
+
+    return "low"
+
+
+def _get_item_engagement(item) -> dict:
+    """Get engagement dict from item (set by fulltext_hydrator)."""
+    eng = getattr(item, "_engagement", None)
+    if eng and isinstance(eng, dict):
+        return eng
+    return {"view_count": 0, "like_count": 0, "reply_count": 0, "source": "none"}
 
 
 def _write_not_ready_report_md(
@@ -5560,14 +5628,23 @@ def _write_collector_coverage_meta(raw_items: list, run_id: str = "") -> None:
         _cclog.getLogger(__name__).warning("collector_coverage.meta.json write failed: %s", _cce)
 
 
-def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tuple:
+def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "", selected_items: list = None) -> tuple:
     """Write outputs/selection_audit.meta.json per-selected-item audit.
 
+    iter46: adds dev_forum, dev_forum_value, engagement per item.
+    selected_items: original item objects (for engagement data).
     Returns (selected_sources_distinct: int, bigtech_hit_count: int, official_or_media_count: int).
     """
     try:
         import json as _saj
         from urllib.parse import urlparse as _up_audit
+        # Build URL→item map for engagement lookup
+        _eng_map: dict = {}
+        if selected_items:
+            for it in selected_items:
+                _u = str(getattr(it, "url", "") or getattr(it, "link", "") or "")
+                if _u:
+                    _eng_map[_u] = it
         audit_rows = []
         for fc in final_cards:
             title = str(fc.get("title", "") or "")
@@ -5581,6 +5658,18 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
             exec_hit = bool(_EXEC_ROLE_RE.search(title + " " + src_name))
             src_type = _classify_source_type(src_name, final_url)
             official_or_media = src_type in ("official", "media")
+            # iter46: dev_forum value assessment
+            _is_df = (src_type == "dev_forum")
+            _df_value = "n/a"
+            _engagement = {"view_count": 0, "like_count": 0, "reply_count": 0, "source": "none"}
+            if _is_df:
+                # Try to find the original item for engagement data
+                _orig_item = _eng_map.get(fc.get("url", "")) or _eng_map.get(final_url)
+                if _orig_item:
+                    _engagement = _get_item_engagement(_orig_item)
+                    _df_value = _assess_dev_forum_value(_orig_item)
+                else:
+                    _df_value = "low"  # no engagement data → low
             if bigtech_hit and exec_hit:
                 why = "bigtech_exec"
             elif bigtech_hit and src_type == "official":
@@ -5591,6 +5680,10 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
                 why = "bigtech"
             elif official_or_media:
                 why = "quota_fill"
+            elif _is_df and _df_value == "high":
+                why = "dev_forum_high_value_backup"
+            elif _is_df:
+                why = "dev_forum_low_value"
             else:
                 why = "ai_relevance"
             audit_rows.append({
@@ -5602,6 +5695,9 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
                 "bigtech_hit": bigtech_hit,
                 "exec_hit": exec_hit,
                 "official_or_media": official_or_media,
+                "dev_forum": _is_df,
+                "dev_forum_value": _df_value,
+                "engagement": _engagement,
                 "final_score": float(fc.get("final_score", 0.0) or 0.0),
                 "why_selected": why,
             })
@@ -5614,6 +5710,9 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
             1 for r in audit_rows
             if r["source_type"] in ("dev_forum", "code_release", "social", "code") and not r["bigtech_hit"]
         )
+        # iter46: dev_forum value counts
+        dev_forum_low_value_count = sum(1 for r in audit_rows if r.get("dev_forum") and r.get("dev_forum_value") == "low")
+        dev_forum_high_value_count = sum(1 for r in audit_rows if r.get("dev_forum") and r.get("dev_forum_value") == "high")
         _sap = Path(settings.PROJECT_ROOT) / "outputs" / "selection_audit.meta.json"
         _sap.parent.mkdir(parents=True, exist_ok=True)
         _sap.write_text(
@@ -5625,6 +5724,8 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "") -> tu
                 "official_or_media_count": official_or_media_count,
                 "dev_forum_count": dev_forum_count,
                 "non_bigtech_dev_noise_count": non_bigtech_dev_noise_count,
+                "dev_forum_low_value_count": dev_forum_low_value_count,
+                "dev_forum_high_value_count": dev_forum_high_value_count,
                 "items": audit_rows,
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -6873,13 +6974,22 @@ def _f600_run_fast_path(
         return _f6_src_type(it) in ("dev_forum", "code_release", "social", "code") and not _f6_is_bigtech(it)
 
     def _f6_sort_key(it) -> tuple:
-        """iter40: bigtech-first, official/media first, then by fulltext density."""
+        """iter40: bigtech-first, official/media first, then by fulltext density.
+        iter46: dev_forum penalty (-1e9 low, -50 high)."""
         bt = 2 if _f6_is_bigtech(it) else 0
         st = _f6_src_type(it)
         om = 2 if st in ("official", "media") else 0
         dn = -2 if _f6_is_dev_noise(it) else 0
+        # iter46: dev_forum value penalty
+        _dfv = _assess_dev_forum_value(it)
+        if _dfv == "low":
+            df_penalty = -1_000_000_000
+        elif _dfv == "high":
+            df_penalty = -50
+        else:
+            df_penalty = 0
         ftl = int(getattr(it, "fulltext_len", 0) or 0)
-        return (bt, om, dn, ftl, _f6_bfp(it))
+        return (bt, om, dn, df_penalty, ftl, _f6_bfp(it))
 
     def _f6_tier(min_len: int) -> list:
         return sorted(
@@ -6936,6 +7046,78 @@ def _f600_run_fast_path(
             _f6_src_counts = _F6Counter(_f6_src(it) for it in _selected)
             _f6_majority_src = _f6_src_counts.most_common(1)[0][0] if _f6_src_counts else ""
         _log.info("FAST_600_MODE: diversity swap → distinct_sources=%d", len(_f6_srcs))
+
+    # --- iter46: dev_forum replacement loop ---
+    # Replace dev_forum_low_value items; limit dev_forum_high_value to <=1 (only if needed)
+    _df_rejected_samples: list[dict] = []
+    if _is_daily or os.environ.get("BIGTECH_GATES_ENFORCE", "0") == "1":
+        _non_df_backup = [
+            it for it in _f6_tier(300)
+            if it not in _selected
+            and _f6_src_type(it) not in ("dev_forum",)
+            and not _f6_is_dev_noise(it)
+        ]
+        _non_df_backup.sort(key=_f6_sort_key, reverse=True)
+        # Pass 1: replace all low_value dev_forum items
+        for _i in range(len(_selected)):
+            _it = _selected[_i]
+            _dfv = _assess_dev_forum_value(_it)
+            if _dfv == "low" and _non_df_backup:
+                _repl = _non_df_backup.pop(0)
+                _df_rejected_samples.append({
+                    "title": str(getattr(_it, "title", "") or "")[:120],
+                    "domain": str(getattr(_it, "source_name", "") or ""),
+                    "url": str(getattr(_it, "url", "") or "")[:200],
+                    "why_rejected": "dev_forum_low_value",
+                    "engagement": _get_item_engagement(_it),
+                })
+                _selected[_i] = _repl
+                _log.info("FAST_600_MODE iter46: replaced dev_forum low_value idx=%d", _i)
+        # Pass 2: if dev_forum_high_value > 1, or backup still available, replace excess
+        _hv_indices = [i for i in range(len(_selected)) if _assess_dev_forum_value(_selected[i]) == "high"]
+        while len(_hv_indices) > 1 and _non_df_backup:
+            _worst_i = _hv_indices.pop()  # remove last (lowest priority)
+            _it = _selected[_worst_i]
+            _repl = _non_df_backup.pop(0)
+            _df_rejected_samples.append({
+                "title": str(getattr(_it, "title", "") or "")[:120],
+                "domain": str(getattr(_it, "source_name", "") or ""),
+                "url": str(getattr(_it, "url", "") or "")[:200],
+                "why_rejected": "dev_forum_high_value_replaced_by_better",
+                "engagement": _get_item_engagement(_it),
+            })
+            _selected[_worst_i] = _repl
+            _log.info("FAST_600_MODE iter46: replaced excess dev_forum high_value idx=%d", _worst_i)
+        # Pass 3: if 1 high_value remains, check if it could have been replaced (DEV_FORUM_SHOULD_HAVE_BEEN_REPLACED)
+        _hv_indices = [i for i in range(len(_selected)) if _assess_dev_forum_value(_selected[i]) == "high"]
+        if len(_hv_indices) == 1 and _non_df_backup:
+            # Backup still available → should replace even the last high_value forum
+            _worst_i = _hv_indices[0]
+            _it = _selected[_worst_i]
+            _repl = _non_df_backup.pop(0)
+            _df_rejected_samples.append({
+                "title": str(getattr(_it, "title", "") or "")[:120],
+                "domain": str(getattr(_it, "source_name", "") or ""),
+                "url": str(getattr(_it, "url", "") or "")[:200],
+                "why_rejected": "dev_forum_should_have_been_replaced",
+                "engagement": _get_item_engagement(_it),
+            })
+            _selected[_worst_i] = _repl
+            _log.info("FAST_600_MODE iter46: replaced last high_value forum (backup available)")
+
+    # Also collect rejected dev_forum items from raw_items not in _selected
+    for _rit in raw_items:
+        if _rit in _selected:
+            continue
+        if _assess_dev_forum_value(_rit) in ("low", "high") and len(_df_rejected_samples) < 10:
+            _df_rejected_samples.append({
+                "title": str(getattr(_rit, "title", "") or "")[:120],
+                "domain": str(getattr(_rit, "source_name", "") or ""),
+                "url": str(getattr(_rit, "url", "") or "")[:200],
+                "why_rejected": "dev_forum_not_selected",
+                "engagement": _get_item_engagement(_rit),
+            })
+
     _hydrated_ok_count = sum(1 for it in raw_items if int(getattr(it, "fulltext_len", 0) or 0) >= 300)
     _log.info(
         "FAST_600_MODE: selected %d items (hydrated_ok=%d total=%d bigtech=%d)",
@@ -6947,7 +7129,7 @@ def _f600_run_fast_path(
     _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
     _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
     try:
-        _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id)
+        _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
     except Exception as _f6_sau_exc:
         _log.warning("FAST_600_MODE: selection_audit meta failed (non-fatal): %s", _f6_sau_exc)
         _f6_distinct = len({str(getattr(it, "source_name", "") or "") for it in _selected})
@@ -7027,6 +7209,55 @@ def _f600_run_fast_path(
                 f"DEV_NOISE_CAP_HARD_FAIL: non_bigtech_dev_noise={_f6_devnoise_count}",
             )
 
+    # --- Step 3b2: iter46 DEV_FORUM_LOW_VALUE_CAP_HARD + DEV_FORUM_HIGH_VALUE_CAP_HARD ---
+    _f6_df_lv_count = sum(1 for it in _selected if _assess_dev_forum_value(it) == "low")
+    _f6_df_hv_count = sum(1 for it in _selected if _assess_dev_forum_value(it) == "high")
+    # Write dev_forum_audit.meta.json
+    try:
+        import json as _dfa_j
+        _dfa_path = Path(settings.PROJECT_ROOT) / "outputs" / "dev_forum_audit.meta.json"
+        _dfa_path.parent.mkdir(parents=True, exist_ok=True)
+        _dfa_path.write_text(
+            _dfa_j.dumps({
+                "run_id": _run_id,
+                "selected_dev_forum_low_value_count": _f6_df_lv_count,
+                "selected_dev_forum_high_value_count": _f6_df_hv_count,
+                "rejected_dev_forum_low_value_samples": _df_rejected_samples[:10],
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as _dfa_exc:
+        _log.warning("dev_forum_audit.meta.json write failed: %s", _dfa_exc)
+
+    if _is_daily or os.environ.get("BIGTECH_GATES_ENFORCE", "0") == "1":
+        _log.info("FAST_600_MODE iter46: dev_forum_low_value=%d dev_forum_high_value=%d", _f6_df_lv_count, _f6_df_hv_count)
+        if _f6_df_lv_count > 0:
+            _write_not_ready_report_md(
+                "DEV_FORUM_LOW_VALUE_CAP_HARD_FAIL",
+                f"dev_forum_low_value_count={_f6_df_lv_count} > 0 (must be 0)",
+                run_id=_run_id, selected_items_count=len(_selected),
+                selected_sources_distinct=_f6_distinct,
+                bigtech_hit_count=_f6_bigtech,
+                official_or_media_count=_f6_om,
+            )
+            _f6_fail(
+                "DEV_FORUM_LOW_VALUE_CAP_HARD",
+                f"DEV_FORUM_LOW_VALUE_CAP_HARD_FAIL: dev_forum_low_value_count={_f6_df_lv_count}",
+            )
+        if _f6_df_hv_count > 1:
+            _write_not_ready_report_md(
+                "DEV_FORUM_HIGH_VALUE_CAP_HARD_FAIL",
+                f"dev_forum_high_value_count={_f6_df_hv_count} > 1 (max 1)",
+                run_id=_run_id, selected_items_count=len(_selected),
+                selected_sources_distinct=_f6_distinct,
+                bigtech_hit_count=_f6_bigtech,
+                official_or_media_count=_f6_om,
+            )
+            _f6_fail(
+                "DEV_FORUM_HIGH_VALUE_CAP_HARD",
+                f"DEV_FORUM_HIGH_VALUE_CAP_HARD_FAIL: dev_forum_high_value_count={_f6_df_hv_count}",
+            )
+
     # --- Step 3c: iter41 daily cross-day dedup (overlap_with_prev_daily <= 2) ---
     _overlap_count = 0
     _replacements_made = 0
@@ -7071,7 +7302,7 @@ def _f600_run_fast_path(
             if _replacements_made > 0:
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
                 _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
-                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id)
+                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
                 _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
         except SystemExit:
             raise
