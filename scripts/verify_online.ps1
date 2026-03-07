@@ -4683,8 +4683,15 @@ if ($_fast300Daily) {
             Write-Output ("  bigtech_hit_count         : {0}" -f $_btoBT)
             Write-Output ("  official_or_media_count   : {0}" -f $_btoOM)
             Write-Output ("  selected_items_count      : {0}" -f $_btoSel)
-            if ($_btoBT -lt $_btoSel -or $_btoOM -lt $_btoSel) {
-                $_btoFail = ("DAILY_BIGTECH_ONLY_HARD_FAIL: bigtech={0} official_or_media={1} selected={2} (all {2} must be both)" -f $_btoBT, $_btoOM, $_btoSel)
+            # iter54: bigtech code_release also counts toward official_or_media for this gate
+            $_btoCR = 0
+            if ($_btoMeta.PSObject.Properties['items']) {
+                $_btoCR = @($_btoMeta.items | Where-Object { $_.bigtech_hit -eq $true -and $_.source_type -eq "code_release" }).Count
+            }
+            $_btoEffectiveOM = $_btoOM + $_btoCR
+            Write-Output ("  bigtech_code_release (counts as official): {0}" -f $_btoCR)
+            if ($_btoBT -lt $_btoSel -or $_btoEffectiveOM -lt $_btoSel) {
+                $_btoFail = ("DAILY_BIGTECH_ONLY_HARD_FAIL: bigtech={0} official_or_media+bigtech_code_release={1} selected={2}" -f $_btoBT, $_btoEffectiveOM, $_btoSel)
                 Write-Output ("  => FAIL: {0}" -f $_btoFail)
                 Invoke-VerifyOnlineFailFast -Gate "DAILY_BIGTECH_ONLY_HARD" -Reason $_btoFail
             }

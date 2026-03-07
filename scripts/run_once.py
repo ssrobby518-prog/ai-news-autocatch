@@ -7072,8 +7072,10 @@ def _f600_run_fast_path(
     _om_pool = [it for it in _f6_tier(300) if not _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
     _other_pool = [it for it in _f6_tier(300) if it not in _bt_pool and it not in _om_pool and not _f6_is_dev_noise(it)]
     _devnoise_pool = [it for it in _f6_tier(300) if _f6_is_dev_noise(it)]
-    # iter54: DAILY_BIGTECH_ONLY — pool of items that are both bigtech AND official_or_media
-    _bt_om_pool = [it for it in _f6_tier(300) if _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
+    # iter54: DAILY_BIGTECH_ONLY — pool of items that are bigtech AND (official/media/code_release)
+    # code_release from bigtech (e.g. GitHub microsoft/autogen) counts as official for DAILY purposes
+    _BT_OM_TYPES = ("official", "media", "code_release")
+    _bt_om_pool = [it for it in _f6_tier(300) if _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
 
     # iter53: domain/vendor quota-aware selection
     _DIV_MAX_DOMAIN = 2
@@ -7146,7 +7148,7 @@ def _f600_run_fast_path(
     _f6_srcs = {_f6_src(it) for it in _selected}
     if len(_f6_srcs) < 3 and len(_selected) >= 3:
         _f6_repl_pool = [it for it in _f6_tier(300) if it not in _selected
-                         and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")))]
+                         and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))]
         _f6_new_src_items = [it for it in _f6_repl_pool if _f6_src(it) not in _f6_srcs]
         _f6_src_counts = _F6Counter(_f6_src(it) for it in _selected)
         _f6_majority_src = _f6_src_counts.most_common(1)[0][0] if _f6_src_counts else ""
@@ -7168,7 +7170,7 @@ def _f600_run_fast_path(
     if _is_daily and len(_selected) >= _max_events:
         # iter54: DAILY diversity backup must be bigtech+official_or_media (DAILY_BIGTECH_ONLY_HARD)
         _div_backup = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
-                       and _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
+                       and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
         _div_backup.sort(key=lambda it: (int(getattr(it, "fulltext_len", 0) or 0), _f6_bfp(it)), reverse=True)
         for _div_round in range(30):
             _d_counts = _DivCounter(_f6_domain_key(s) for s in _selected)
@@ -7268,7 +7270,7 @@ def _f600_run_fast_path(
             if it not in _selected
             and _f6_src_type(it) not in ("dev_forum",)
             and not _f6_is_dev_noise(it)
-            and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")))
+            and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
         ]
         _non_df_backup.sort(key=_f6_sort_key, reverse=True)
         # Pass 0: replace non-bigtech code_release/social/code items (dev noise)
@@ -7421,7 +7423,7 @@ def _f600_run_fast_path(
 
     # --- Step 3b1b: iter54 DAILY_BIGTECH_ONLY_HARD — all selected must be bigtech+official_or_media ---
     if _is_daily:
-        _non_bt_om = sum(1 for it in _selected if not (_f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")))
+        _non_bt_om = sum(1 for it in _selected if not (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
         if _non_bt_om > 0:
             _write_not_ready_report_md(
                 "DAILY_BIGTECH_ONLY_HARD_FAIL",
@@ -7535,7 +7537,7 @@ def _f600_run_fast_path(
             _overlap_count = len(_overlap_items)
             if _overlap_count > 2:
                 _backup_pool = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
-                                and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")))]
+                                and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))]
                 _backup_pool.sort(key=_f6_sort_key, reverse=True)
                 for _oi, _oh in sorted(_overlap_items[2:], key=lambda x: _f6_bfp(_selected[x[0]])):
                     if not _backup_pool:
@@ -7580,7 +7582,7 @@ def _f600_run_fast_path(
     if _is_daily and len(_selected) >= _max_events:
         # iter54: DAILY diversity backup must be bigtech+official_or_media
         _div_backup2 = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
-                        and _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
+                        and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
         _div_backup2.sort(key=lambda it: (int(getattr(it, "fulltext_len", 0) or 0), _f6_bfp(it)), reverse=True)
         for _div_round2 in range(30):
             _d_counts2 = _DivCounter(_f6_domain_key(s) for s in _selected)
