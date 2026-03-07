@@ -381,6 +381,14 @@ Get-ChildItem -Path (Join-Path $repoRoot "outputs") -Filter "*.pptx" -ErrorActio
     $_pptxPreCleanCount++
 }
 Write-Output ("[PRE-CLEAN] PPTX 清除完成：刪除 {0} 個 pptx 檔案" -f $_pptxPreCleanCount)
+# iter48: PRE-CLEAN dev_forum_audit.meta.json — avoid stale meta polluting gates
+$_dfaPreCleanPath = Join-Path $repoRoot "outputs\dev_forum_audit.meta.json"
+if (Test-Path $_dfaPreCleanPath) {
+    Remove-Item -LiteralPath $_dfaPreCleanPath -Force -ErrorAction SilentlyContinue
+    Write-Output "  [PRE-CLEAN] 已刪除 dev_forum_audit.meta.json"
+} else {
+    Write-Output "  [PRE-CLEAN] dev_forum_audit.meta.json 不存在略過"
+}
 Write-Output "[PRE-CLEAN] 清除舊的 notion/xmind/deep_analysis 殘留產物..."
 foreach ($_voPreClean in @(
     "outputs\notion_page.md",
@@ -4577,6 +4585,28 @@ if (Test-Path $_tmcPath) {
     }
 } else {
     Write-Output "TRANSLATION_META_COHERENCE_HARD: SKIP (meta not found)"
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter48: DEV_FORUM_AUDIT_JSON_VALID_HARD — validate JSON integrity
+# ---------------------------------------------------------------------------
+$_dfaJsonPath = Join-Path $repoRoot "outputs\dev_forum_audit.meta.json"
+if (Test-Path $_dfaJsonPath) {
+    $_dfaVenvPy = Join-Path $repoRoot "venv\Scripts\python.exe"
+    if (-not (Test-Path $_dfaVenvPy)) { $_dfaVenvPy = "python" }
+    $_dfaJsonCheck = & $_dfaVenvPy -c "import json,sys; json.load(open(sys.argv[1],'r',encoding='utf-8')); print('VALID')" "$_dfaJsonPath" 2>&1
+    if ("$_dfaJsonCheck" -match "VALID") {
+        Write-Output "DEV_FORUM_AUDIT_JSON_VALID_HARD: PASS"
+    } else {
+        Write-Output ("DEV_FORUM_AUDIT_JSON_VALID_HARD: FAIL — {0}" -f "$_dfaJsonCheck")
+        Invoke-VerifyOnlineFailFast -Gate "DEV_FORUM_AUDIT_JSON_VALID_HARD" `
+            -Reason "DEV_FORUM_AUDIT_JSON_INVALID: dev_forum_audit.meta.json is not valid JSON"
+    }
+} else {
+    Write-Output "DEV_FORUM_AUDIT_JSON_VALID_HARD: FAIL — file not found"
+    Invoke-VerifyOnlineFailFast -Gate "DEV_FORUM_AUDIT_JSON_VALID_HARD" `
+        -Reason "DEV_FORUM_AUDIT_JSON_INVALID: dev_forum_audit.meta.json missing"
 }
 Write-Output ""
 

@@ -598,6 +598,11 @@ def _write_not_ready_report_md(
             f"| bigtech_hit_count | {bigtech_hit_count} |",
             f"| official_or_media_count | {official_or_media_count} |", "",
         ]
+        if int(os.environ.get("INJECT_DEV_FORUM_LOW_VALUE", "0")) > 0:
+            _nrw_lines += [
+                "## Next Steps", "",
+                "本次為受控注入測試（test_injected=true），用於驗證 DEV_FORUM_LOW_VALUE_CAP_HARD 攔截。", "",
+            ]
         (_nrw_outputs / "NOT_READY_report.md").write_text(
             "\n".join(_nrw_lines), encoding="utf-8"
         )
@@ -7226,42 +7231,56 @@ def _f600_run_fast_path(
     # --- Step 3b2: iter46 DEV_FORUM_LOW_VALUE_CAP_HARD + DEV_FORUM_HIGH_VALUE_CAP_HARD ---
     _f6_df_lv_count = sum(1 for it in _selected if _assess_dev_forum_value(it) == "low")
     _f6_df_hv_count = sum(1 for it in _selected if _assess_dev_forum_value(it) == "high")
-    # Write dev_forum_audit.meta.json — iter47: split buckets + classified_value + reject_reason
+    # Write dev_forum_audit.meta.json — iter48: injection test support + strict JSON
+    _dfa_inject_n = int(os.environ.get("INJECT_DEV_FORUM_LOW_VALUE", "0"))
+    _dfa_is_injected = _dfa_inject_n > 0
     try:
         import json as _dfa_j
         _dfa_path = Path(settings.PROJECT_ROOT) / "outputs" / "dev_forum_audit.meta.json"
         _dfa_path.parent.mkdir(parents=True, exist_ok=True)
         _dfa_missing_eng = sum(1 for s in _df_rejected_lv + _df_rejected_hv if s.get("reject_reason") == "missing_engagement")
+        _dfa_payload = {
+            "run_id": _run_id,
+            "selected_dev_forum_low_value_count": _f6_df_lv_count,
+            "selected_dev_forum_high_value_count": _f6_df_hv_count,
+            "summary": {
+                "rejected_low_value_count": len(_df_rejected_lv),
+                "rejected_high_value_count": len(_df_rejected_hv),
+                "rejected_missing_engagement_count": _dfa_missing_eng,
+            },
+            "rules_used": {
+                "high_value_thresholds": "reply_count>=30 OR like_count>=80 OR view_count>=10000",
+                "high_value_cve_exception": "title/body matches CVE|vulnerability|0-day|security advisory AND reply_count>=10",
+                "low_value_definition": "dev_forum=true AND does not meet any high_value threshold",
+                "missing_engagement": "engagement source=none (no data extracted) treated as low_value",
+            },
+            "rejected_dev_forum_low_value_samples": _df_rejected_lv,
+            "rejected_dev_forum_high_value_samples": _df_rejected_hv,
+        }
+        if _dfa_is_injected:
+            _dfa_payload["test_injected"] = True
+            _dfa_payload["injected_dev_forum_low_value_count"] = _dfa_inject_n
         _dfa_path.write_text(
-            _dfa_j.dumps({
-                "run_id": _run_id,
-                "selected_dev_forum_low_value_count": _f6_df_lv_count,
-                "selected_dev_forum_high_value_count": _f6_df_hv_count,
-                "summary": {
-                    "rejected_low_value_count": len(_df_rejected_lv),
-                    "rejected_high_value_count": len(_df_rejected_hv),
-                    "rejected_missing_engagement_count": _dfa_missing_eng,
-                },
-                "rules_used": {
-                    "high_value_thresholds": "reply_count>=30 OR like_count>=80 OR view_count>=10000",
-                    "high_value_cve_exception": "title/body matches CVE|vulnerability|0-day|security advisory AND reply_count>=10",
-                    "low_value_definition": "dev_forum=true AND does not meet any high_value threshold",
-                    "missing_engagement": "engagement source=none (no data extracted) → treated as low_value",
-                },
-                "rejected_dev_forum_low_value_samples": _df_rejected_lv,
-                "rejected_dev_forum_high_value_samples": _df_rejected_hv,
-            }, ensure_ascii=False, indent=2),
+            _dfa_j.dumps(_dfa_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     except Exception as _dfa_exc:
         _log.warning("dev_forum_audit.meta.json write failed: %s", _dfa_exc)
 
+    # iter48: injection test — use injected count for gate check if env var set
+    _f6_df_lv_gate = _f6_df_lv_count + _dfa_inject_n
+    if _dfa_is_injected:
+        _log.info("INJECT_DEV_FORUM_LOW_VALUE=%d: gate will see lv_count=%d (real=%d + injected=%d)",
+                  _dfa_inject_n, _f6_df_lv_gate, _f6_df_lv_count, _dfa_inject_n)
     if _is_daily or os.environ.get("BIGTECH_GATES_ENFORCE", "0") == "1":
-        _log.info("FAST_600_MODE iter46: dev_forum_low_value=%d dev_forum_high_value=%d", _f6_df_lv_count, _f6_df_hv_count)
-        if _f6_df_lv_count > 0:
+        _log.info("FAST_600_MODE iter46: dev_forum_low_value=%d dev_forum_high_value=%d", _f6_df_lv_gate, _f6_df_hv_count)
+        if _f6_df_lv_gate > 0:
+            _nrr_reason = f"dev_forum_low_value_count={_f6_df_lv_gate} > 0 (must be 0)"
+            if _dfa_is_injected:
+                _nrr_reason += f" [test_injected=true, injected={_dfa_inject_n}, real={_f6_df_lv_count}]"
             _write_not_ready_report_md(
                 "DEV_FORUM_LOW_VALUE_CAP_HARD_FAIL",
-                f"dev_forum_low_value_count={_f6_df_lv_count} > 0 (must be 0)",
+                _nrr_reason,
                 run_id=_run_id, selected_items_count=len(_selected),
                 selected_sources_distinct=_f6_distinct,
                 bigtech_hit_count=_f6_bigtech,
@@ -7269,7 +7288,7 @@ def _f600_run_fast_path(
             )
             _f6_fail(
                 "DEV_FORUM_LOW_VALUE_CAP_HARD",
-                f"DEV_FORUM_LOW_VALUE_CAP_HARD_FAIL: dev_forum_low_value_count={_f6_df_lv_count}",
+                f"DEV_FORUM_LOW_VALUE_CAP_HARD_FAIL: dev_forum_low_value_count={_f6_df_lv_gate}",
             )
         if _f6_df_hv_count > 1:
             _write_not_ready_report_md(
