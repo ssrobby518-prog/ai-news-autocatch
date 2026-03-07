@@ -302,16 +302,25 @@ PPTX: No PPTX files
 
 ### 【外部輸出】git status -sb
 
-（push 前補填）
+```
+## main...origin/main
+```
 
 ### 【外部輸出】git push
 
-（待執行）
+```
+0ec7226..d4c47cc  main -> main
+```
 
 ### 【外部輸出】git rev-list --left-right --count origin/main...HEAD
 
-（push 後補填）
+```
+0	0
+```
 
 ### 提交記錄
 
-（push 後補填）
+```
+36f42cb iter58: SHA-256 delivery consistency proof + stress_mode_name soft_warning_no_switch
+d4c47cc iter58: evidence pack — SHA-256 delivery consistency proof + soft_warning_no_switch naming
+```
