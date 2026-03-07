@@ -242,4 +242,35 @@ DELIVERABLE_TIMESTAMP_COHERENCE: PASS
 
 ## Section D — Git 提交與 Push
 
-（push 後補填）
+### 【外部輸出】git diff --name-only（提交前）
+
+```
+scripts/run_once.py
+scripts/verify_online.ps1
+report.md
+```
+
+### 【外部輸出】git status -sb（push 後）
+
+```
+## main...origin/main
+```
+
+### 【外部輸出】git push
+
+```
+289ab9b..97f46c6  main -> main
+```
+
+### 【外部輸出】git rev-list --left-right --count origin/main...HEAD
+
+```
+0	0
+```
+
+### 提交記錄
+
+```
+94b729f iter56: add VRAM-busy auto STRESS_600_MODE + GPU warmup stabilization + evidence/meta hardening (no gate relaxation)
+97f46c6 iter56: evidence pack — VRAM-busy STRESS_600_MODE + GPU warmup stability proof + dual DAILY success
+```
