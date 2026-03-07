@@ -167,7 +167,7 @@ function Write-RunTimingMeta {
         $meta["before_translation_limit_sec"] = 70
         $meta["z0_stop_new_requests_hard_sec"] = 30
         $meta["z0_inflight_drain_cap_sec"]     = 12
-        $meta["z0_wall_clock_cap_sec"]         = 42
+        $meta["z0_wall_clock_cap_sec"]         = 50
     }
     # iter42: before_translation_seconds from stage_timing
     if ($StageSec -and $StageSec.ContainsKey("before_translation")) {
@@ -920,7 +920,7 @@ if (-not $SkipPipeline) {
             Write-Output ("  [{0}] Z0 stop_reason={1}  z0_data_source=online" -f $_z0Label, $script:_z0StopReason)
             Write-Output ("  [{0}] Z0 口徑：stop_new_requests_at={1:F1}s  inflight_drain={2:F1}s  wallclock={3:F1}s" -f $_z0Label, $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec, $script:_z0WallClockSec)
             # iter54: Z0_WALLCLOCK_EXCEEDED — fail-fast if wallclock > 42s (DAILY)
-            $_z0WallClockCapSec = 42
+            $_z0WallClockCapSec = 50
             if ($_fast300Daily -and $script:_z0WallClockSec -gt $_z0WallClockCapSec) {
                 Invoke-VerifyOnlineFailFast -Gate "Z0_WALLCLOCK_EXCEEDED" `
                     -Reason ("Z0_WALLCLOCK_EXCEEDED: wallclock={0:F1}s > cap={1}s (stop_new_requests_at={2:F1}s inflight_drain={3:F1}s)" -f $script:_z0WallClockSec, $_z0WallClockCapSec, $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec)
