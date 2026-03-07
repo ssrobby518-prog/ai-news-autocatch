@@ -5117,6 +5117,25 @@ try {
 } catch {
     Write-Output ("  [WARN] deliverable listing failed: {0}" -f $_)
 }
+
+# iter59: post-hoc archive gpu_load + delivery_consistency + LAST_RUN_SUMMARY into delivery_dir
+# Best-effort copy; never breaks pipeline
+Write-Output ""
+Write-Output "DELIVERY_META_ARCHIVE:"
+foreach ($_dmaFile in @("gpu_load.meta.json", "delivery_consistency.meta.json", "LAST_RUN_SUMMARY.txt")) {
+    $_dmaSrc = Join-Path $repoRoot "outputs\$_dmaFile"
+    $_dmaDst = Join-Path $_deliveryDir $_dmaFile
+    if (Test-Path $_dmaSrc) {
+        try {
+            Copy-Item -Path $_dmaSrc -Destination $_dmaDst -Force
+            Write-Output ("  COPIED: {0} -> delivery_dir" -f $_dmaFile)
+        } catch {
+            Write-Output ("  [WARN] copy failed: {0} ({1})" -f $_dmaFile, $_)
+        }
+    } else {
+        Write-Output ("  [SKIP] not found: {0}" -f $_dmaFile)
+    }
+}
 Write-Output ""
 
 if ($pool85Degraded) {
