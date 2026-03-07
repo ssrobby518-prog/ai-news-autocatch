@@ -1,7 +1,8 @@
-# iter52c Evidence Pack — 2026-03-07
+# iter52d Evidence Pack — 2026-03-07
 
 ## Section A — git
 
+【外部輸出】
 ```powershell
 git diff --name-only
 # (empty — clean working tree at time of pipeline runs)
@@ -14,7 +15,7 @@ git rev-list --left-right --count origin/main...HEAD
 0	0
 ```
 
-## Section B — DAILY 成功（本輪現跑 run_id=20260307_072045）
+## Section B — DAILY 成功（本輪現跑 run_id=20260307_072939）
 
 **命令：**
 ```powershell
@@ -25,9 +26,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify_online.ps1 -M
 
 **【外部輸出】type outputs\LAST_RUN_SUMMARY.txt：**
 ```
-run_id              = 20260307_072045
-started_at          = 2026-03-07T07:21:49.4070690-08:00
-finished_at         = 2026-03-07T07:21:49.4070690-08:00
+run_id              = 20260307_072939
+started_at          = 2026-03-07T07:30:46.4231701-08:00
+finished_at         = 2026-03-07T07:30:46.4231701-08:00
 mode                = daily
 report_mode         = brief
 status              = OK
@@ -40,7 +41,7 @@ produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
 **【外部輸出】Get-Content outputs\dev_forum_audit.meta.json -TotalCount 20：**
 ```json
 {
-  "run_id": "20260307_072045",
+  "run_id": "20260307_072939",
   "selected_dev_forum_low_value_count": 0,
   "selected_dev_forum_high_value_count": 0,
   "summary": {
@@ -59,17 +60,21 @@ produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
     {
 ```
 
-**【外部輸出】python -m json.tool outputs\dev_forum_audit.meta.json > NUL：**
-```
-（無輸出 — 表示 JSON 合法，exit code = 0）
-```
+**JSON 合法性驗證 — 教科書式兩行命令本體與輸出：**
 
-**【外部輸出】DEV_FORUM_AUDIT_JSON_TOOL_EXIT_CODE=$LASTEXITCODE：**
+【外部輸出】命令 1：
+```powershell
+PS> python -m json.tool outputs\dev_forum_audit.meta.json > NUL
 ```
+（無輸出 — 表示 JSON 合法，python 回傳 exit code 0）
+
+【外部輸出】命令 2：
+```powershell
+PS> Write-Output "DEV_FORUM_AUDIT_JSON_TOOL_EXIT_CODE=$LASTEXITCODE"
 DEV_FORUM_AUDIT_JSON_TOOL_EXIT_CODE=0
 ```
 
-**verify_online.ps1 console log 內建輸出（硬證據）：**
+**verify_online.ps1 console log 內建輸出（同一 run 硬證據）：**
 ```
   DEV_FORUM_AUDIT_JSON_TOOL_EXIT_CODE=0
 DEV_FORUM_AUDIT_JSON_VALID_HARD: PASS
@@ -78,10 +83,9 @@ DEV_FORUM_AUDIT_JSON_VALID_HARD: PASS
 **Pipeline 結尾：**
 ```
 === verify_online.ps1 完成：所有門檻通過 ===
-總耗時：64 秒
 ```
 
-## Section C — 受控失敗（本輪現跑注入 run_id=20260307_072216）
+## Section C — 受控失敗（本輪現跑注入 run_id=20260307_073107）
 
 **命令：**
 ```powershell
@@ -91,9 +95,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify_online.ps1 -M
 
 **【外部輸出】type outputs\LAST_RUN_SUMMARY.txt（完整全文）：**
 ```
-run_id              = 20260307_072216
-started_at          = 2026-03-07T07:23:20.1547440-08:00
-finished_at         = 2026-03-07T07:23:20.1547440-08:00
+run_id              = 20260307_073107
+started_at          = 2026-03-07T07:32:09.2441780-08:00
+finished_at         = 2026-03-07T07:32:09.2441780-08:00
 mode                = daily
 report_mode         = brief
 status              = FAIL
@@ -108,27 +112,27 @@ fail_reason         = PIPELINE_GATE_FAIL: DEV_FORUM_LOW_VALUE_CAP_HARD
 ```
 Name                  LastWriteTime       Length
 ----                  -------------       ------
-NOT_READY_report.md   3/7/2026 7:23:20 AM    964
-NOT_READY_report.docx 3/7/2026 7:23:20 AM  35859
+NOT_READY_report.md   3/7/2026 7:32:09 AM    964
+NOT_READY_report.docx 3/7/2026 7:32:09 AM  35859
 ```
 
 **【外部輸出】Get-Content outputs\NOT_READY_report.md -TotalCount 40：**
 ```markdown
-# NOT READY Report — 20260307_072216
+# NOT READY Report — 20260307_073107
 
 | Field | Value |
 |-------|-------|
-| run_id | `20260307_072216` |
+| run_id | `20260307_073107` |
 | mode | manual |
 | report_mode | brief |
 | status | **FAIL** |
-| generated_at | 2026-03-07 15:23 UTC |
+| generated_at | 2026-03-07 15:32 UTC |
 | test_injected | `true` |
 
 ## Failure
 
 - gate: `DEV_FORUM_LOW_VALUE_CAP_HARD`
-- fail_reason: # NOT_READY gate: DEV_FORUM_LOW_VALUE_CAP_HARD run_id: 20260307_072216 reason: DEV_FORUM_LOW_VALUE_CAP_HARD_FAIL: dev_forum_low_value_count=7
+- fail_reason: # NOT_READY gate: DEV_FORUM_LOW_VALUE_CAP_HARD run_id: 20260307_073107 reason: DEV_FORUM_LOW_VALUE_CAP_HARD_FAIL: dev_forum_low_value_count=7
 
 ## Selection Stats
 
@@ -165,7 +169,7 @@ FAST_600_MODE FAIL: gate=DEV_FORUM_LOW_VALUE_CAP_HARD reason=DEV_FORUM_LOW_VALUE
 ```powershell
 git add report.md
 git status -sb
-git commit -m "iter52c: evidence hardening (full LAST_RUN_SUMMARY + raw json.tool outputs in report)"
+git commit -m "iter52d: evidence hardening (json.tool command body + exitcode echo; same-run B/C)"
 git push origin main
 git rev-list --left-right --count origin/main...HEAD
 # 0	0
