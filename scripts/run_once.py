@@ -5710,8 +5710,8 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "", selec
         distinct_sources = len({r["source_domain"] for r in audit_rows})
         bigtech_count = sum(1 for r in audit_rows if r["bigtech_hit"])
         official_or_media_count = sum(1 for r in audit_rows if r["official_or_media"])
-        # iter40: dev_forum/code_release counts
-        dev_forum_count = sum(1 for r in audit_rows if r["source_type"] in ("dev_forum", "code_release", "social", "code"))
+        # iter49: narrowed to dev_forum only (code_release from bigtech is not dev noise)
+        dev_forum_count = sum(1 for r in audit_rows if r["source_type"] == "dev_forum")
         non_bigtech_dev_noise_count = sum(
             1 for r in audit_rows
             if r["source_type"] in ("dev_forum", "code_release", "social", "code") and not r["bigtech_hit"]
