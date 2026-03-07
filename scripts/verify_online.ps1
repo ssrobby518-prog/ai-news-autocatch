@@ -1787,9 +1787,9 @@ if ($_btGatesEnforce -and (Test-Path $_saMetaPath)) {
             Invoke-VerifyOnlineFailFast -Gate "BIGTECH_DOMINANCE_HARD" -Reason $_btFailReason
         }
         Write-Output "  => BIGTECH_DOMINANCE_HARD: PASS"
-        # iter41: DEV_NOISE_CAP_HARD: DAILY requires dev_forum_count=0
-        if ($_fast300Daily -and $_dfCount -gt 0) {
-            $_dnFailReason = ("DEV_NOISE_CAP_HARD_FAIL: dev_forum_count={0} (DAILY requires 0)" -f $_dfCount)
+        # iter50: DEV_NOISE_CAP_HARD: DAILY requires non_bigtech_dev_noise_count=0
+        if ($_fast300Daily -and $_dnCount -gt 0) {
+            $_dnFailReason = ("DEV_NOISE_CAP_HARD_FAIL: non_bigtech_dev_noise={0} (DAILY requires 0)" -f $_dnCount)
             Write-Output ("  => FAIL: {0}" -f $_dnFailReason)
             Invoke-VerifyOnlineFailFast -Gate "DEV_NOISE_CAP_HARD" -Reason $_dnFailReason
         } elseif ($_dnCount -gt 1) {

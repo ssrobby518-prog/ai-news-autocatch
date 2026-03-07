@@ -7083,23 +7083,17 @@ def _f600_run_fast_path(
         _non_df_backup = [
             it for it in _f6_tier(300)
             if it not in _selected
-            and _f6_src_type(it) not in ("dev_forum", "code_release", "social", "code")
+            and _f6_src_type(it) not in ("dev_forum",)
+            and not _f6_is_dev_noise(it)
         ]
         _non_df_backup.sort(key=_f6_sort_key, reverse=True)
-        # Pass 0: iter50: replace ALL code_release/social/code items (including bigtech)
-        #   DEV_NOISE_CAP_HARD counts all 4 types; replacement must match gate scope
-        #   Diversity-aware: skip replacement if it would drop distinct_sources < 3
+        # Pass 0: replace non-bigtech code_release/social/code items (dev noise)
+        #   iter50: bigtech code_release is NOT dev noise; only non-bigtech items are noise
         for _i in range(len(_selected)):
             _it = _selected[_i]
-            _st0 = _f6_src_type(_it)
-            if _st0 in ("code_release", "social", "code") and _non_df_backup:
-                _src_it = _f6_src(_it)
-                _other_srcs = {_f6_src(s) for j, s in enumerate(_selected) if j != _i}
-                if _src_it not in _other_srcs and len(_other_srcs) < 3:
-                    _log.info("FAST_600_MODE iter50: skipped %s idx=%d (would break diversity)", _st0, _i)
-                    continue
+            if _f6_is_dev_noise(_it) and _f6_src_type(_it) != "dev_forum" and _non_df_backup:
                 _repl = _non_df_backup.pop(0)
-                _log.info("FAST_600_MODE iter50: replaced %s idx=%d (bigtech=%s)", _st0, _i, _f6_is_bigtech(_it))
+                _log.info("FAST_600_MODE iter50: replaced dev_noise (%s) idx=%d", _f6_src_type(_it), _i)
                 _selected[_i] = _repl
         # Pass 1: replace all low_value dev_forum items
         for _i in range(len(_selected)):
@@ -7213,11 +7207,11 @@ def _f600_run_fast_path(
                 "BIGTECH_DOMINANCE_HARD",
                 f"BIGTECH_DOMINANCE_HARD_FAIL: bigtech_hit={_f6_bigtech} official_or_media={_f6_om}",
             )
-        # iter41: DAILY requires dev_forum_count=0 (zero tolerance)
-        if _is_daily and _f6_df_count > 0:
+        # iter50: DAILY requires non_bigtech_dev_noise_count=0 (zero tolerance)
+        if _is_daily and _f6_devnoise_count > 0:
             _write_not_ready_report_md(
                 "DEV_NOISE_CAP_HARD_FAIL",
-                f"dev_forum_count={_f6_df_count} > 0 (DAILY requires 0)",
+                f"non_bigtech_dev_noise={_f6_devnoise_count} > 0 (DAILY requires 0)",
                 run_id=_run_id, selected_items_count=len(_selected),
                 selected_sources_distinct=_f6_distinct,
                 bigtech_hit_count=_f6_bigtech,
@@ -7225,7 +7219,7 @@ def _f600_run_fast_path(
             )
             _f6_fail(
                 "DEV_NOISE_CAP_HARD",
-                f"DEV_NOISE_CAP_HARD_FAIL: dev_forum_count={_f6_df_count}",
+                f"DEV_NOISE_CAP_HARD_FAIL: non_bigtech_dev_noise={_f6_devnoise_count}",
             )
         elif _f6_devnoise_count > 1:
             _write_not_ready_report_md(
