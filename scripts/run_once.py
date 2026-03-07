@@ -14199,6 +14199,11 @@ if __name__ == "__main__":
             ]
             if int(os.environ.get("INJECT_DEV_FORUM_LOW_VALUE", "0")) > 0:
                 _nr2_lines.append("| test_injected | `true` |")
+            # iter56: stress mode fields
+            _nr2_stress = os.environ.get("STRESS_MODE_TRIGGERED", "0") == "1"
+            _nr2_lines.append(f"| stress_mode_triggered | `{str(_nr2_stress).lower()}` |")
+            _nr2_lines.append(f"| vram_ratio | {os.environ.get('STRESS_VRAM_RATIO', '0')} |")
+            _nr2_lines.append(f"| non_llama_gpu_proc_count | {os.environ.get('STRESS_NON_LLAMA_PROCS', '0')} |")
             _nr2_lines += ["",
                 "## Failure", "",
                 f"- gate: `{_gate_name}`",
@@ -14224,6 +14229,9 @@ if __name__ == "__main__":
             _nr2_lines += ["", "## Next Steps", "", f"- {_next_steps}"]
             if int(os.environ.get("INJECT_DEV_FORUM_LOW_VALUE", "0")) > 0:
                 _nr2_lines.append("- 本次為受控注入測試（test_injected=true），用於驗證 DEV_FORUM_LOW_VALUE_CAP_HARD 攔截。")
+            # iter56: VRAM busy next steps
+            if os.environ.get("STRESS_MODE_TRIGGERED", "0") == "1":
+                _nr2_lines.append("- VRAM busy detected -> STRESS_600_MODE activated, but tok/s still below threshold. Close GPU-heavy apps (game) or reduce settings.")
             _nr2_lines.append("")
             _nr2_path = _outputs / "NOT_READY_report.md"
             _nr2_path.write_text("\n".join(_nr2_lines), encoding="utf-8")

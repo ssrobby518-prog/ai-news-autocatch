@@ -37,6 +37,11 @@ $script:_z0InflightDrainCapSec = $null
 $script:_z0InflightCutoffApplied = $false
 $script:_z0WallClockCapSec = $null
 $script:_z0WallClockJitterEpsilon = 0.9
+# iter56: VRAM-busy stress mode tracking
+$script:_stressModeTriggered    = $false
+$script:_stressModeName         = "normal"
+$script:_vramRatio              = 0.0
+$script:_nonLlamaGpuProcCount   = 0
 
 # iter41: -Mode daily activates FAST_300_DAILY automatically
 if ($Mode -eq "daily") {
@@ -182,6 +187,11 @@ function Write-RunTimingMeta {
     if ($StageSec -and $StageSec.ContainsKey("before_translation")) {
         $meta["before_translation_seconds"] = [double]$StageSec["before_translation"]
     }
+    # iter56: stress mode fields
+    $meta["stress_mode_triggered"]      = [bool]$script:_stressModeTriggered
+    $meta["stress_mode_name"]           = [string]$script:_stressModeName
+    $meta["vram_ratio"]                 = [double]$script:_vramRatio
+    $meta["non_llama_gpu_proc_count"]   = [int]$script:_nonLlamaGpuProcCount
     # iter31: include stage_seconds if available
     if ($StageSec -and $StageSec.Count -gt 0) {
         $meta["stage_seconds"] = $StageSec
@@ -279,6 +289,10 @@ reason: $Reason
     $env:BRIEF_FORCE_QWEN_ONLY      = "1"
     $env:SKIP_DEEP_ANALYSIS         = "1"
     $env:SKIP_EDUCATION_RENDERER    = "1"
+    # iter56: pass stress mode info to run_once.py for NOT_READY_report.md
+    $env:STRESS_MODE_TRIGGERED      = if ($script:_stressModeTriggered) { "1" } else { "0" }
+    $env:STRESS_VRAM_RATIO          = [string]$script:_vramRatio
+    $env:STRESS_NON_LLAMA_PROCS     = [string]$script:_nonLlamaGpuProcCount
     try {
         & $_voPy (Join-Path $repoRoot "scripts\run_once.py") "--not-ready-report" 2>&1 |
             ForEach-Object { Write-Output "  [not-ready-report] $_" }
@@ -388,6 +402,8 @@ foreach ($_mrFile in @(
     "outputs\translation_engine.meta.json",
     "outputs\gpu_probe.meta.json",
     "outputs\gpu_probe_history.meta.json",
+    "outputs\gpu_load.meta.json",
+    "outputs\gpu_warmup.meta.json",
     "outputs\run_timing.meta.json",
     "outputs\LAST_RUN_SUMMARY.txt",
     "outputs\stage_timing.meta.json",
@@ -445,6 +461,121 @@ foreach ($_voPreClean in @(
         Write-Output ("  [PRE-CLEAN] 已刪除: {0}" -f $_voPreClean)
     }
 }
+
+# ---------------------------------------------------------------------------
+# iter56: VRAM-busy detection → auto STRESS_600_MODE
+#   Uses nvidia-smi to detect non-llama GPU consumers (games, IDE, etc.)
+#   If VRAM busy → override budget=600s, soft_target=300s (quality gates unchanged)
+# ---------------------------------------------------------------------------
+Write-Output "[VRAM_BUSY_DETECT] GPU 負載偵測..."
+$_vbOutputsDir = Join-Path $repoRoot "outputs"
+New-Item -ItemType Directory -Force -Path $_vbOutputsDir -ErrorAction SilentlyContinue | Out-Null
+$_vbVramUsedMb   = 0
+$_vbVramTotalMb  = 0
+$_vbVramRatio    = 0.0
+$_vbNonLlamaCount = 0
+$_vbTopProcs     = @()
+$_vbNvsmiOk      = $null -ne (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue)
+
+if ($_vbNvsmiOk) {
+    # Query total/used VRAM
+    try {
+        $_vbMemLines = & nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>&1
+        foreach ($_vbMemLine in $_vbMemLines) {
+            $_vbMemStr = [string]$_vbMemLine
+            if ($_vbMemStr -match '^\s*(\d+)\s*,\s*(\d+)') {
+                $_vbVramUsedMb  = [int]$Matches[1]
+                $_vbVramTotalMb = [int]$Matches[2]
+                if ($_vbVramTotalMb -gt 0) {
+                    $_vbVramRatio = [Math]::Round($_vbVramUsedMb / $_vbVramTotalMb, 4)
+                }
+                break
+            }
+        }
+    } catch {
+        Write-Output ("  [VRAM_BUSY_DETECT] nvidia-smi memory query failed: {0}" -f $_)
+    }
+
+    # Query compute apps
+    try {
+        $_vbAppLines = & nvidia-smi --query-compute-apps=pid,name,used_memory --format=csv,noheader,nounits 2>&1
+        $_vbProcIdx = 0
+        foreach ($_vbAppLine in $_vbAppLines) {
+            $_vbAppStr = [string]$_vbAppLine
+            if ($_vbAppStr -match '^\s*(\d+)\s*,\s*(.+?)\s*,\s*(.*)') {
+                $_vbPid  = [int]$Matches[1]
+                $_vbName = $Matches[2].Trim()
+                $_vbMem  = $Matches[3].Trim()
+                $_vbMemInt = 0
+                [int]::TryParse(($_vbMem -replace '[^\d]',''), [ref]$_vbMemInt) | Out-Null
+                # Exclude llama-server and python (our processes)
+                $_vbIsOurs = ($false)
+                if ($_vbName -match 'llama' -or $_vbName -match 'python') {
+                    $_vbIsOurs = $true
+                }
+                if (-not $_vbIsOurs) {
+                    $_vbNonLlamaCount++
+                }
+                if ($_vbProcIdx -lt 6) {
+                    $_vbTopProcs += @{ name=$_vbName; pid=$_vbPid; used_mb=$_vbMemInt }
+                    $_vbProcIdx++
+                }
+            }
+        }
+    } catch {
+        Write-Output ("  [VRAM_BUSY_DETECT] nvidia-smi compute-apps query failed: {0}" -f $_)
+    }
+} else {
+    Write-Output "  [VRAM_BUSY_DETECT] nvidia-smi not found — skip"
+}
+
+# Determine VRAM busy
+$_vbBusy = $false
+$_vbReason = "none"
+if ($_vbVramRatio -ge 0.80) {
+    $_vbBusy = $true
+    $_vbReason = "vram_ratio={0:F4}>0.80" -f $_vbVramRatio
+} elseif ($_vbVramTotalMb -gt 0 -and $_vbVramUsedMb -ge ($_vbVramTotalMb - 900)) {
+    $_vbBusy = $true
+    $_vbReason = "vram_used={0}MB>=total-900={1}MB" -f $_vbVramUsedMb, ($_vbVramTotalMb - 900)
+} elseif ($_vbNonLlamaCount -ge 1) {
+    $_vbBusy = $true
+    $_vbReason = "non_llama_gpu_proc_count={0}>=1" -f $_vbNonLlamaCount
+}
+
+# Write gpu_load.meta.json
+$_vbMeta = [ordered]@{
+    run_id                    = $_voRunId
+    vram_used_mb              = $_vbVramUsedMb
+    vram_total_mb             = $_vbVramTotalMb
+    vram_ratio                = $_vbVramRatio
+    non_llama_gpu_proc_count  = $_vbNonLlamaCount
+    top_processes             = @($_vbTopProcs)
+    stress_mode_triggered     = $_vbBusy
+    stress_reason             = $_vbReason
+    detected_at               = (Get-Date -Format "o")
+}
+$_vbMeta | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $_vbOutputsDir "gpu_load.meta.json") -Encoding UTF8
+Write-Output ("  vram={0}/{1}MB ratio={2:F4} non_llama_procs={3}" -f $_vbVramUsedMb, $_vbVramTotalMb, $_vbVramRatio, $_vbNonLlamaCount)
+
+# Store in script-level vars for Write-RunTimingMeta
+$script:_stressModeTriggered  = $_vbBusy
+$script:_vramRatio            = $_vbVramRatio
+$script:_nonLlamaGpuProcCount = $_vbNonLlamaCount
+
+if ($_vbBusy) {
+    $script:_stressModeName = "stress_600_vram_busy"
+    $_voBudgetSec     = 600
+    $_voSoftTargetSec = 300
+    $env:PIPELINE_TIME_BUDGET_SEC  = "600"
+    $env:PIPELINE_SOFT_TARGET_SEC  = "300"
+    $env:STRESS_600_MODE           = "1"
+    Write-Output ("  STRESS_600_MODE=1 (reason={0})" -f $_vbReason)
+    Write-Output ("  PIPELINE_TIME_BUDGET_SEC=600  PIPELINE_SOFT_TARGET_SEC=300")
+} else {
+    Write-Output "  VRAM_BUSY: false — normal mode"
+}
+Write-Output ""
 
 # ---------------------------------------------------------------------------
 # Step 0: Translation engine (Qwen) preflight — Iteration 19
@@ -728,6 +859,55 @@ if ($env:BRIEF_TRANSLATION_READY -ne "1") {
 }
 
 # ---------------------------------------------------------------------------
+# iter56: GPU warmup stabilization — 2 short completions to avoid cold-start jitter
+#   Runs BEFORE the official GPU_MODE_REQUIRED_HARD probe so the model is warm.
+#   Results are evidence-only; only the official probe result matters for PASS/FAIL.
+# ---------------------------------------------------------------------------
+Write-Output "[GPU_WARMUP] 穩定化推理 (2 次短 completion)..."
+$_gwOutputsDir = Join-Path $repoRoot "outputs"
+$_gwCompUrl    = "http://127.0.0.1:8080/v1/chat/completions"
+$_gwResults    = @()
+for ($_gwi = 1; $_gwi -le 2; $_gwi++) {
+    try {
+        $_gwPy = @"
+import json, time, urllib.request
+url='$_gwCompUrl'
+payload=json.dumps({"model":"qwen","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":40,"temperature":0,"stream":False})
+t0=time.time()
+req=urllib.request.Request(url, data=payload.encode('utf-8'), headers={"Content-Type":"application/json"})
+raw=urllib.request.urlopen(req, timeout=30).read()
+d=json.loads(raw)
+t=d.get("timings",{}) or {}
+pps=t.get("predicted_per_second",0) or 0
+el=time.time()-t0
+print(f"{pps:.1f}|{el:.2f}")
+"@
+        $_gwOut = $_gwPy | python - 2>&1
+        $_gwOutStr = [string]$_gwOut
+        if ($_gwOutStr -match '^([\d.]+)\|([\d.]+)') {
+            $_gwPps  = [double]$Matches[1]
+            $_gwWall = [double]$Matches[2]
+            $_gwResults += @{ run=$_gwi; predicted_per_second=$_gwPps; wall_sec=$_gwWall; ok=$true }
+            Write-Output ("  GPU_WARMUP_{0}: pps={1:F1} wall={2:F2}s" -f $_gwi, $_gwPps, $_gwWall)
+        } else {
+            $_gwResults += @{ run=$_gwi; predicted_per_second=0; wall_sec=0; ok=$false; error=$_gwOutStr }
+            Write-Output ("  GPU_WARMUP_{0}: parse error: {1}" -f $_gwi, $_gwOutStr)
+        }
+    } catch {
+        $_gwResults += @{ run=$_gwi; predicted_per_second=0; wall_sec=0; ok=$false; error=[string]$_ }
+        Write-Output ("  GPU_WARMUP_{0}: failed: {1}" -f $_gwi, $_)
+    }
+    Start-Sleep -Milliseconds 500
+}
+# Write gpu_warmup.meta.json
+[ordered]@{
+    run_id  = $_voRunId
+    warmups = @($_gwResults)
+    warmup_at = (Get-Date -Format "o")
+} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $_gwOutputsDir "gpu_warmup.meta.json") -Encoding UTF8
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # GPU_MODE_REQUIRED_HARD gate (iter34)
 # tok/s probe — 呼叫一次 llama-server completions 探針，計算 tok_per_sec_est。
 # 門檻：tok_per_sec_est >= 15（保守值）；低於門檻 = CPU 模式，立刻 FAIL-FAST。
@@ -807,8 +987,13 @@ if (-not $_gpuTokPass) {
     $_gpuHardReason = ("GPU_MODE_REQUIRED_HARD: tok_per_sec_est={0:F1} < {1} (CPU mode detected — GPU inference not active)" `
         -f $_gpuTokPerSec, $_gpuTokThreshold)
     Write-Output ("  => 失敗: {0}" -f $_gpuHardReason)
+    # iter56: append VRAM busy context to next steps
+    $_gpuNextSteps = "請用 GPU 參數啟動 llama-server（-ngl 999 或 --n-gpu-layers 999）並確認 tok_per_sec_est >= 15。参考: scripts\llama_server.ps1 已内建 --n-gpu-layers -1 啟動邏輯，CUDA build 路徑為 C:\llama_node\llama-b8123-bin-win-cuda-12.4-x64\llama-server.exe。"
+    if ($script:_stressModeTriggered) {
+        $_gpuNextSteps += "`nVRAM busy detected -> STRESS_600_MODE activated, but tok/s still below threshold. Close GPU-heavy apps (game) or reduce settings."
+    }
     Invoke-VerifyOnlineFailFast -Gate "GPU_MODE_REQUIRED_HARD" -Reason $_gpuHardReason `
-        -NextSteps "請用 GPU 參數啟動 llama-server（-ngl 999 或 --n-gpu-layers 999）並確認 tok_per_sec_est >= 15。参考: scripts\llama_server.ps1 已内建 --n-gpu-layers -1 啟動邏輯，CUDA build 路徑為 C:\llama_node\llama-b8123-bin-win-cuda-12.4-x64\llama-server.exe。"
+        -NextSteps $_gpuNextSteps
 }
 Write-Output ("  => GPU_MODE_REQUIRED_HARD：通過 (tok_per_sec_est={0:F1} >= {1})" -f $_gpuTokPerSec, $_gpuTokThreshold)
 $env:GPU_TOK_PER_SEC_EST = [string]$_gpuTokPerSec
@@ -4838,6 +5023,24 @@ if ($_pptxForbiddenFiles.Count -gt 0) {
         -Reason ("PPTX_FORBIDDEN_HARD: found {0} pptx files in outputs ({1})" -f $_pptxForbiddenFiles.Count, $_pptxForbiddenNames)
 }
 Write-Output "PPTX_FORBIDDEN_HARD: PASS (0 pptx files in outputs)"
+Write-Output ""
+
+# iter56: deliverable file listing evidence (success path)
+Write-Output "DELIVERABLE_FILES_EVIDENCE:"
+try {
+    $_dfeItems = Get-Item (Join-Path $repoRoot "outputs\latest_brief.md"), (Join-Path $repoRoot "outputs\executive_report.docx") -ErrorAction Stop
+    foreach ($_dfItem in $_dfeItems) {
+        Write-Output ("  {0}  LastWrite={1}  Length={2}" -f $_dfItem.Name, $_dfItem.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"), $_dfItem.Length)
+    }
+    $_dfeMd   = $_dfeItems | Where-Object { $_.Name -eq "latest_brief.md" }
+    $_dfeDocx = $_dfeItems | Where-Object { $_.Name -eq "executive_report.docx" }
+    if ($_dfeMd -and $_dfeDocx) {
+        $_dfeTsOk = ($_dfeDocx.LastWriteTime -ge $_dfeMd.LastWriteTime)
+        Write-Output ("  DOCX_TS_OK: (docx>=md)={0}" -f $_dfeTsOk.ToString().ToLower())
+    }
+} catch {
+    Write-Output ("  [WARN] deliverable listing failed: {0}" -f $_)
+}
 Write-Output ""
 
 if ($pool85Degraded) {
