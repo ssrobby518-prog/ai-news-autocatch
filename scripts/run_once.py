@@ -6900,10 +6900,10 @@ def _write_stage_timing_meta_f600(run_id: str, stg: dict) -> None:
         "translate":    _dur("translate_start",   "translate_end"),
         "build_docx":   _dur("build_docx_start",  "build_docx_end"),
     }
-    # iter38: include before_translation_seconds for guard evidence
+    # iter38: before_translation_seconds is a cumulative measure (NOT an additive stage)
+    # iter47: removed from _stage_secs to fix TIMING_SANITY_HARD double-count;
+    #         kept at payload top-level only (see below)
     _bt = stg.get("before_translation_seconds")
-    if _bt is not None:
-        _stage_secs["before_translation"] = round(float(_bt), 1)
     try:
         _p = Path(settings.PROJECT_ROOT) / "outputs" / "stage_timing.meta.json"
         _p.parent.mkdir(parents=True, exist_ok=True)
@@ -7049,7 +7049,30 @@ def _f600_run_fast_path(
 
     # --- iter46: dev_forum replacement loop ---
     # Replace dev_forum_low_value items; limit dev_forum_high_value to <=1 (only if needed)
-    _df_rejected_samples: list[dict] = []
+    _df_rejected_lv: list[dict] = []   # iter47: split by classified_value
+    _df_rejected_hv: list[dict] = []
+    def _df_mk_sample(it, reject_reason: str, decision_path: str) -> dict:
+        """Build a rejected-forum sample dict with classified_value + reject_reason."""
+        _dfv = _assess_dev_forum_value(it)
+        _eng = _get_item_engagement(it)
+        _eng_present = _eng.get("source", "none") != "none"
+        return {
+            "title": str(getattr(it, "title", "") or "")[:120],
+            "domain": str(getattr(it, "source_name", "") or ""),
+            "url": str(getattr(it, "url", "") or "")[:200],
+            "classified_value": _dfv,
+            "reject_reason": reject_reason if _eng_present else "missing_engagement",
+            "decision_path": decision_path if _eng_present else f"engagement source=none → classified as low → {reject_reason}",
+            "engagement": _eng if _eng_present else None,
+        }
+    def _df_append_sample(it, reject_reason: str, decision_path: str) -> None:
+        s = _df_mk_sample(it, reject_reason, decision_path)
+        if s["classified_value"] == "high":
+            if len(_df_rejected_hv) < 10:
+                _df_rejected_hv.append(s)
+        else:
+            if len(_df_rejected_lv) < 10:
+                _df_rejected_lv.append(s)
     if _is_daily or os.environ.get("BIGTECH_GATES_ENFORCE", "0") == "1":
         _non_df_backup = [
             it for it in _f6_tier(300)
@@ -7058,19 +7081,21 @@ def _f600_run_fast_path(
             and not _f6_is_dev_noise(it)
         ]
         _non_df_backup.sort(key=_f6_sort_key, reverse=True)
+        # Pass 0: replace any non-bigtech code_release/social/code items (counted as dev_noise by old gate)
+        for _i in range(len(_selected)):
+            _it = _selected[_i]
+            if _f6_is_dev_noise(_it) and _f6_src_type(_it) != "dev_forum" and _non_df_backup:
+                _repl = _non_df_backup.pop(0)
+                _log.info("FAST_600_MODE iter47: replaced dev_noise (%s) idx=%d", _f6_src_type(_it), _i)
+                _selected[_i] = _repl
         # Pass 1: replace all low_value dev_forum items
         for _i in range(len(_selected)):
             _it = _selected[_i]
             _dfv = _assess_dev_forum_value(_it)
             if _dfv == "low" and _non_df_backup:
                 _repl = _non_df_backup.pop(0)
-                _df_rejected_samples.append({
-                    "title": str(getattr(_it, "title", "") or "")[:120],
-                    "domain": str(getattr(_it, "source_name", "") or ""),
-                    "url": str(getattr(_it, "url", "") or "")[:200],
-                    "why_rejected": "dev_forum_low_value",
-                    "engagement": _get_item_engagement(_it),
-                })
+                _df_append_sample(_it, "low_value_cap",
+                    "classified_value=low → DAILY zero-tolerance → replaced by non-forum backup")
                 _selected[_i] = _repl
                 _log.info("FAST_600_MODE iter46: replaced dev_forum low_value idx=%d", _i)
         # Pass 2: if dev_forum_high_value > 1, or backup still available, replace excess
@@ -7079,13 +7104,8 @@ def _f600_run_fast_path(
             _worst_i = _hv_indices.pop()  # remove last (lowest priority)
             _it = _selected[_worst_i]
             _repl = _non_df_backup.pop(0)
-            _df_rejected_samples.append({
-                "title": str(getattr(_it, "title", "") or "")[:120],
-                "domain": str(getattr(_it, "source_name", "") or ""),
-                "url": str(getattr(_it, "url", "") or "")[:200],
-                "why_rejected": "dev_forum_high_value_replaced_by_better",
-                "engagement": _get_item_engagement(_it),
-            })
+            _df_append_sample(_it, "should_replace",
+                "classified_value=high but >1 high_value forums selected → replaced by non-forum backup")
             _selected[_worst_i] = _repl
             _log.info("FAST_600_MODE iter46: replaced excess dev_forum high_value idx=%d", _worst_i)
         # Pass 3: if 1 high_value remains, check if it could have been replaced (DEV_FORUM_SHOULD_HAVE_BEEN_REPLACED)
@@ -7095,13 +7115,8 @@ def _f600_run_fast_path(
             _worst_i = _hv_indices[0]
             _it = _selected[_worst_i]
             _repl = _non_df_backup.pop(0)
-            _df_rejected_samples.append({
-                "title": str(getattr(_it, "title", "") or "")[:120],
-                "domain": str(getattr(_it, "source_name", "") or ""),
-                "url": str(getattr(_it, "url", "") or "")[:200],
-                "why_rejected": "dev_forum_should_have_been_replaced",
-                "engagement": _get_item_engagement(_it),
-            })
+            _df_append_sample(_it, "should_replace",
+                "classified_value=high but non-forum backup available → replaced to maximize quality")
             _selected[_worst_i] = _repl
             _log.info("FAST_600_MODE iter46: replaced last high_value forum (backup available)")
 
@@ -7109,14 +7124,13 @@ def _f600_run_fast_path(
     for _rit in raw_items:
         if _rit in _selected:
             continue
-        if _assess_dev_forum_value(_rit) in ("low", "high") and len(_df_rejected_samples) < 10:
-            _df_rejected_samples.append({
-                "title": str(getattr(_rit, "title", "") or "")[:120],
-                "domain": str(getattr(_rit, "source_name", "") or ""),
-                "url": str(getattr(_rit, "url", "") or "")[:200],
-                "why_rejected": "dev_forum_not_selected",
-                "engagement": _get_item_engagement(_rit),
-            })
+        _rit_dfv = _assess_dev_forum_value(_rit)
+        if _rit_dfv == "low" and len(_df_rejected_lv) < 10:
+            _df_append_sample(_rit, "quota_full",
+                f"classified_value=low → not selected (bigtech/official quota filled first)")
+        elif _rit_dfv == "high" and len(_df_rejected_hv) < 10:
+            _df_append_sample(_rit, "quota_full",
+                f"classified_value=high → not selected (bigtech/official quota filled first)")
 
     _hydrated_ok_count = sum(1 for it in raw_items if int(getattr(it, "fulltext_len", 0) or 0) >= 300)
     _log.info(
@@ -7212,17 +7226,30 @@ def _f600_run_fast_path(
     # --- Step 3b2: iter46 DEV_FORUM_LOW_VALUE_CAP_HARD + DEV_FORUM_HIGH_VALUE_CAP_HARD ---
     _f6_df_lv_count = sum(1 for it in _selected if _assess_dev_forum_value(it) == "low")
     _f6_df_hv_count = sum(1 for it in _selected if _assess_dev_forum_value(it) == "high")
-    # Write dev_forum_audit.meta.json
+    # Write dev_forum_audit.meta.json — iter47: split buckets + classified_value + reject_reason
     try:
         import json as _dfa_j
         _dfa_path = Path(settings.PROJECT_ROOT) / "outputs" / "dev_forum_audit.meta.json"
         _dfa_path.parent.mkdir(parents=True, exist_ok=True)
+        _dfa_missing_eng = sum(1 for s in _df_rejected_lv + _df_rejected_hv if s.get("reject_reason") == "missing_engagement")
         _dfa_path.write_text(
             _dfa_j.dumps({
                 "run_id": _run_id,
                 "selected_dev_forum_low_value_count": _f6_df_lv_count,
                 "selected_dev_forum_high_value_count": _f6_df_hv_count,
-                "rejected_dev_forum_low_value_samples": _df_rejected_samples[:10],
+                "summary": {
+                    "rejected_low_value_count": len(_df_rejected_lv),
+                    "rejected_high_value_count": len(_df_rejected_hv),
+                    "rejected_missing_engagement_count": _dfa_missing_eng,
+                },
+                "rules_used": {
+                    "high_value_thresholds": "reply_count>=30 OR like_count>=80 OR view_count>=10000",
+                    "high_value_cve_exception": "title/body matches CVE|vulnerability|0-day|security advisory AND reply_count>=10",
+                    "low_value_definition": "dev_forum=true AND does not meet any high_value threshold",
+                    "missing_engagement": "engagement source=none (no data extracted) → treated as low_value",
+                },
+                "rejected_dev_forum_low_value_samples": _df_rejected_lv,
+                "rejected_dev_forum_high_value_samples": _df_rejected_hv,
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )

@@ -4332,14 +4332,17 @@ try {
         }
     }
     # TIMING_SANITY_HARD (iter36): total_seconds >= every stage_seconds (±5s tolerance)
+    # iter47: before_translation is cumulative (overlaps hydrate+z0), exclude from sum
+    $_tsExcludeFromSum = @("before_translation", "other_seconds")
     if ($_stgHt -and $_stgHt.Count -gt 0) {
         $_tsBadParts = @()
         foreach ($_sk in $_stgHt.Keys) {
+            if ($_sk -in $_tsExcludeFromSum) { continue }
             if ([double]$_stgHt[$_sk] -gt ($_sSecTot + 5)) {
                 $_tsBadParts += ("{0}={1}s > total={2}s" -f $_sk, [int]$_stgHt[$_sk], $_sSecTot)
             }
         }
-        $_tsSum = ($_stgHt.Values | Measure-Object -Sum).Sum
+        $_tsSum = ($($_stgHt.Keys | Where-Object { $_ -notin $_tsExcludeFromSum } | ForEach-Object { [double]$_stgHt[$_] }) | Measure-Object -Sum).Sum
         if ($_tsSum -gt ($_sSecTot + 5)) {
             $_tsBadParts += ("sum_stages={0}s > total={1}s" -f [int]$_tsSum, $_sSecTot)
         }
