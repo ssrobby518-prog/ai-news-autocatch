@@ -859,12 +859,15 @@ if (-not $SkipPipeline) {
         Write-Output "  [FAST_300_BENCH] z0_collect_online 已略過（使用快取 z0 資料）"
     } elseif (-not $_forceZ0Fail) {
         $_z0OnlineStart = $_voStopwatch.Elapsed.TotalSeconds
-        # iter41: FAST_300_DAILY — z0 soft/hard two-stage deadline
-        if ($_fast300Daily) {
+        # iter45: apply Z0 deadlines for any tight budget (<=200s), not just FAST_300_DAILY
+        #   manual mode with 200s budget also needs deadlines (Z0 alone can take 230s+)
+        $_z0UseDeadline = $_fast300Daily -or ($_voBudgetSec -le 200)
+        if ($_z0UseDeadline) {
             $script:_z0DeadlineSoftSec = 30
             $script:_z0DeadlineHardSec = 40
             $script:_z0StopReason = "unknown"
-            Write-Output ("  [FAST_300_DAILY] Z0 軟截止={0}s / 硬截止={1}s  z0_data_source=online" -f $script:_z0DeadlineSoftSec, $script:_z0DeadlineHardSec)
+            $_z0Label = if ($_fast300Daily) { "FAST_300_DAILY" } else { "Z0_DEADLINE" }
+            Write-Output ("  [{0}] Z0 軟截止={1}s / 硬截止={2}s  z0_data_source=online" -f $_z0Label, $script:_z0DeadlineSoftSec, $script:_z0DeadlineHardSec)
             $_z0Job = Start-Job -ScriptBlock {
                 param($scriptPath)
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath
@@ -879,7 +882,7 @@ if (-not $SkipPipeline) {
             } else {
                 # Soft deadline exceeded — wait for hard deadline
                 $_z0Remaining = $script:_z0DeadlineHardSec - $script:_z0DeadlineSoftSec
-                Write-Output ("  [FAST_300_DAILY] 軟截止已過（>{0}s），等待硬截止（再{1}s）" -f $script:_z0DeadlineSoftSec, $_z0Remaining)
+                Write-Output ("  [{0}] 軟截止已過（>{1}s），等待硬截止（再{2}s）" -f $_z0Label, $script:_z0DeadlineSoftSec, $_z0Remaining)
                 $_z0Done2 = Wait-Job -Job $_z0Job -Timeout $_z0Remaining
                 if ($_z0Done2) {
                     $script:_z0StopReason = "quota_met"
@@ -889,7 +892,7 @@ if (-not $SkipPipeline) {
                     $script:_z0StopReason = "hard_deadline"
                     # iter44: record when we stopped issuing new requests (= hard deadline elapsed)
                     $script:_z0StopNewRequestsAtSec = [Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart, 1)
-                    Write-Output ("  [FAST_300_DAILY] 硬截止到期（>{0}s），使用已有資料" -f $script:_z0DeadlineHardSec)
+                    Write-Output ("  [{0}] 硬截止到期（>{1}s），使用已有資料" -f $_z0Label, $script:_z0DeadlineHardSec)
                     Stop-Job -Job $_z0Job -ErrorAction SilentlyContinue
                 }
             }
@@ -897,8 +900,8 @@ if (-not $SkipPipeline) {
             # iter44: compute wallclock and inflight drain
             $script:_z0WallClockSec = [Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart, 1)
             $script:_z0InflightDrainedSec = [Math]::Round($script:_z0WallClockSec - $script:_z0StopNewRequestsAtSec, 1)
-            Write-Output ("  [FAST_300_DAILY] Z0 stop_reason={0}  z0_data_source=online" -f $script:_z0StopReason)
-            Write-Output ("  [FAST_300_DAILY] Z0 口徑：stop_new_requests_at={0:F1}s  inflight_drain={1:F1}s  wallclock={2:F1}s" -f $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec, $script:_z0WallClockSec)
+            Write-Output ("  [{0}] Z0 stop_reason={1}  z0_data_source=online" -f $_z0Label, $script:_z0StopReason)
+            Write-Output ("  [{0}] Z0 口徑：stop_new_requests_at={1:F1}s  inflight_drain={2:F1}s  wallclock={3:F1}s" -f $_z0Label, $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec, $script:_z0WallClockSec)
         } else {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
             if ($LASTEXITCODE -ne 0) {
