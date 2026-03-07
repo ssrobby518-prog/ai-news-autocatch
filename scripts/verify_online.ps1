@@ -23,8 +23,9 @@ $repoRoot = Split-Path $PSScriptRoot -Parent
 $_voRunId    = (Get-Date -Format "yyyyMMdd_HHmmss")
 $_startedAt  = Get-Date
 $_voStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 600 }  # iter33: reduced hard cap to 600s (soft-warn 480s below)
-$env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec   # propagate to run_once.py subprocess
+# iter57: track whether user explicitly set budget via env (before script overrides)
+$_voUserBudgetOverride = ($env:PIPELINE_TIME_BUDGET_SEC -and $env:PIPELINE_TIME_BUDGET_SEC -ne "")
+$_voBudgetSec = if ($_voUserBudgetOverride) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 600 }  # iter33: default outer cap 600s
 # iter41: z0 deadline vars (initialized here; set in z0 collect block for DAILY)
 $script:_z0DeadlineSoftSec = $null
 $script:_z0DeadlineHardSec = $null
@@ -53,7 +54,7 @@ $_fast300Daily = ($env:FAST_300_DAILY -eq "1")
 # iter39: FAST_300_MODE — hard cap 300s, auto-enables FAST_600_MODE
 $_fast300Mode = ($env:FAST_300_MODE -eq "1") -or $_fast300Daily
 if ($_fast300Daily) {
-    $_voBudgetSec = if ($env:PIPELINE_TIME_BUDGET_SEC) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 175 }
+    $_voBudgetSec = if ($_voUserBudgetOverride) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 175 }  # iter57: DAILY default 175s
     $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec
     $env:FAST_600_MODE = "1"
     $env:FAST_300_DAILY = "1"
@@ -64,6 +65,9 @@ if ($_fast300Daily) {
     $env:FAST_600_MODE = "1"
     Write-Output "FAST_300_MODE=1（硬上限=300s，自動啟用 FAST_600_MODE）"
 }
+
+# iter57: propagate budget to subprocess (after DAILY/FAST_300 overrides)
+$env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec
 
 # iter37: FAST_600_MODE — activated when budget<=600 OR FAST_600_MODE="1"
 # Disables card_build + DBE rebuild in run_once.py; runs direct hydration→digest→translate path.
