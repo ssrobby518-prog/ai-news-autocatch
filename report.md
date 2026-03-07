@@ -165,7 +165,9 @@ docx_sha256 = 8e656cde957c931801d3c6fb865e437989b33ea16af7c22336ed759fa3c142ae
 
 ```
 > git log --oneline -3
-(see below after push)
+d7a6271 iter59: evidence pack — normal/stress cross-proof with delivery meta archive
+b9e6c17 iter59: archive gpu_load + delivery_consistency + LAST_RUN_SUMMARY into delivery_dir for cross-proof
+7c428af iter58: update Section D with push evidence
 
 > git rev-list --left-right --count origin/main...HEAD
 0	0
