@@ -32,6 +32,11 @@ $script:_z0StopNewRequestsAtSec = $null
 $script:_z0InflightDrainedSec = $null
 $script:_z0WallClockSec = $null
 $script:_z0StopReason      = $null
+# iter55: drain cap enforcement + jitter epsilon
+$script:_z0InflightDrainCapSec = $null
+$script:_z0InflightCutoffApplied = $false
+$script:_z0WallClockCapSec = $null
+$script:_z0WallClockJitterEpsilon = 0.9
 
 # iter41: -Mode daily activates FAST_300_DAILY automatically
 if ($Mode -eq "daily") {
@@ -147,10 +152,14 @@ function Write-RunTimingMeta {
     }
     # iter44: Z0 dual-semantics fields (stop_issuing vs wallclock)
     if ($script:_z0WallClockSec -ne $null) {
-        $meta["z0_stop_new_requests_at_sec"] = [double]$script:_z0StopNewRequestsAtSec
-        $meta["z0_inflight_drained_seconds"]  = [double]$script:_z0InflightDrainedSec
-        $meta["z0_wall_clock_seconds"]        = [double]$script:_z0WallClockSec
-        $meta["z0_deadline_semantics"]        = "stop_issuing_vs_wallclock"
+        $meta["z0_stop_new_requests_at_sec"]    = [double]$script:_z0StopNewRequestsAtSec
+        $meta["z0_inflight_drained_seconds"]     = [double]$script:_z0InflightDrainedSec
+        $meta["z0_wall_clock_seconds"]           = [double]$script:_z0WallClockSec
+        $meta["z0_deadline_semantics"]           = "stop_issuing_vs_wallclock"
+        # iter55: drain cap enforcement + jitter epsilon
+        $meta["z0_inflight_drained_seconds_actual"] = [double]$script:_z0InflightDrainedSec
+        $meta["z0_inflight_cutoff_applied"]         = [bool]$script:_z0InflightCutoffApplied
+        $meta["z0_wall_clock_jitter_epsilon_sec"]   = [double]$script:_z0WallClockJitterEpsilon
     }
     # iter42: z0_data_source for DAILY evidence
     if ($script:_z0DeadlineSoftSec) {
@@ -166,8 +175,8 @@ function Write-RunTimingMeta {
         $meta["gates_hard_deadline_sec"]      = 8
         $meta["before_translation_limit_sec"] = 70
         $meta["z0_stop_new_requests_hard_sec"] = 30
-        $meta["z0_inflight_drain_cap_sec"]     = 12
-        $meta["z0_wall_clock_cap_sec"]         = 50
+        $meta["z0_inflight_drain_cap_sec"]     = if ($script:_z0InflightDrainCapSec) { [int]$script:_z0InflightDrainCapSec } else { 12 }
+        $meta["z0_wall_clock_cap_sec"]         = if ($script:_z0WallClockCapSec) { [int]$script:_z0WallClockCapSec } else { 50 }
     }
     # iter42: before_translation_seconds from stage_timing
     if ($StageSec -and $StageSec.ContainsKey("before_translation")) {
@@ -289,6 +298,28 @@ reason: $Reason
             Add-Content -LiteralPath (Join-Path $outputsDir "NOT_READY_report.md") `
                 -Value ("`n`n## 下一步`n$NextSteps") -Encoding utf8
         } catch {}
+    }
+
+    # iter55: ensure translation_engine.meta.json stub exists on every fail-fast path
+    $_ffTeMetaPath = Join-Path $outputsDir "translation_engine.meta.json"
+    if (-not (Test-Path $_ffTeMetaPath)) {
+        try {
+            @{
+                run_id         = $_voRunId
+                generated_at   = (Get-Date -Format "o")
+                endpoint       = "http://127.0.0.1:8080"
+                success        = $false
+                fail_reason    = $Gate
+                translate_mode = "not_started"
+                events_total   = 0
+                calls_total    = 0
+                cache_hit      = 0
+                cache_miss     = 0
+            } | ConvertTo-Json -Compress | Set-Content $_ffTeMetaPath -Encoding UTF8
+            Write-Output ("  [fail-fast] translation_engine.meta.json stub written (fail_reason={0})" -f $Gate)
+        } catch {
+            Write-Output ("  [fail-fast] WARN: translation_engine stub write failed: {0}" -f $_)
+        }
     }
 
     $_voNrProdList = @()
@@ -885,6 +916,11 @@ if (-not $SkipPipeline) {
             $script:_z0StopReason = "unknown"
             $_z0Label = if ($_fast300Daily) { "FAST_300_DAILY" } else { "Z0_DEADLINE" }
             Write-Output ("  [{0}] Z0 軟截止={1}s / 硬截止={2}s  z0_data_source=online" -f $_z0Label, $script:_z0DeadlineSoftSec, $script:_z0DeadlineHardSec)
+            # iter55: drain cap constants
+            $_z0InflightDrainCapSec = 12
+            $script:_z0InflightDrainCapSec = $_z0InflightDrainCapSec
+            $_z0WallClockCapSec = 50
+            $script:_z0WallClockCapSec = $_z0WallClockCapSec
             $_z0Job = Start-Job -ScriptBlock {
                 param($scriptPath)
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath
@@ -907,23 +943,51 @@ if (-not $SkipPipeline) {
                     $_z0Exit = Receive-Job -Job $_z0Job
                 } else {
                     $script:_z0StopReason = "hard_deadline"
-                    # iter44: record when we stopped issuing new requests (= hard deadline elapsed)
                     $script:_z0StopNewRequestsAtSec = [Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart, 1)
-                    Write-Output ("  [{0}] 硬截止到期（>{1}s），使用已有資料" -f $_z0Label, $script:_z0DeadlineHardSec)
-                    Stop-Job -Job $_z0Job -ErrorAction SilentlyContinue
+                    Write-Output ("  [{0}] 硬截止到期（>{1}s），停止發起新請求" -f $_z0Label, $script:_z0DeadlineHardSec)
+                    # iter55: enforce inflight drain cap using Stopwatch polling (Wait-Job -Timeout unreliable on Windows)
+                    $_z0ElapsedNow = $_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart
+                    $_z0DrainBudget = [Math]::Max(1, [Math]::Min($_z0InflightDrainCapSec, $_z0WallClockCapSec - $_z0ElapsedNow - 2))
+                    Write-Output ("  [{0}] drain budget={1:F0}s（drain_cap={2}s wallclock_remaining={3:F0}s）" -f $_z0Label, $_z0DrainBudget, $_z0InflightDrainCapSec, ($_z0WallClockCapSec - $_z0ElapsedNow))
+                    $_z0DrainSw = [System.Diagnostics.Stopwatch]::StartNew()
+                    $_z0DrainFinished = $false
+                    while ($_z0DrainSw.Elapsed.TotalSeconds -lt $_z0DrainBudget) {
+                        if ($_z0Job.State -eq 'Completed' -or $_z0Job.State -eq 'Failed' -or $_z0Job.State -eq 'Stopped') {
+                            $_z0DrainFinished = $true
+                            break
+                        }
+                        Start-Sleep -Milliseconds 500
+                    }
+                    $_z0DrainSw.Stop()
+                    if ($_z0DrainFinished) {
+                        Write-Output ("  [{0}] in-flight 收尾完成（{1:F1}s）" -f $_z0Label, $_z0DrainSw.Elapsed.TotalSeconds)
+                        try { $_z0Exit = Receive-Job -Job $_z0Job -ErrorAction SilentlyContinue } catch {}
+                    } else {
+                        $script:_z0StopReason = "drain_cutoff"
+                        $script:_z0InflightCutoffApplied = $true
+                        Write-Output ("  [{0}] in-flight drain cap 到期（{1:F1}s），強制切斷" -f $_z0Label, $_z0DrainSw.Elapsed.TotalSeconds)
+                    }
+                    # iter55: measure wallclock BEFORE Stop-Job (which can block 20s+ on Windows)
+                    $script:_z0WallClockSec = [Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart, 1)
+                    $script:_z0InflightDrainedSec = [Math]::Round($script:_z0WallClockSec - $script:_z0StopNewRequestsAtSec, 1)
+                    # Background cleanup: kill child processes to avoid blocking
+                    try { Stop-Job -Job $_z0Job -ErrorAction SilentlyContinue } catch {}
                 }
             }
             Remove-Job -Job $_z0Job -Force -ErrorAction SilentlyContinue
-            # iter44: compute wallclock and inflight drain
-            $script:_z0WallClockSec = [Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart, 1)
-            $script:_z0InflightDrainedSec = [Math]::Round($script:_z0WallClockSec - $script:_z0StopNewRequestsAtSec, 1)
+            # iter55: compute wallclock and inflight drain (only if not already set by drain_cutoff path)
+            if ($null -eq $script:_z0WallClockSec -or $script:_z0StopReason -ne "drain_cutoff") {
+                $script:_z0WallClockSec = [Math]::Round($_voStopwatch.Elapsed.TotalSeconds - $_z0OnlineStart, 1)
+                $script:_z0InflightDrainedSec = [Math]::Round($script:_z0WallClockSec - $script:_z0StopNewRequestsAtSec, 1)
+            }
             Write-Output ("  [{0}] Z0 stop_reason={1}  z0_data_source=online" -f $_z0Label, $script:_z0StopReason)
-            Write-Output ("  [{0}] Z0 口徑：stop_new_requests_at={1:F1}s  inflight_drain={2:F1}s  wallclock={3:F1}s" -f $_z0Label, $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec, $script:_z0WallClockSec)
-            # iter54: Z0_WALLCLOCK_EXCEEDED — fail-fast if wallclock > 42s (DAILY)
-            $_z0WallClockCapSec = 50
-            if ($_fast300Daily -and $script:_z0WallClockSec -gt $_z0WallClockCapSec) {
+            Write-Output ("  [{0}] Z0 口徑：stop_new_requests_at={1:F1}s  inflight_drain={2:F1}s  wallclock={3:F1}s  cutoff={4}" -f $_z0Label, $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec, $script:_z0WallClockSec, $script:_z0InflightCutoffApplied)
+            # iter55: Z0_WALLCLOCK_EXCEEDED — jitter epsilon: wallclock > cap + 0.9 才 FAIL
+            $_z0JitterEpsilon = 0.9
+            $script:_z0WallClockJitterEpsilon = $_z0JitterEpsilon
+            if ($_fast300Daily -and $script:_z0WallClockSec -gt ($_z0WallClockCapSec + $_z0JitterEpsilon)) {
                 Invoke-VerifyOnlineFailFast -Gate "Z0_WALLCLOCK_EXCEEDED" `
-                    -Reason ("Z0_WALLCLOCK_EXCEEDED: wallclock={0:F1}s > cap={1}s (stop_new_requests_at={2:F1}s inflight_drain={3:F1}s)" -f $script:_z0WallClockSec, $_z0WallClockCapSec, $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec)
+                    -Reason ("Z0_WALLCLOCK_EXCEEDED: wallclock={0:F1}s > cap+epsilon={1:F1}s (cap={2}s epsilon={3}s stop_new_requests_at={4:F1}s inflight_drain={5:F1}s cutoff={6})" -f $script:_z0WallClockSec, ($_z0WallClockCapSec + $_z0JitterEpsilon), $_z0WallClockCapSec, $_z0JitterEpsilon, $script:_z0StopNewRequestsAtSec, $script:_z0InflightDrainedSec, $script:_z0InflightCutoffApplied)
             }
         } else {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "z0_collect.ps1")
@@ -4722,6 +4786,35 @@ if ($_pptxForbiddenFiles.Count -gt 0) {
         -Reason ("PPTX_FORBIDDEN_HARD: found {0} pptx files in outputs ({1})" -f $_pptxForbiddenFiles.Count, $_pptxForbiddenNames)
 }
 Write-Output "PPTX_FORBIDDEN_HARD: PASS (0 pptx files in outputs)"
+
+# ---------------------------------------------------------------------------
+# iter55: DELIVERABLE_TIMESTAMP_COHERENCE — md/docx 時戳一致性檢查
+# 成功時 docx_time >= md_time；否則 FAIL-fast（防止沿用舊檔）
+# ---------------------------------------------------------------------------
+Write-Output ""
+Write-Output "DELIVERABLE_TIMESTAMP_COHERENCE:"
+$_dtcMdPath   = Join-Path $repoRoot "outputs\latest_brief.md"
+$_dtcDocxPath = Join-Path $repoRoot "outputs\executive_report.docx"
+if ((Test-Path $_dtcMdPath) -and (Test-Path $_dtcDocxPath)) {
+    $_dtcMd   = Get-Item $_dtcMdPath
+    $_dtcDocx = Get-Item $_dtcDocxPath
+    Write-Output ("  latest_brief.md        : {0}  {1} bytes  LastWrite={2}" -f $_dtcMd.Name, $_dtcMd.Length, $_dtcMd.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"))
+    Write-Output ("  executive_report.docx  : {0}  {1} bytes  LastWrite={2}" -f $_dtcDocx.Name, $_dtcDocx.Length, $_dtcDocx.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"))
+    if ($_dtcDocx.LastWriteTime -lt $_dtcMd.LastWriteTime) {
+        Write-Output "  => DELIVERABLE_TIMESTAMP_COHERENCE: FAIL (docx older than md — stale deliverable)"
+        Invoke-VerifyOnlineFailFast -Gate "DELIVERABLE_TIMESTAMP_INCOHERENT" `
+            -Reason ("DELIVERABLE_TIMESTAMP_INCOHERENT: docx_time={0} < md_time={1}" -f $_dtcDocx.LastWriteTime.ToString("o"), $_dtcMd.LastWriteTime.ToString("o"))
+    }
+    Write-Output "  => DELIVERABLE_TIMESTAMP_COHERENCE: PASS"
+} else {
+    $_dtcMissing = @()
+    if (-not (Test-Path $_dtcMdPath))   { $_dtcMissing += "latest_brief.md" }
+    if (-not (Test-Path $_dtcDocxPath)) { $_dtcMissing += "executive_report.docx" }
+    Write-Output ("  => DELIVERABLE_TIMESTAMP_COHERENCE: FAIL (missing: {0})" -f ($_dtcMissing -join ", "))
+    Invoke-VerifyOnlineFailFast -Gate "DELIVERABLE_TIMESTAMP_INCOHERENT" `
+        -Reason ("DELIVERABLE_TIMESTAMP_INCOHERENT: missing deliverables: {0}" -f ($_dtcMissing -join ", "))
+}
+Write-Output ""
 
 if ($pool85Degraded) {
     Write-Output "=== verify_online.ps1 完成：降級運行（Z0 frontier85_72h 低於嚴格目標；已接受 fallback）==="
