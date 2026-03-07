@@ -4373,6 +4373,35 @@ if ($_voSoftTargetSec -gt 0) {
 }
 
 # ---------------------------------------------------------------------------
+# iter55: DELIVERABLE_TIMESTAMP_COHERENCE — md/docx 時戳一致性檢查
+# 必須在 Append-TimingFooterToMd 之前（footer 會更新 md 時戳）
+# ---------------------------------------------------------------------------
+Write-Output ""
+Write-Output "DELIVERABLE_TIMESTAMP_COHERENCE:"
+$_dtcMdPath   = Join-Path $repoRoot "outputs\latest_brief.md"
+$_dtcDocxPath = Join-Path $repoRoot "outputs\executive_report.docx"
+if ((Test-Path $_dtcMdPath) -and (Test-Path $_dtcDocxPath)) {
+    $_dtcMd   = Get-Item $_dtcMdPath
+    $_dtcDocx = Get-Item $_dtcDocxPath
+    Write-Output ("  latest_brief.md        : {0}  {1} bytes  LastWrite={2}" -f $_dtcMd.Name, $_dtcMd.Length, $_dtcMd.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"))
+    Write-Output ("  executive_report.docx  : {0}  {1} bytes  LastWrite={2}" -f $_dtcDocx.Name, $_dtcDocx.Length, $_dtcDocx.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"))
+    if ($_dtcDocx.LastWriteTime -lt $_dtcMd.LastWriteTime) {
+        Write-Output "  => DELIVERABLE_TIMESTAMP_COHERENCE: FAIL (docx older than md — stale deliverable)"
+        Invoke-VerifyOnlineFailFast -Gate "DELIVERABLE_TIMESTAMP_INCOHERENT" `
+            -Reason ("DELIVERABLE_TIMESTAMP_INCOHERENT: docx_time={0} < md_time={1}" -f $_dtcDocx.LastWriteTime.ToString("o"), $_dtcMd.LastWriteTime.ToString("o"))
+    }
+    Write-Output "  => DELIVERABLE_TIMESTAMP_COHERENCE: PASS"
+} else {
+    $_dtcMissing = @()
+    if (-not (Test-Path $_dtcMdPath))   { $_dtcMissing += "latest_brief.md" }
+    if (-not (Test-Path $_dtcDocxPath)) { $_dtcMissing += "executive_report.docx" }
+    Write-Output ("  => DELIVERABLE_TIMESTAMP_COHERENCE: FAIL (missing: {0})" -f ($_dtcMissing -join ", "))
+    Invoke-VerifyOnlineFailFast -Gate "DELIVERABLE_TIMESTAMP_INCOHERENT" `
+        -Reason ("DELIVERABLE_TIMESTAMP_INCOHERENT: missing deliverables: {0}" -f ($_dtcMissing -join ", "))
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # iter29/31: 計時 — 成功路徑寫 timing meta + 追加 brief 末尾附錄（含分段耗時）
 # ---------------------------------------------------------------------------
 try {
@@ -4786,34 +4815,6 @@ if ($_pptxForbiddenFiles.Count -gt 0) {
         -Reason ("PPTX_FORBIDDEN_HARD: found {0} pptx files in outputs ({1})" -f $_pptxForbiddenFiles.Count, $_pptxForbiddenNames)
 }
 Write-Output "PPTX_FORBIDDEN_HARD: PASS (0 pptx files in outputs)"
-
-# ---------------------------------------------------------------------------
-# iter55: DELIVERABLE_TIMESTAMP_COHERENCE — md/docx 時戳一致性檢查
-# 成功時 docx_time >= md_time；否則 FAIL-fast（防止沿用舊檔）
-# ---------------------------------------------------------------------------
-Write-Output ""
-Write-Output "DELIVERABLE_TIMESTAMP_COHERENCE:"
-$_dtcMdPath   = Join-Path $repoRoot "outputs\latest_brief.md"
-$_dtcDocxPath = Join-Path $repoRoot "outputs\executive_report.docx"
-if ((Test-Path $_dtcMdPath) -and (Test-Path $_dtcDocxPath)) {
-    $_dtcMd   = Get-Item $_dtcMdPath
-    $_dtcDocx = Get-Item $_dtcDocxPath
-    Write-Output ("  latest_brief.md        : {0}  {1} bytes  LastWrite={2}" -f $_dtcMd.Name, $_dtcMd.Length, $_dtcMd.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"))
-    Write-Output ("  executive_report.docx  : {0}  {1} bytes  LastWrite={2}" -f $_dtcDocx.Name, $_dtcDocx.Length, $_dtcDocx.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"))
-    if ($_dtcDocx.LastWriteTime -lt $_dtcMd.LastWriteTime) {
-        Write-Output "  => DELIVERABLE_TIMESTAMP_COHERENCE: FAIL (docx older than md — stale deliverable)"
-        Invoke-VerifyOnlineFailFast -Gate "DELIVERABLE_TIMESTAMP_INCOHERENT" `
-            -Reason ("DELIVERABLE_TIMESTAMP_INCOHERENT: docx_time={0} < md_time={1}" -f $_dtcDocx.LastWriteTime.ToString("o"), $_dtcMd.LastWriteTime.ToString("o"))
-    }
-    Write-Output "  => DELIVERABLE_TIMESTAMP_COHERENCE: PASS"
-} else {
-    $_dtcMissing = @()
-    if (-not (Test-Path $_dtcMdPath))   { $_dtcMissing += "latest_brief.md" }
-    if (-not (Test-Path $_dtcDocxPath)) { $_dtcMissing += "executive_report.docx" }
-    Write-Output ("  => DELIVERABLE_TIMESTAMP_COHERENCE: FAIL (missing: {0})" -f ($_dtcMissing -join ", "))
-    Invoke-VerifyOnlineFailFast -Gate "DELIVERABLE_TIMESTAMP_INCOHERENT" `
-        -Reason ("DELIVERABLE_TIMESTAMP_INCOHERENT: missing deliverables: {0}" -f ($_dtcMissing -join ", "))
-}
 Write-Output ""
 
 if ($pool85Degraded) {
