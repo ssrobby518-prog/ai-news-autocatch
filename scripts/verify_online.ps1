@@ -389,6 +389,12 @@ if (Test-Path $_dfaPreCleanPath) {
 } else {
     Write-Output "  [PRE-CLEAN] dev_forum_audit.meta.json 不存在略過"
 }
+# iter53: PRE-CLEAN bigtech_diversity.meta.json
+$_bdmPreCleanPath = Join-Path $repoRoot "outputs\bigtech_diversity.meta.json"
+if (Test-Path $_bdmPreCleanPath) {
+    Remove-Item -LiteralPath $_bdmPreCleanPath -Force -ErrorAction SilentlyContinue
+    Write-Output "  [PRE-CLEAN] 已刪除 bigtech_diversity.meta.json"
+}
 Write-Output "[PRE-CLEAN] 清除舊的 notion/xmind/deep_analysis 殘留產物..."
 foreach ($_voPreClean in @(
     "outputs\notion_page.md",
@@ -4610,6 +4616,43 @@ if (Test-Path $_dfaJsonPath) {
     Write-Output "DEV_FORUM_AUDIT_JSON_VALID_HARD: FAIL — file not found"
     Invoke-VerifyOnlineFailFast -Gate "DEV_FORUM_AUDIT_JSON_VALID_HARD" `
         -Reason "DEV_FORUM_AUDIT_JSON_INVALID: dev_forum_audit.meta.json missing"
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter53: BIGTECH_DIVERSITY_HARD_DAILY — enforce multi-source + multi-vendor
+#   Reads selection_audit.meta.json for diversity fields
+#   Enforced when FAST_300_DAILY=1
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_divMetaPath = Join-Path $repoRoot "outputs\selection_audit.meta.json"
+    Write-Output ""
+    Write-Output "BIGTECH_DIVERSITY_HARD_DAILY:"
+    if (Test-Path $_divMetaPath) {
+        try {
+            $_divMeta = Get-Content $_divMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_divDomains = if ($_divMeta.PSObject.Properties['selected_domains_distinct']) { [int]$_divMeta.selected_domains_distinct } else { 0 }
+            $_divVendors = if ($_divMeta.PSObject.Properties['selected_vendors_distinct']) { [int]$_divMeta.selected_vendors_distinct } else { 0 }
+            $_divMaxDom  = if ($_divMeta.PSObject.Properties['max_domain_count']) { [int]$_divMeta.max_domain_count } else { 99 }
+            $_divMaxVen  = if ($_divMeta.PSObject.Properties['max_vendor_count']) { [int]$_divMeta.max_vendor_count } else { 99 }
+            $_divPass    = if ($_divMeta.PSObject.Properties['diversity_pass']) { $_divMeta.diversity_pass } else { $false }
+            Write-Output ("  selected_domains_distinct : {0}" -f $_divDomains)
+            Write-Output ("  selected_vendors_distinct : {0}" -f $_divVendors)
+            Write-Output ("  max_domain_count          : {0}" -f $_divMaxDom)
+            Write-Output ("  max_vendor_count          : {0}" -f $_divMaxVen)
+            Write-Output ("  diversity_pass            : {0}" -f $_divPass)
+            if ($_divDomains -lt 4 -or $_divMaxDom -gt 2 -or $_divVendors -lt 4 -or $_divMaxVen -gt 3) {
+                $_divFail = ("BIGTECH_DIVERSITY_HARD_DAILY_FAIL: domains={0} max_domain={1} vendors={2} max_vendor={3}" -f $_divDomains, $_divMaxDom, $_divVendors, $_divMaxVen)
+                Write-Output ("  => FAIL: {0}" -f $_divFail)
+                Invoke-VerifyOnlineFailFast -Gate "BIGTECH_DIVERSITY_HARD_DAILY" -Reason $_divFail
+            }
+            Write-Output "  => BIGTECH_DIVERSITY_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  BIGTECH_DIVERSITY_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  BIGTECH_DIVERSITY_HARD_DAILY: WARN (selection_audit.meta.json not found — pipeline may not have written diversity fields)"
+    }
 }
 Write-Output ""
 

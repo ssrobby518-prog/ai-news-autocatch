@@ -6967,6 +6967,70 @@ def _f600_run_fast_path(
     def _f6_src(it) -> str:
         return str(getattr(it, "source_name", "") or "").strip().lower()
 
+    def _f6_domain_key(it) -> str:
+        """Extract domain netloc from item url for diversity enforcement."""
+        _u = str(getattr(it, "url", "") or getattr(it, "link", "") or "")
+        try:
+            from urllib.parse import urlparse as _dk_up
+            _nl = _dk_up(_u).netloc.lower().lstrip("www.")
+            return _nl if _nl else _f6_src(it)
+        except Exception:
+            return _f6_src(it)
+
+    _VENDOR_DOMAIN_MAP = {
+        "blog.google": "Google", "ai.google": "Google", "research.google": "Google",
+        "blog.research.google": "Google", "deepmind.google": "Google",
+        "cloud.google.com": "Google", "developers.googleblog.com": "Google",
+        "openai.com": "OpenAI", "blog.openai.com": "OpenAI",
+        "anthropic.com": "Anthropic", "docs.anthropic.com": "Anthropic",
+        "developer.nvidia.com": "NVIDIA", "blogs.nvidia.com": "NVIDIA", "nvidianews.nvidia.com": "NVIDIA",
+        "aws.amazon.com": "Amazon", "aboutamazon.com": "Amazon",
+        "azure.microsoft.com": "Microsoft", "blogs.microsoft.com": "Microsoft", "microsoft.com": "Microsoft",
+        "ai.meta.com": "Meta", "engineering.fb.com": "Meta", "about.fb.com": "Meta",
+        "machinelearning.apple.com": "Apple", "apple.com": "Apple",
+        "github.com": "Microsoft",
+        "deepseek.com": "DeepSeek", "api-docs.deepseek.com": "DeepSeek",
+        "qwenlm.github.io": "Alibaba", "huggingface.co": "HuggingFace",
+        "discuss.huggingface.co": "HuggingFace",
+        "stability.ai": "StabilityAI", "runwayml.com": "Runway",
+    }
+    _VENDOR_TITLE_KW = [
+        (re.compile(r"\b(?:Google|DeepMind|Gemini)\b", re.I), "Google"),
+        (re.compile(r"\bOpenAI\b", re.I), "OpenAI"),
+        (re.compile(r"\bAnthropic\b", re.I), "Anthropic"),
+        (re.compile(r"\bNVIDIA\b", re.I), "NVIDIA"),
+        (re.compile(r"\b(?:Amazon|AWS)\b", re.I), "Amazon"),
+        (re.compile(r"\bMicrosoft\b", re.I), "Microsoft"),
+        (re.compile(r"\bMeta\b", re.I), "Meta"),
+        (re.compile(r"\bApple\b", re.I), "Apple"),
+        (re.compile(r"\b(?:Alibaba|Qwen)\b", re.I), "Alibaba"),
+        (re.compile(r"\bDeepSeek\b", re.I), "DeepSeek"),
+        (re.compile(r"\bxAI\b", re.I), "xAI"),
+        (re.compile(r"\bMistral\b", re.I), "Mistral"),
+        (re.compile(r"\bSamsung\b", re.I), "Samsung"),
+        (re.compile(r"\b(?:Baidu|Ernie)\b", re.I), "Baidu"),
+        (re.compile(r"\bTesla\b", re.I), "Tesla"),
+        (re.compile(r"\bIntel\b", re.I), "Intel"),
+    ]
+
+    def _f6_vendor_key(it) -> str:
+        """Map item to vendor name for diversity enforcement."""
+        _dk = _f6_domain_key(it)
+        # Domain map lookup (try exact, then parent)
+        if _dk in _VENDOR_DOMAIN_MAP:
+            return _VENDOR_DOMAIN_MAP[_dk]
+        _parts = _dk.split(".")
+        for i in range(len(_parts) - 1):
+            _parent = ".".join(_parts[i:])
+            if _parent in _VENDOR_DOMAIN_MAP:
+                return _VENDOR_DOMAIN_MAP[_parent]
+        # Title/source keyword fallback
+        _combined = _f6_title(it) + " " + _f6_src(it)
+        for _rx, _vname in _VENDOR_TITLE_KW:
+            if _rx.search(_combined):
+                return _vname
+        return "other"
+
     def _f6_title(it) -> str:
         return str(getattr(it, "title", "") or "")
 
@@ -7009,23 +7073,43 @@ def _f600_run_fast_path(
     _other_pool = [it for it in _f6_tier(300) if it not in _bt_pool and it not in _om_pool and not _f6_is_dev_noise(it)]
     _devnoise_pool = [it for it in _f6_tier(300) if _f6_is_dev_noise(it)]
 
+    # iter53: domain/vendor quota-aware selection
+    _DIV_MAX_DOMAIN = 2
+    _DIV_MAX_VENDOR = 3
+    _DIV_MIN_DOMAINS = 4
+    _DIV_MIN_VENDORS = 4
+    from collections import Counter as _DivCounter
+
+    def _div_can_add(it, sel_list):
+        """Check if adding it to sel_list would violate domain/vendor caps."""
+        _dk = _f6_domain_key(it)
+        _vk = _f6_vendor_key(it)
+        _d_counts = _DivCounter(_f6_domain_key(s) for s in sel_list)
+        _v_counts = _DivCounter(_f6_vendor_key(s) for s in sel_list)
+        return _d_counts[_dk] < _DIV_MAX_DOMAIN and _v_counts[_vk] < _DIV_MAX_VENDOR
+
     _selected: list = []
-    # First: bigtech items (up to 7)
-    _selected += _bt_pool[:_max_events]
-    # Then: official/media non-bigtech
-    if len(_selected) < _max_events:
-        for it in _om_pool:
-            if it not in _selected:
+    # Greedy fill from prioritized pools, respecting domain/vendor caps
+    for _pool in [_bt_pool, _om_pool, _other_pool]:
+        if len(_selected) >= _max_events:
+            break
+        for it in _pool:
+            if it in _selected:
+                continue
+            if _div_can_add(it, _selected):
                 _selected.append(it)
                 if len(_selected) >= _max_events:
                     break
-    # Then: other non-dev-noise
+    # Fallback pass: if under 7, relax caps (still honor existing bigtech/noise rules)
     if len(_selected) < _max_events:
-        for it in _other_pool:
-            if it not in _selected:
-                _selected.append(it)
-                if len(_selected) >= _max_events:
-                    break
+        for _pool in [_bt_pool, _om_pool, _other_pool]:
+            for it in _pool:
+                if it not in _selected:
+                    _selected.append(it)
+                    if len(_selected) >= _max_events:
+                        break
+            if len(_selected) >= _max_events:
+                break
     # Last resort: dev noise (DAILY: never; non-daily: max 1)
     if not _is_daily and len(_selected) < _max_events and _devnoise_pool:
         _selected.append(_devnoise_pool[0])
@@ -7052,6 +7136,78 @@ def _f600_run_fast_path(
             _f6_src_counts = _F6Counter(_f6_src(it) for it in _selected)
             _f6_majority_src = _f6_src_counts.most_common(1)[0][0] if _f6_src_counts else ""
         _log.info("FAST_600_MODE: diversity swap → distinct_sources=%d", len(_f6_srcs))
+
+    # --- iter53: domain/vendor diversity enforcement loop ---
+    _div_rejected_domain: list[dict] = []
+    _div_rejected_vendor: list[dict] = []
+    if _is_daily and len(_selected) >= _max_events:
+        _div_backup = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)]
+        _div_backup.sort(key=lambda it: (int(getattr(it, "fulltext_len", 0) or 0), _f6_bfp(it)), reverse=True)
+        for _div_round in range(30):
+            _d_counts = _DivCounter(_f6_domain_key(s) for s in _selected)
+            _v_counts = _DivCounter(_f6_vendor_key(s) for s in _selected)
+            _max_dc = _d_counts.most_common(1)[0][1] if _d_counts else 0
+            _max_vc = _v_counts.most_common(1)[0][1] if _v_counts else 0
+            _dist_doms = len(_d_counts)
+            _dist_vens = len(set(_f6_vendor_key(s) for s in _selected) - {"other"})
+            if _max_dc <= _DIV_MAX_DOMAIN and _max_vc <= _DIV_MAX_VENDOR and _dist_doms >= _DIV_MIN_DOMAINS and _dist_vens >= _DIV_MIN_VENDORS:
+                break
+            if not _div_backup:
+                break
+            # Find most over-concentrated item to replace
+            _worst_it = None
+            _worst_idx = -1
+            if _max_dc > _DIV_MAX_DOMAIN:
+                _worst_dom = _d_counts.most_common(1)[0][0]
+                _dom_items = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _worst_dom]
+                if _dom_items:
+                    _worst_idx, _worst_it = min(_dom_items, key=lambda x: _f6_bfp(x[1]))
+            elif _max_vc > _DIV_MAX_VENDOR:
+                _worst_ven = _v_counts.most_common(1)[0][0]
+                _ven_items = [(i, s) for i, s in enumerate(_selected) if _f6_vendor_key(s) == _worst_ven]
+                if _ven_items:
+                    _worst_idx, _worst_it = min(_ven_items, key=lambda x: _f6_bfp(x[1]))
+            elif _dist_doms < _DIV_MIN_DOMAINS or _dist_vens < _DIV_MIN_VENDORS:
+                # Need more diversity: replace item from most-common domain/vendor
+                _worst_dom = _d_counts.most_common(1)[0][0]
+                _dom_items = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _worst_dom]
+                if len(_dom_items) > 1:
+                    _worst_idx, _worst_it = min(_dom_items, key=lambda x: _f6_bfp(x[1]))
+            if _worst_it is None or _worst_idx < 0:
+                break
+            # Find replacement that improves diversity
+            _repl_found = False
+            for _bi, _bcand in enumerate(_div_backup):
+                _cand_dk = _f6_domain_key(_bcand)
+                _cand_vk = _f6_vendor_key(_bcand)
+                # Must not worsen domain/vendor caps
+                _test_sel = [s for j, s in enumerate(_selected) if j != _worst_idx] + [_bcand]
+                _test_dc = _DivCounter(_f6_domain_key(s) for s in _test_sel)
+                _test_vc = _DivCounter(_f6_vendor_key(s) for s in _test_sel)
+                if _test_dc.most_common(1)[0][1] <= max(_DIV_MAX_DOMAIN, _max_dc) and _test_vc.most_common(1)[0][1] <= max(_DIV_MAX_VENDOR, _max_vc):
+                    _sample = {"title": str(getattr(_worst_it, "title", ""))[:120],
+                               "domain": _f6_domain_key(_worst_it), "vendor": _f6_vendor_key(_worst_it),
+                               "reason": "domain_cap" if _max_dc > _DIV_MAX_DOMAIN else ("vendor_cap" if _max_vc > _DIV_MAX_VENDOR else "diversity_increase")}
+                    if _max_dc > _DIV_MAX_DOMAIN:
+                        if len(_div_rejected_domain) < 10: _div_rejected_domain.append(_sample)
+                    else:
+                        if len(_div_rejected_vendor) < 10: _div_rejected_vendor.append(_sample)
+                    _selected[_worst_idx] = _bcand
+                    _div_backup.pop(_bi)
+                    _repl_found = True
+                    _log.info("FAST_600_MODE iter53: diversity swap round=%d replaced idx=%d (%s/%s) with (%s/%s)",
+                              _div_round, _worst_idx, _f6_domain_key(_worst_it), _f6_vendor_key(_worst_it),
+                              _cand_dk, _cand_vk)
+                    break
+            if not _repl_found:
+                break
+        # Log final diversity state
+        _final_dc = _DivCounter(_f6_domain_key(s) for s in _selected)
+        _final_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
+        _final_vset = set(_f6_vendor_key(s) for s in _selected) - {"other"}
+        _log.info("FAST_600_MODE iter53: diversity final domains=%d max_domain=%d vendors=%d max_vendor=%d",
+                  len(_final_dc), _final_dc.most_common(1)[0][1] if _final_dc else 0,
+                  len(_final_vset), _final_vc.most_common(1)[0][1] if _final_vc else 0)
 
     # --- iter46: dev_forum replacement loop ---
     # Replace dev_forum_low_value items; limit dev_forum_high_value to <=1 (only if needed)
@@ -7373,6 +7529,163 @@ def _f600_run_fast_path(
             _sa_path.write_text(_f6_j.dumps(_sa_data, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
+
+    # --- iter53: post-dedup diversity re-enforcement ---
+    if _is_daily and len(_selected) >= _max_events:
+        _div_backup2 = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)]
+        _div_backup2.sort(key=lambda it: (int(getattr(it, "fulltext_len", 0) or 0), _f6_bfp(it)), reverse=True)
+        for _div_round2 in range(30):
+            _d_counts2 = _DivCounter(_f6_domain_key(s) for s in _selected)
+            _v_counts2 = _DivCounter(_f6_vendor_key(s) for s in _selected)
+            _max_dc2 = _d_counts2.most_common(1)[0][1] if _d_counts2 else 0
+            _max_vc2 = _v_counts2.most_common(1)[0][1] if _v_counts2 else 0
+            _dist_doms2 = len(_d_counts2)
+            _dist_vens2 = len(set(_f6_vendor_key(s) for s in _selected) - {"other"})
+            if _max_dc2 <= _DIV_MAX_DOMAIN and _max_vc2 <= _DIV_MAX_VENDOR and _dist_doms2 >= _DIV_MIN_DOMAINS and _dist_vens2 >= _DIV_MIN_VENDORS:
+                break
+            if not _div_backup2:
+                break
+            _worst_it2 = None
+            _worst_idx2 = -1
+            if _max_dc2 > _DIV_MAX_DOMAIN:
+                _worst_dom2 = _d_counts2.most_common(1)[0][0]
+                _dom_items2 = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _worst_dom2]
+                if _dom_items2:
+                    _worst_idx2, _worst_it2 = min(_dom_items2, key=lambda x: _f6_bfp(x[1]))
+            elif _max_vc2 > _DIV_MAX_VENDOR:
+                _worst_ven2 = _v_counts2.most_common(1)[0][0]
+                _ven_items2 = [(i, s) for i, s in enumerate(_selected) if _f6_vendor_key(s) == _worst_ven2]
+                if _ven_items2:
+                    _worst_idx2, _worst_it2 = min(_ven_items2, key=lambda x: _f6_bfp(x[1]))
+            elif _dist_doms2 < _DIV_MIN_DOMAINS or _dist_vens2 < _DIV_MIN_VENDORS:
+                _worst_dom2 = _d_counts2.most_common(1)[0][0]
+                _dom_items2 = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _worst_dom2]
+                if len(_dom_items2) > 1:
+                    _worst_idx2, _worst_it2 = min(_dom_items2, key=lambda x: _f6_bfp(x[1]))
+            if _worst_it2 is None or _worst_idx2 < 0:
+                break
+            _repl_found2 = False
+            for _bi2, _bcand2 in enumerate(_div_backup2):
+                _test_sel2 = [s for j, s in enumerate(_selected) if j != _worst_idx2] + [_bcand2]
+                _test_dc2 = _DivCounter(_f6_domain_key(s) for s in _test_sel2)
+                _test_vc2 = _DivCounter(_f6_vendor_key(s) for s in _test_sel2)
+                if _test_dc2.most_common(1)[0][1] <= max(_DIV_MAX_DOMAIN, _max_dc2) and _test_vc2.most_common(1)[0][1] <= max(_DIV_MAX_VENDOR, _max_vc2):
+                    _selected[_worst_idx2] = _bcand2
+                    _div_backup2.pop(_bi2)
+                    _repl_found2 = True
+                    _log.info("FAST_600_MODE iter53: post-dedup diversity swap round=%d idx=%d", _div_round2, _worst_idx2)
+                    break
+            if not _repl_found2:
+                break
+        # Rebuild card_dicts and re-write audit after post-dedup diversity swap
+        _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+        _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+        try:
+            _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+        except Exception:
+            pass
+        _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+        _d_fin = _DivCounter(_f6_domain_key(s) for s in _selected)
+        _v_fin = _DivCounter(_f6_vendor_key(s) for s in _selected)
+        _log.info("FAST_600_MODE iter53: post-dedup diversity final domains=%d max_domain=%d vendors=%d max_vendor=%d",
+                  len(_d_fin), _d_fin.most_common(1)[0][1] if _d_fin else 0,
+                  len(set(_f6_vendor_key(s) for s in _selected) - {"other"}),
+                  _v_fin.most_common(1)[0][1] if _v_fin else 0)
+
+    # --- iter53: domain/vendor diversity meta + gate ---
+    _div_domain_counts = dict(_DivCounter(_f6_domain_key(s) for s in _selected))
+    _div_vendor_counts = dict(_DivCounter(_f6_vendor_key(s) for s in _selected))
+    _div_vendor_set = set(_f6_vendor_key(s) for s in _selected) - {"other"}
+    _div_domains_distinct = len(_div_domain_counts)
+    _div_vendors_distinct = len(_div_vendor_set)
+    _div_max_domain = max(_div_domain_counts.values()) if _div_domain_counts else 0
+    _div_max_vendor = max(_div_vendor_counts.values()) if _div_vendor_counts else 0
+    _div_pass = (_div_domains_distinct >= _DIV_MIN_DOMAINS and _div_max_domain <= _DIV_MAX_DOMAIN
+                 and _div_vendors_distinct >= _DIV_MIN_VENDORS and _div_max_vendor <= _DIV_MAX_VENDOR)
+
+    # iter53: injection test support
+    _div_inject_vendor = os.environ.get("INJECT_FORCE_VENDOR", "")
+    _div_inject_domain = os.environ.get("INJECT_FORCE_DOMAIN", "")
+    _div_is_injected = bool(_div_inject_vendor or _div_inject_domain)
+    if _div_is_injected:
+        # Override counts to simulate concentration
+        if _div_inject_domain:
+            _div_domain_counts = {_div_inject_domain: len(_selected)}
+            _div_domains_distinct = 1
+            _div_max_domain = len(_selected)
+        if _div_inject_vendor:
+            _div_vendor_counts = {_div_inject_vendor: len(_selected)}
+            _div_vendors_distinct = 1
+            _div_max_vendor = len(_selected)
+        _div_pass = False
+        _log.info("INJECT_FORCE_VENDOR=%s INJECT_FORCE_DOMAIN=%s: diversity overridden to FAIL",
+                  _div_inject_vendor, _div_inject_domain)
+
+    # Patch selection_audit.meta.json with diversity fields
+    try:
+        _sa_path2 = _outputs / "selection_audit.meta.json"
+        if _sa_path2.exists():
+            _sa2 = _f6_j.loads(_sa_path2.read_text(encoding="utf-8"))
+            _sa2["selected_domains_distinct"] = _div_domains_distinct
+            _sa2["selected_vendors_distinct"] = _div_vendors_distinct
+            _sa2["domain_counts"] = _div_domain_counts
+            _sa2["vendor_counts"] = _div_vendor_counts
+            _sa2["max_domain_count"] = _div_max_domain
+            _sa2["max_vendor_count"] = _div_max_vendor
+            _sa2["diversity_constraints"] = {
+                "min_domains": _DIV_MIN_DOMAINS, "max_domain": _DIV_MAX_DOMAIN,
+                "min_vendors": _DIV_MIN_VENDORS, "max_vendor": _DIV_MAX_VENDOR,
+            }
+            _sa2["diversity_pass"] = _div_pass
+            if _div_is_injected:
+                _sa2["diversity_test_injected"] = True
+            _sa_path2.write_text(_f6_j.dumps(_sa2, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    # Write bigtech_diversity.meta.json
+    try:
+        _bdm_path = _outputs / "bigtech_diversity.meta.json"
+        _bdm = {
+            "run_id": _run_id,
+            "mode": "daily" if _is_daily else "manual",
+            "constraints": {
+                "min_domains": _DIV_MIN_DOMAINS, "max_domain": _DIV_MAX_DOMAIN,
+                "min_vendors": _DIV_MIN_VENDORS, "max_vendor": _DIV_MAX_VENDOR,
+            },
+            "selected_domains_distinct": _div_domains_distinct,
+            "selected_vendors_distinct": _div_vendors_distinct,
+            "domain_counts": _div_domain_counts,
+            "vendor_counts": _div_vendor_counts,
+            "max_domain_count": _div_max_domain,
+            "max_vendor_count": _div_max_vendor,
+            "pass": _div_pass,
+            "rejected_due_to_domain_cap": _div_rejected_domain,
+            "rejected_due_to_vendor_cap": _div_rejected_vendor,
+        }
+        if _div_is_injected:
+            _bdm["test_injected"] = True
+            _bdm["injected_vendor"] = _div_inject_vendor
+            _bdm["injected_domain"] = _div_inject_domain
+        _bdm_path.write_text(_f6_j.dumps(_bdm, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as _bdm_exc:
+        _log.warning("bigtech_diversity.meta.json write failed: %s", _bdm_exc)
+
+    # iter53: BIGTECH_DIVERSITY gate (DAILY only)
+    if _is_daily and not _div_pass:
+        _div_fail_reason = (f"BIGTECH_DIVERSITY_UNSATISFIED: domains={_div_domains_distinct} vendors={_div_vendors_distinct}"
+                            f" max_domain={_div_max_domain} max_vendor={_div_max_vendor}")
+        if _div_is_injected:
+            _div_fail_reason += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "BIGTECH_DIVERSITY_HARD_DAILY",
+            _div_fail_reason,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("BIGTECH_DIVERSITY_HARD_DAILY", _div_fail_reason)
 
     # --- Step 4: build digest.md from card dicts ---
     stg["digest_write_start"] = time.time()
