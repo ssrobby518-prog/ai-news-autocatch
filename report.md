@@ -15,11 +15,35 @@ run_date: 2026-03-07
 0	0
 ```
 
+### 【外部輸出】git log --oneline -12
+
+```
+b9ada5b iter63: progress report auto-pick normal/stress delivery_dir + full sha256 cross-proof + stress semantics pinned (no behavior change)
+e528b0c iter62: update Section D with push evidence
+b3efcfd iter62: evidence hardening — git logs + all-miss daily + docx timestamp proof
+d6c254e iter61: progress report (auto-pick normal/stress delivery_dir; full sha256; no placeholders; no behavior change)
+65d1810 iter60: evidence pack — normal+stress canonical & delivery_dir cross-proof (full sha256, no placeholders)
+a7ab743 iter59b: harden evidence (no ellipsis sha256; no <DIR> placeholders; normal+stress delivery_dir cross-proof)
+ff0a438 iter59: update report.md Section D with final push evidence
+d7a6271 iter59: evidence pack — normal/stress cross-proof with delivery meta archive
+b9e6c17 iter59: archive gpu_load + delivery_consistency + LAST_RUN_SUMMARY into delivery_dir for cross-proof
+7c428af iter58: update Section D with push evidence
+d4c47cc iter58: evidence pack — SHA-256 delivery consistency proof + soft_warning_no_switch naming
+36f42cb iter58: SHA-256 delivery consistency proof + stress_mode_name soft_warning_no_switch
+```
+
 ## Auto-pick 結果
 
 ```
 AUTO_PICK_NORMAL_DIR=C:\Projects\ai捕捉資訊\ai-intel-scraper-mvp\outputs\deliveries\20260307_153400_d6c254eee5c101361ea7cb9630986d428f194478
 AUTO_PICK_STRESS_DIR=C:\Projects\ai捕捉資訊\ai-intel-scraper-mvp\outputs\deliveries\20260307_145152_a7ab743ca6c38635112783a7264f6bce238f97e8
+```
+
+### 【外部輸出】powershell -NoProfile -Command "Test-Path 'C:\Projects\ai捕捉資訊\ai-intel-scraper-mvp\outputs\deliveries\20260307_153400_d6c254eee5c101361ea7cb9630986d428f194478'; Test-Path 'C:\Projects\ai捕捉資訊\ai-intel-scraper-mvp\outputs\deliveries\20260307_145152_a7ab743ca6c38635112783a7264f6bce238f97e8'"
+
+```
+True
+True
 ```
 
 ## Section B — Normal（soft_warning_no_switch / triggered=false；以 delivery_dir 為主）
