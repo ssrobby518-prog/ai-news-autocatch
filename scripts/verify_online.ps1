@@ -5264,7 +5264,7 @@ if ($_fast300Daily) {
         try {
             $_cmMeta = Get-Content $_cmMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
             $_cmBtAct     = if ($_cmMeta.PSObject.Properties['bigtech_actionable_count']) { [int]$_cmMeta.bigtech_actionable_count } else { 0 }
-            $_cmBtActPass = if ($_cmMeta.PSObject.Properties['bigtech_actionable_pass']) { $_cmMeta.bigtech_actionable_pass } else { $false }
+            $_cmBtActPass = if ($_cmMeta.PSObject.Properties['bigtech_actionable_min_pass']) { $_cmMeta.bigtech_actionable_min_pass } else { $false }
             $_cmPlatTotal = if ($_cmMeta.PSObject.Properties['platform_total']) { [int]$_cmMeta.platform_total } else { 0 }
             $_cmPlatPass  = if ($_cmMeta.PSObject.Properties['platform_cap_pass']) { $_cmMeta.platform_cap_pass } else { $false }
             $_cmRtTotal   = if ($_cmMeta.PSObject.Properties['research_tutorial_total']) { [int]$_cmMeta.research_tutorial_total } else { 0 }
