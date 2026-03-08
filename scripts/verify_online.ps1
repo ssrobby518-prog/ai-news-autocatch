@@ -54,7 +54,7 @@ $_fast300Daily = ($env:FAST_300_DAILY -eq "1")
 # iter39: FAST_300_MODE — hard cap 300s, auto-enables FAST_600_MODE
 $_fast300Mode = ($env:FAST_300_MODE -eq "1") -or $_fast300Daily
 if ($_fast300Daily) {
-    $_voBudgetSec = if ($_voUserBudgetOverride) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 175 }  # iter57: DAILY default 175s
+    $_voBudgetSec = if ($_voUserBudgetOverride) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 230 }  # iter73: DAILY default 230s (verification acceptance)
     $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec
     $env:FAST_600_MODE = "1"
     $env:FAST_300_DAILY = "1"
@@ -84,7 +84,7 @@ if ($_fast600Mode) {
 # iter41: soft target — DAILY default 200s; FAST_300_MODE default 270s; FAST_600_MODE default 300s
 $_voSoftTargetSec = if ($env:PIPELINE_SOFT_TARGET_SEC -and $env:PIPELINE_SOFT_TARGET_SEC -ne "") {
     [int]$env:PIPELINE_SOFT_TARGET_SEC
-} elseif ($_fast300Daily) { 110 } elseif ($_fast300Mode) { 270 } elseif ($_fast600Mode) { 300 } else { 0 }
+} elseif ($_fast300Daily) { 175 } elseif ($_fast300Mode) { 270 } elseif ($_fast600Mode) { 300 } else { 0 }  # iter73: DAILY soft=175 (verification acceptance)
 if ($_voSoftTargetSec -gt 0) {
     Write-Output ("soft_target={0}s（超過只警告，不 FAIL）" -f $_voSoftTargetSec)
 }
@@ -5047,7 +5047,7 @@ if ($_fast300Daily) {
             Write-Output ("  max_domain_count          : {0}" -f $_divMaxDom)
             Write-Output ("  max_vendor_count          : {0}" -f $_divMaxVen)
             Write-Output ("  diversity_pass            : {0}" -f $_divPass)
-            if ($_divDomains -lt 4 -or $_divMaxDom -gt 2 -or $_divVendors -lt 4 -or $_divMaxVen -gt 2) {
+            if ($_divDomains -lt 5 -or $_divMaxDom -gt 3 -or $_divVendors -lt 5 -or $_divMaxVen -gt 3) {
                 $_divFail = ("BIGTECH_DIVERSITY_HARD_DAILY_FAIL: domains={0} max_domain={1} vendors={2} max_vendor={3}" -f $_divDomains, $_divMaxDom, $_divVendors, $_divMaxVen)
                 Write-Output ("  => FAIL: {0}" -f $_divFail)
                 Invoke-VerifyOnlineFailFast -Gate "BIGTECH_DIVERSITY_HARD_DAILY" -Reason $_divFail
@@ -5254,7 +5254,7 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter71: BIGTECH_ACTIONABLE_MIN_HARD_DAILY — bigtech_actionable >= 6
+# iter73: BIGTECH_ACTIONABLE_MIN_HARD_DAILY — bigtech_actionable >= 7
 #   Reads content_mix.meta.json
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
@@ -5278,7 +5278,7 @@ if ($_fast300Daily) {
             Write-Output ("  research_tutorial_total     : {0}" -f $_cmRtTotal)
             Write-Output ("  research_tutorial_cap_pass  : {0}" -f $_cmRtPass)
             if (-not $_cmBtActPass) {
-                $_cmBtFail = ("BIGTECH_ACTIONABLE_MIN_HARD_DAILY_FAIL: actionable={0} < 6" -f $_cmBtAct)
+                $_cmBtFail = ("BIGTECH_ACTIONABLE_MIN_HARD_DAILY_FAIL: actionable={0} < 7" -f $_cmBtAct)
                 Write-Output ("  => FAIL: {0}" -f $_cmBtFail)
                 Invoke-VerifyOnlineFailFast -Gate "BIGTECH_ACTIONABLE_MIN_HARD_DAILY" -Reason $_cmBtFail
             }
@@ -5375,7 +5375,7 @@ if ($_fast300Daily) {
             Write-Output ("  buckets_distinct             : {0}" -f $_sbcDistinct)
             Write-Output ("  strategic_bucket_coverage_pass : {0}" -f $_sbcPass)
             if (-not $_sbcPass) {
-                $_sbcFail = ("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={0} < 4" -f $_sbcDistinct)
+                $_sbcFail = ("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={0} < 5" -f $_sbcDistinct)
                 Write-Output ("  => FAIL: {0}" -f $_sbcFail)
                 Invoke-VerifyOnlineFailFast -Gate "STRATEGIC_BUCKET_COVERAGE_HARD_DAILY" -Reason $_sbcFail
             }
@@ -5385,6 +5385,132 @@ if ($_fast300Daily) {
         }
     } else {
         Write-Output "  STRATEGIC_BUCKET_COVERAGE_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter73: TOTAL_EVENTS_HARD_DAILY — selected_events >= 10
+#   Reads content_mix.meta.json
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_tePath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "TOTAL_EVENTS_HARD_DAILY:"
+    if (Test-Path $_tePath) {
+        try {
+            $_teMeta = Get-Content $_tePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_teCount = if ($_teMeta.PSObject.Properties['selected_events']) { [int]$_teMeta.selected_events } else { 0 }
+            $_tePass  = if ($_teMeta.PSObject.Properties['total_events_pass']) { $_teMeta.total_events_pass } else { $false }
+            Write-Output ("  selected_events              : {0}" -f $_teCount)
+            Write-Output ("  total_events_pass            : {0}" -f $_tePass)
+            if (-not $_tePass) {
+                $_teFail = ("TOTAL_EVENTS_HARD_DAILY_FAIL: selected_events={0} < 10" -f $_teCount)
+                Write-Output ("  => FAIL: {0}" -f $_teFail)
+                Invoke-VerifyOnlineFailFast -Gate "TOTAL_EVENTS_HARD_DAILY" -Reason $_teFail
+            }
+            Write-Output "  => TOTAL_EVENTS_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  TOTAL_EVENTS_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  TOTAL_EVENTS_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter73: LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY — leadership_politics_ai_count >= 2
+#   Reads content_mix.meta.json
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_lpPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY:"
+    if (Test-Path $_lpPath) {
+        try {
+            $_lpMeta = Get-Content $_lpPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_lpCount    = if ($_lpMeta.PSObject.Properties['leadership_politics_ai_count']) { [int]$_lpMeta.leadership_politics_ai_count } else { 0 }
+            $_lpPass     = if ($_lpMeta.PSObject.Properties['leadership_politics_ai_min_pass']) { $_lpMeta.leadership_politics_ai_min_pass } else { $false }
+            $_lpInjected = if ($_lpMeta.PSObject.Properties['leadership_politics_ai_test_injected']) { $_lpMeta.leadership_politics_ai_test_injected } else { $false }
+            Write-Output ("  leadership_politics_ai_count : {0}" -f $_lpCount)
+            Write-Output ("  leadership_politics_ai_pass  : {0}" -f $_lpPass)
+            if ($_lpInjected) {
+                Write-Output "  test_injected                : True"
+            }
+            if (-not $_lpPass) {
+                $_lpFail = ("LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY_FAIL: leadership_politics_ai={0} < 2" -f $_lpCount)
+                Write-Output ("  => FAIL: {0}" -f $_lpFail)
+                Invoke-VerifyOnlineFailFast -Gate "LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY" -Reason $_lpFail
+            }
+            Write-Output "  => LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter73: CHINA_AI_GOV_MIN_HARD_DAILY — china_ai_gov_count >= 1
+#   Reads content_mix.meta.json
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_caPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "CHINA_AI_GOV_MIN_HARD_DAILY:"
+    if (Test-Path $_caPath) {
+        try {
+            $_caMeta = Get-Content $_caPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_caCount    = if ($_caMeta.PSObject.Properties['china_ai_gov_count']) { [int]$_caMeta.china_ai_gov_count } else { 0 }
+            $_caPass     = if ($_caMeta.PSObject.Properties['china_ai_gov_min_pass']) { $_caMeta.china_ai_gov_min_pass } else { $false }
+            $_caInjected = if ($_caMeta.PSObject.Properties['china_ai_gov_test_injected']) { $_caMeta.china_ai_gov_test_injected } else { $false }
+            Write-Output ("  china_ai_gov_count           : {0}" -f $_caCount)
+            Write-Output ("  china_ai_gov_pass            : {0}" -f $_caPass)
+            if ($_caInjected) {
+                Write-Output "  test_injected                : True"
+            }
+            if (-not $_caPass) {
+                $_caFail = ("CHINA_AI_GOV_MIN_HARD_DAILY_FAIL: china_ai_gov={0} < 1" -f $_caCount)
+                Write-Output ("  => FAIL: {0}" -f $_caFail)
+                Invoke-VerifyOnlineFailFast -Gate "CHINA_AI_GOV_MIN_HARD_DAILY" -Reason $_caFail
+            }
+            Write-Output "  => CHINA_AI_GOV_MIN_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  CHINA_AI_GOV_MIN_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  CHINA_AI_GOV_MIN_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY — each selected item strategic_density >= 15
+#   Reads content_mix.meta.json
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_piPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY:"
+    if (Test-Path $_piPath) {
+        try {
+            $_piMeta = Get-Content $_piPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_piFloor = if ($_piMeta.PSObject.Properties['per_item_strategic_density_floor']) { [int]$_piMeta.per_item_strategic_density_floor } else { 15 }
+            $_piPass  = if ($_piMeta.PSObject.Properties['per_item_strategic_density_pass']) { $_piMeta.per_item_strategic_density_pass } else { $false }
+            $_piFails = if ($_piMeta.PSObject.Properties['per_item_strategic_density_failures']) { $_piMeta.per_item_strategic_density_failures } else { @() }
+            Write-Output ("  per_item_floor               : {0}" -f $_piFloor)
+            Write-Output ("  per_item_pass                : {0}" -f $_piPass)
+            Write-Output ("  failures_count               : {0}" -f @($_piFails).Count)
+            if (-not $_piPass) {
+                $_piFail = ("PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY_FAIL: {0} items below floor={1}" -f @($_piFails).Count, $_piFloor)
+                Write-Output ("  => FAIL: {0}" -f $_piFail)
+                Invoke-VerifyOnlineFailFast -Gate "PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY" -Reason $_piFail
+            }
+            Write-Output "  => PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY: WARN (content_mix.meta.json not found)"
     }
 }
 Write-Output ""
@@ -5516,19 +5642,23 @@ $_fpSdPath = Join-Path $repoRoot "outputs\source_density.meta.json"
 if (Test-Path $_fpCmPath) {
     try {
         $_fpCm = Get-Content $_fpCmPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-Output ("selected_events                 = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_events']) { $_fpCm.selected_events } else { "N/A" }))
         Write-Output ("bigtech_actionable_count        = {0}" -f $(if ($_fpCm.PSObject.Properties['bigtech_actionable_count']) { $_fpCm.bigtech_actionable_count } else { "N/A" }))
         Write-Output ("bigtech_official_media_count     = {0}" -f $(if ($_fpCm.PSObject.Properties['bigtech_official_media_count']) { $_fpCm.bigtech_official_media_count } else { "N/A" }))
+        Write-Output ("leadership_politics_ai_count     = {0}" -f $(if ($_fpCm.PSObject.Properties['leadership_politics_ai_count']) { $_fpCm.leadership_politics_ai_count } else { "N/A" }))
+        Write-Output ("china_ai_gov_count              = {0}" -f $(if ($_fpCm.PSObject.Properties['china_ai_gov_count']) { $_fpCm.china_ai_gov_count } else { "N/A" }))
         Write-Output ("platform_total                  = {0}" -f $(if ($_fpCm.PSObject.Properties['platform_total']) { $_fpCm.platform_total } else { "N/A" }))
         Write-Output ("research_tutorial_total          = {0}" -f $(if ($_fpCm.PSObject.Properties['research_tutorial_total']) { $_fpCm.research_tutorial_total } else { "N/A" }))
         Write-Output ("selected_strategic_buckets_distinct = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_strategic_buckets_distinct']) { $_fpCm.selected_strategic_buckets_distinct } else { "N/A" }))
-        Write-Output ("selected_events                 = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_events']) { $_fpCm.selected_events } else { "N/A" }))
     } catch {}
 }
 if (Test-Path $_fpSdPath) {
     try {
         $_fpSd = Get-Content $_fpSdPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        Write-Output ("strategic_density_target         = {0}" -f $(if ($_fpSd.PSObject.Properties['target_avg_density_1p5']) { $_fpSd.target_avg_density_1p5 } else { "N/A" }))
+        Write-Output ("strategic_density_target_avg     = {0}" -f $(if ($_fpSd.PSObject.Properties['target_avg_density_1p5']) { $_fpSd.target_avg_density_1p5 } else { "N/A" }))
+        Write-Output ("strategic_density_target_min     = {0}" -f $(if ($_fpSd.PSObject.Properties['target_min_density_1p5']) { $_fpSd.target_min_density_1p5 } else { "N/A" }))
         Write-Output ("selected_avg_strategic_density   = {0}" -f $(if ($_fpSd.PSObject.Properties['selected_avg_strategic_density_score']) { $_fpSd.selected_avg_strategic_density_score } else { "N/A" }))
+        Write-Output ("selected_min_strategic_density   = {0}" -f $(if ($_fpSd.PSObject.Properties['selected_min_strategic_density_score']) { $_fpSd.selected_min_strategic_density_score } else { "N/A" }))
     } catch {}
 }
 Write-Output "=== END P0 STRATEGIC FINGERPRINT ==="

@@ -6957,9 +6957,9 @@ def _f600_run_fast_path(
     _is_daily = os.environ.get("FAST_300_DAILY", "0") == "1"
     _log.info("FAST_600_MODE: fast path entered (budget=%ds raw_items=%d daily=%s)", budget_sec, len(raw_items), _is_daily)
 
-    # --- Step 1: fast select top 7 items — iter40: bigtech-prioritized ---
-    _f6_target = 7
-    _max_events = 7
+    # --- Step 1: fast select top 10 items — iter73: CEO-grade 10-item brief ---
+    _f6_target = 10
+    _max_events = 10
 
     def _f6_bfp(it) -> float:
         return float(getattr(it, "_bfp_score", 0) or 0) + float(getattr(it, "bfp_score", 0) or 0)
@@ -7089,6 +7089,7 @@ def _f600_run_fast_path(
         "benchmark_competitive", "security_advisory", "release_notes",
         "partnership_distribution", "acquisition_investment", "executive_move",
         "enterprise_rollout", "platform_ecosystem_move", "regulatory_governance",
+        "policy_statement", "leadership_speech",  # iter73: new CEO-grade types
         # legacy compat aliases (iter71 → iter72b migration)
         "api_update", "sdk_update", "pricing", "benchmark",
         "compatibility_update", "migration", "partnership", "acquisition",
@@ -7098,8 +7099,13 @@ def _f600_run_fast_path(
     })
     _CT_RULES = [
         # actionable types (checked first — order matters)
-        # iter72b: expanded actionable types with strategic_bucket mapping
-        # executive_move requires BOTH a title (CEO/CTO/etc) AND an action (appointed/steps down/etc) nearby
+        # iter73: policy_statement — government/regulator AI policy actions
+        (_ct71_re.compile(r'\b(?:president|prime\s+minister|minister|senator|governor|white\s+house|congress|cabinet|parliament|commission|regulator|總統|總理|部長|議員|國會|白宮|歐盟委員會|監管|工信部|國務院|發改委|網信辦)\b.*\b(?:policy|executive\s+order|hearing|testimony|regulation|AI\s+Act|briefing|directive|announce|sign|發布|政策|行政命令|聽證|管制)\b', _ct71_re.I), "policy_statement"),
+        (_ct71_re.compile(r'\b(?:policy\s+speech|press\s+conference|executive\s+order|hearing|testimony|briefing|記者會|行政命令|聽證)\b.*\b(?:AI|artificial\s+intelligence|model|compute|chip|人工智[慧能]|大模型|算力|晶片)\b', _ct71_re.I), "policy_statement"),
+        # iter73: leadership_speech — CEO/exec speeches, memos, earnings calls, all-hands about AI
+        (_ct71_re.compile(r'\b(?:CEO|CTO|CPO|Chief|Founder|chairman|president|執行長|技術長)\b.*\b(?:memo|all[\-\s]?hands|earnings\s+call|keynote|speech|remarks|statement|letter|interview|said|says|told|聲明|演講|發言|內部信|財報電話會議)\b', _ct71_re.I), "leadership_speech"),
+        (_ct71_re.compile(r'\b(?:memo|all[\-\s]?hands|earnings\s+call|keynote|speech|remarks|聲明|演講|發言|內部信|財報電話會議)\b.*\b(?:CEO|CTO|CPO|Chief|Founder|chairman|president|執行長|技術長)\b', _ct71_re.I), "leadership_speech"),
+        # iter72b: executive_move requires BOTH a title (CEO/CTO/etc) AND an action (appointed/steps down/etc) nearby
         (_ct71_re.compile(r'\b(?:CEO|CTO|CPO|CIO|Chief\s+(?:Executive|Technology|Product|Information)|SVP|Head\s+of)\b.*\b(?:appointed|joins?|joined|hired|steps?\s*down|stepped\s+down|reorg(?:anization)?|exec\s+team|改組|任命|卸任)\b', _ct71_re.I), "executive_move"),
         (_ct71_re.compile(r'\b(?:appointed|joins?|joined|hired|steps?\s*down|stepped\s+down|reorg(?:anization)?|改組|任命|卸任)\b.*\b(?:CEO|CTO|CPO|CIO|Chief|SVP|Head\s+of|Founder|president|chairman|執行長|技術長|產品長|高管|主管)\b', _ct71_re.I), "executive_move"),
         (_ct71_re.compile(r'\b(?:acquir(?:ed|es|ing|ition)|merger|buyout|investment|invested|funding|rais(?:ed|es|ing)\s+\$)\b', _ct71_re.I), "acquisition_investment"),
@@ -7142,13 +7148,15 @@ def _f600_run_fast_path(
     # iter72b: strategic_bucket classification — maps content_type to CEO-level strategic domain
     _STRATEGIC_BUCKET_MAP = {
         "executive_move": "leadership",
+        "leadership_speech": "leadership",  # iter73
+        "policy_statement": "governance",  # iter73
         "product_launch": "product", "model_launch": "product",
         "api_sdk_update": "product", "release_notes": "product",
         "migration": "product", "compatibility_update": "product",
         "partnership_distribution": "distribution",
         "enterprise_rollout": "distribution",
         "platform_ecosystem_move": "ecosystem",
-        "benchmark_competitive": "economics",  # iter72b: benchmark/perf impacts pricing/competitiveness → economics
+        "benchmark_competitive": "economics",
         "pricing_packaging": "economics",
         "acquisition_investment": "economics",
         "security_advisory": "governance", "regulatory_governance": "governance",
@@ -7241,19 +7249,107 @@ def _f600_run_fast_path(
     def _ct72b_is_bigtech_official_media_actionable(it) -> bool:
         return _ct71_is_bigtech_actionable(it) and _ct72b_source_class(it) in ("official", "media")
 
+    # iter73: geo_class classification — china / global / unknown
+    _GEO_CHINA_VENDORS = frozenset({
+        "Alibaba", "Tencent", "Baidu", "ByteDance", "Huawei", "SenseTime",
+        "iFlytek", "DeepSeek", "Zhipu", "Moonshot", "01.AI", "Minimax",
+    })
+    _GEO_CHINA_DOMAINS = frozenset({
+        "deepseek.com", "baidu.com", "alibaba.com", "aliyun.com", "tencent.com",
+        "huawei.com", "iflytek.com", "sensetime.com", "zhipu.ai", "moonshot.cn",
+        "36kr.com",
+    })
+    _GEO_CHINA_RE = _ct71_re.compile(
+        r'(?:阿里|騰訊|百度|字節|華為|商湯|科大訊飛|DeepSeek|中國政府|工信部|國務院|發改委|網信辦|算力|智算|大模型|人工智慧產業'
+        r'|Alibaba|Tencent|Baidu|ByteDance|Huawei|SenseTime|iFlytek|MIIT|CAC|State\s+Council|NDRC'
+        r'|Zhipu|Moonshot|01\.AI|Minimax|Qwen|Yi[\-\s]?Lightning|Ernie|Wenxin|PanGu|Wanxiang'
+        r'|China(?:\'?s)?\s+(?:AI|government|ministry|regulat|tech|model|compute|chip|GPU|semiconductor|invest|strateg)'
+        r'|Chinese\s+(?:AI|tech|model|startup|government|regulat|chip|company|firm)'
+        r'|Beijing[\-\s]based|Shanghai[\-\s]based|Shenzhen[\-\s]based|Hangzhou[\-\s]based'
+        r'|China\s+AI|China\s+tech|China\s+chip|China\s+semiconductor)',
+        _ct71_re.I)
+
+    def _geo_class(it) -> str:
+        if _f6_vendor_key(it) in _GEO_CHINA_VENDORS:
+            return "china"
+        if _f6_domain_key(it) in _GEO_CHINA_DOMAINS:
+            return "china"
+        # iter73: check title + snippet + fulltext[:2000] for broader English-language China AI coverage
+        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or "")[:2000]
+        if _GEO_CHINA_RE.search(_blob):
+            return "china"
+        return "global"
+
+    # iter73: leadership_politics_ai_item — CEO/exec/politician + AI-related
+    _LEADERSHIP_CT = frozenset({"executive_move", "policy_statement", "leadership_speech", "regulatory_governance", "acquisition_investment"})
+    _LEADERSHIP_RE = _ct71_re.compile(
+        r'\b(?:CEO|CTO|CPO|CIO|Chief|VP|SVP|Head\s+of|Founder|Chair(?:man)?|President'
+        r'|prime\s+minister|minister|senator|governor|white\s+house|congress|cabinet|parliament|commission|regulator'
+        r'|Satya\s+Nadella|Sam\s+Altman|Sundar\s+Pichai|Jensen\s+Huang|Andy\s+Jassy|Mark\s+Zuckerberg|Tim\s+Cook|Dario\s+Amodei|Lisa\s+Su|Elon\s+Musk'
+        r'|Demis\s+Hassabis|Mira\s+Murati|Kevin\s+Scott|Thomas\s+Kurian|Arvind\s+Krishna|Pat\s+Gelsinger|Jeff\s+Dean|Yann\s+LeCun'
+        r'|Robin\s+Li|Pony\s+Ma|Jack\s+Ma|Zhang\s+Yiming|Liang\s+Wenfeng'
+        r'|執行長|技術長|產品長|高管|主管|總統|總理|部長|議員|監管)\b', _ct71_re.I)
+    # Broad company-as-actor pattern: "Google announced", "OpenAI unveiled", "NVIDIA said"
+    # iter73: allow 0-3 intervening words between company and action verb
+    _LEADERSHIP_COMPANY_RE = _ct71_re.compile(
+        r'\b(?:Google|Microsoft|OpenAI|NVIDIA|Amazon|Anthropic|Meta|Apple|Samsung'
+        r'|Alibaba|Tencent|Baidu|ByteDance|Huawei|DeepSeek)\b'
+        r'(?:\'s?)?\s+(?:\w+\s+){0,3}'
+        r'(?:announced|unveiled|introduced|launched|released|expanded|invested|acquired|partnered|said|told|revealed|confirmed|plans?\s+to|is\s+(?:rolling|building|developing|expanding|investing)|will\s+(?:launch|release|build|expand|invest|deploy|open))',
+        _ct71_re.I)
+    _LEADERSHIP_AI_RE = _ct71_re.compile(
+        r'\b(?:AI|artificial\s+intelligence|model|agent|API|compute|regulation|chip|GPU|datacenter|Copilot|ChatGPT|Gemini|Claude|LLM|算力|大模型|人工智[慧能]|platform|cloud|inference|training|open[\-\s]?source|foundation\s+model)\b', _ct71_re.I)
+
+    def _is_leadership_politics_ai(it) -> bool:
+        # Path 0 (fast): BOMA + strategic bucket in {leadership, governance} — executive/policy decisions
+        # BOMA items are confirmed bigtech AI items; no need for separate AI topic check
+        if _ct72b_is_bigtech_official_media_actionable(it):
+            _sb = _ct72b_strategic_bucket(it)
+            if _sb in ("leadership", "governance"):
+                return True
+        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or "")[:2000]
+        # Must have AI topic for non-BOMA paths
+        if not _LEADERSHIP_AI_RE.search(_blob):
+            # Path 0b: BOMA with economics/distribution bucket still qualifies if confirmed bigtech
+            if _ct72b_is_bigtech_official_media_actionable(it):
+                _sb = _ct72b_strategic_bucket(it)
+                if _sb in ("economics", "distribution"):
+                    return True
+            return False
+        # Path 1: content_type match + person regex
+        ct = _ct71_classify(it)
+        if ct in _LEADERSHIP_CT and _LEADERSHIP_RE.search(_blob):
+            return True
+        # Path 2: person title + AI topic
+        if _LEADERSHIP_RE.search(_blob):
+            return True
+        # Path 3: company-as-actor + AI topic (executive decision implied)
+        if _LEADERSHIP_COMPANY_RE.search(_blob):
+            return True
+        # Path 4: bigtech official/media actionable with strategic content
+        if _ct72b_is_bigtech_official_media_actionable(it):
+            _sb = _ct72b_strategic_bucket(it)
+            if _sb in ("economics", "distribution"):
+                return True
+        return False
+
+    # iter73: china_ai_gov_item — china geo class is sufficient (vendor/domain/regex already confirm China AI relevance)
+    def _is_china_ai_gov(it) -> bool:
+        return _geo_class(it) == "china"
+
     # iter72b: strategic density scoring — per-signal-category regex hits
     _SD72_EXEC_RE = _ct71_re.compile(
-        r'\b(?:CEO|CTO|CPO|CIO|Chief|VP|SVP|Head\s+of|Founder|appointed|joins?|joined|hired|steps?\s*down|stepped\s+down|reorg(?:anization)?|leadership|exec\s+team|board|chairman|president|執行長|技術長|產品長|高管|主管|改組|任命|卸任)\b', _ct71_re.I)
+        r'\b(?:CEO|CTO|CPO|CIO|Chief|VP|SVP|Head\s+of|Founder|appointed|joins?|joined|hired|steps?\s*down|stepped\s+down|reorg(?:anization)?|leadership|exec\s+team|board|chairman|president|執行長|技術長|產品長|高管|主管|改組|任命|卸任|創辦人|董事長|總裁|副總裁|財務長|營運長|總經理)\b', _ct71_re.I)
     _SD72_PRODUCT_RE = _ct71_re.compile(
-        r'\b(?:launch(?:ed|es|ing)?|release(?:d|s)?|rollout|rolled\s+out|announce(?:d)?|preview|beta|GA|general\s+availability|model|agent|assistant|copilot|API|SDK|endpoint|runtime|inference|embedding|fine[\-\s]?tuning|reasoning|version|v\d+(?:\.\d+)?|upgrade|update|new\s+feature)\b', _ct71_re.I)
+        r'(?:\b(?:launch(?:ed|es|ing)?|release(?:d|s)?|rollout|rolled\s+out|announce(?:d)?|preview|beta|GA|general\s+availability|model|agent|assistant|copilot|API|SDK|endpoint|runtime|inference|embedding|fine[\-\s]?tuning|reasoning|version|v\d+(?:\.\d+)?|upgrade|update|new\s+feature|platform|service|tool|framework|plugin|extension|cloud|compute|training|chat|search|open[\-\s]?source|deploy(?:ment)?|availab(?:le|ility))\b|發布|推出|上線|模型|平台|服務|版本|更新|開源|部署|新功能|發表|大模型|AI|人工智[慧能])', _ct71_re.I)
     _SD72_DISTRIB_RE = _ct71_re.compile(
-        r'\b(?:partner(?:ship)?|distribution|OEM|carrier|operator|preinstall|integrat(?:e[ds]?|ion|ing)|bundl(?:e[ds]?|ing)|channel|reseller|Samsung|Apple|Windows|Azure\s+Marketplace|AWS\s+Marketplace|Google\s+Cloud\s+Marketplace|device|phone|laptop|PC|server|edge|on[\-\s]?device)\b', _ct71_re.I)
+        r'(?:\b(?:partner(?:ship)?|distribution|OEM|carrier|operator|preinstall|integrat(?:e[ds]?|ion|ing)|bundl(?:e[ds]?|ing)|channel|reseller|Samsung|Apple|Windows|Azure\s+Marketplace|AWS\s+Marketplace|Google\s+Cloud\s+Marketplace|device|phone|laptop|PC|server|edge|on[\-\s]?device|datacenter|data\s+center|region|zone|infra(?:structure)?|scale|enterprise|customer|developer|ecosystem|marketplace)\b|合作|整合|生態|客戶|企業|市場|基礎設施|資料中心|雲端)', _ct71_re.I)
     _SD72_ECON_RE = _ct71_re.compile(
-        r'\b(?:pricing|price|subscription|enterprise\s+plan|seat|billing|token\s+price|revenue|margin|cost|GPU\s+cost|credits|monetiz|commercial(?:ization)?|ARR|GMV|paid\s+tier|free\s+tier)\b', _ct71_re.I)
+        r'(?:\b(?:pricing|price|subscription|enterprise\s+plan|seat|billing|token\s+price|revenue|margin|cost|GPU\s+cost|credits|monetiz|commercial(?:ization)?|ARR|GMV|paid\s+tier|free\s+tier|invest(?:ment|ed|ing)?|fund(?:ing|ed)?|valuation|\$\d|billion|million|acquisition|deal|contract)\b|營收|財報|財測|估值|投資|融資|定價|股價|市值|億美元|競爭|軍備|搶先)', _ct71_re.I)
     _SD72_GOVERN_RE = _ct71_re.compile(
-        r'\b(?:security|CVE|advisory|privacy|policy|compliance|regulation|copyright|lawsuit|safety|trust\s*&?\s*safety|moderation|export\s+control|risk|liability|GDPR|DMA|DSA|AI\s+Act)\b', _ct71_re.I)
+        r'(?:\b(?:security|CVE|advisory|privacy|policy|compliance|regulation|copyright|lawsuit|safety|trust\s*&?\s*safety|moderation|export\s+control|risk|liability|GDPR|DMA|DSA|AI\s+Act)\b|安全|隱私|政策|監管|法規|合規|管制|出口管制|風險|禁令)', _ct71_re.I)
     _SD72_BENCH_RE = _ct71_re.compile(
-        r'\b(?:benchmark|latency|throughput|accuracy|faster|slower|quality|score|SOTA|state\s+of\s+the\s+art|eval(?:uation)?|tokens?/s|TPS|QPS|milliseconds|ms|GB|TB|params|billion|million|%)\b', _ct71_re.I)
+        r'(?:\b(?:benchmark|latency|throughput|accuracy|faster|slower|quality|score|SOTA|state\s+of\s+the\s+art|eval(?:uation)?|tokens?/s|TPS|QPS|milliseconds|ms|GB|TB|params|billion|million|%)\b|效能|速度|準確率|評測|基準|參數|漲|跌|盤後|股價)', _ct71_re.I)
     _SD72_CONCRETE_NUM_RE = _ct71_re.compile(
         r'(?:\d[\d,]*\.?\d+\s*%|\$\s*\d[\d,.]*[BMKTbmkt]?|\d[\d,]*\.?\d*\s*(?:billion|million|thousand|B|M|K|x|fps|TOPS|TFLOPS|GB|TB|MB|ms|tokens?/s))', _ct71_re.I)
 
@@ -7464,10 +7560,10 @@ def _f600_run_fast_path(
     _bt_om_pool = [it for it in _pool_300 if _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
 
     # iter53: domain/vendor quota-aware selection
-    _DIV_MAX_DOMAIN = 2
-    _DIV_MAX_VENDOR = 2  # iter56: tightened from 3 to 2 (vendor_share_cap: max_vendor*3 <= 7)
-    _DIV_MIN_DOMAINS = 4
-    _DIV_MIN_VENDORS = 4
+    _DIV_MAX_DOMAIN = 3  # iter73: 10 items, max 1/3 → 3
+    _DIV_MAX_VENDOR = 3  # iter73: 10 items, max 1/3 → 3
+    _DIV_MIN_DOMAINS = 5  # iter73: 10-item requires >= 5
+    _DIV_MIN_VENDORS = 5  # iter73: 10-item requires >= 5
     from collections import Counter as _DivCounter
 
     # iter68: platform domain cap — huggingface.co / discuss.huggingface.co / github.com combined <= 1
@@ -7539,304 +7635,398 @@ def _f600_run_fast_path(
         _bt_pool_sorted = _oa_partition(_bt_pool)
 
         # iter72b: 5-phase CEO-grade selection — bigtech_official_media_actionable first
-        # Pool construction with strategic_density_score >= 10 filter
-        _SD72_MIN = 10  # strategic density floor for selection
+        # Pool construction — sorted by strategic_density_score descending (iter73)
+        _SD73_FLOOR = 15  # iter73: per-item strategic density floor for gate
 
-        def _sd72_pass(it) -> bool:
-            return _sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0) >= _SD72_MIN
+        def _sd73_pass(it) -> bool:
+            return _sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0) >= _SD73_FLOOR
+
+        def _sd73_key(it):
+            return -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0)
 
         # Pool BOMA: bigtech_official_media_actionable + non-platform + non-rt + density pass
-        # iter72b: use _pool_300 — source_class has broader official/media detection than legacy _f6_src_type
-        # Note: strategic_density_score >= 10 enforced by post-selection gate, not pool filter
-        _p72_pool_boma = _oa_partition([
+        # Sorted by strategic_density_score DESC to prefer high-density items
+        _p72_pool_boma = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _ct72b_is_bigtech_official_media_actionable(it)
             and not _ct71_is_research_tutorial(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
-        ])
+        ], key=_sd73_key))
         # Pool BTA: bigtech_actionable (non-official/media) + non-platform + non-rt
-        _p72_pool_bta = _oa_partition([
+        _p72_pool_bta = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _ct71_is_bigtech_actionable(it)
             and not _ct71_is_research_tutorial(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             and not _ct72b_is_bigtech_official_media_actionable(it)
-        ])
+        ], key=_sd73_key))
         # Pool C: bigtech + non-platform + density-pass (rescue — may include non-actionable)
-        _p72_pool_c = _oa_partition([
+        _p72_pool_c = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _f6_is_bigtech(it)
             and not _f6_is_dev_noise(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
-        ])
-        # Pool PLAT: platform items (cap=1)
-        _p72_pool_plat = _oa_partition([
+        ], key=_sd73_key))
+        # Pool PLAT: platform items (cap=1) — sorted by strategic density
+        _p72_pool_plat = _oa_partition(sorted([
             it for it in _bt_om_pool_sorted if _is_platform_domain(it)
-        ])
+        ], key=_sd73_key))
         # Pool RT: research/tutorial (cap=1)
-        _p72_pool_rt = _oa_partition([
+        _p72_pool_rt = _oa_partition(sorted([
             it for it in _pool_300
             if _ct71_is_research_tutorial(it)
             and _f6_is_bigtech(it)
             and not _f6_is_dev_noise(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
-        ])
+        ], key=_sd73_key))
 
-        # Phase-1: fill 4 bigtech_official_media_actionable with strategic_bucket diversity
-        _p72_used_buckets = set()
-        # 1a: try to pick one from each target bucket first (best-effort diversity)
+        # iter73: Pool LEADER — leadership/politics items
+        _p73_pool_leader = _oa_partition(sorted([
+            it for it in _pool_300
+            if _is_leadership_politics_ai(it)
+            and not _is_platform_domain(it)
+            and not _f6_is_dev_noise(it)
+            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+        ], key=_sd73_key))
+        # iter73: Pool CHINA — china_ai_gov items
+        _p73_pool_china = _oa_partition(sorted([
+            it for it in _pool_300
+            if _is_china_ai_gov(it)
+            and not _is_platform_domain(it)
+            and not _f6_is_dev_noise(it)
+            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+        ], key=_sd73_key))
+
+        # === iter73: 6-phase CEO-grade selection for 10 items ===
+        _swap_attempts = 0
+        _swap_successes = 0
+        _p6c_rescue_attempts = 0
+        _p6c_rescue_successes = 0
+
+        _log.info("iter73 pools: boma=%d bta=%d pool_c=%d plat=%d rt=%d leader=%d china=%d",
+                  len(_p72_pool_boma), len(_p72_pool_bta), len(_p72_pool_c),
+                  len(_p72_pool_plat), len(_p72_pool_rt),
+                  len(_p73_pool_leader), len(_p73_pool_china))
+
+        # Phase-1: fill 5 BOMA with bucket diversity skeleton
+        _p73_used_buckets = set()
         for _req_bucket in ["product", "distribution", "ecosystem", "economics", "leadership", "governance"]:
-            if len(_selected) >= 4:
+            if len(_selected) >= 5:
                 break
-            if _req_bucket in _p72_used_buckets:
+            if _req_bucket in _p73_used_buckets:
                 continue
             for it in _p72_pool_boma:
                 if it in _selected:
                     continue
                 if _ct72b_strategic_bucket(it) == _req_bucket and _div_can_add(it, _selected):
                     _sel_append(it)
-                    _p72_used_buckets.add(_req_bucket)
+                    _p73_used_buckets.add(_req_bucket)
                     break
-        # 1b: fill remaining to 4 from BOMA pool (any bucket)
         for it in _p72_pool_boma:
-            if len(_selected) >= 4:
+            if len(_selected) >= 5:
                 break
             if it not in _selected and _div_can_add(it, _selected):
                 _sel_append(it)
-                _p72_used_buckets.add(_ct72b_strategic_bucket(it))
+                _p73_used_buckets.add(_ct72b_strategic_bucket(it))
+        _log.info("iter73 Phase-1 (skeleton): selected=%d buckets=%s", len(_selected), sorted(_p73_used_buckets))
 
-        _log.info("iter72b pools: boma=%d bta=%d pool_c=%d plat=%d rt=%d",
-                  len(_p72_pool_boma), len(_p72_pool_bta), len(_p72_pool_c),
-                  len(_p72_pool_plat), len(_p72_pool_rt))
-        _log.info("iter72b Phase-1 (CEO skeleton): selected=%d buckets=%s domains=%d vendors=%d",
-                  len(_selected), sorted(_p72_used_buckets),
-                  len(set(_f6_domain_key(s) for s in _selected)),
-                  len(set(_f6_vendor_key(s) for s in _selected) - {"other"}))
-
-        # Phase-2: fill to 6 — bigtech_official_media_actionable priority
-        # iter72c: missing-bucket-first pass before general fill
-        _p72c_cur_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
-        if len(_p72c_cur_buckets) < 4:
-            for it in _p72_pool_boma:
-                if len(_selected) >= 6:
-                    break
-                if it in _selected:
-                    continue
-                _p72c_ib = _ct72b_strategic_bucket(it)
-                if _p72c_ib not in _p72c_cur_buckets and _div_can_add(it, _selected):
-                    _sel_append(it)
-                    _p72c_cur_buckets.add(_p72c_ib)
-        for it in _p72_pool_boma:
-            if len(_selected) >= 6:
-                break
-            if it not in _selected and _div_can_add(it, _selected):
-                _sel_append(it)
-
-        # Phase-3: if official/media actionable < 6, allow bigtech_actionable non-official/media
-        _p72_boma_count = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
-        if _p72_boma_count < 6 and len(_selected) < 6:
-            for it in _p72_pool_bta:
-                if len(_selected) >= 6:
-                    break
-                if it not in _selected and _div_can_add(it, _selected):
-                    _plat_in = sum(1 for s in _selected if _is_platform_domain(s))
-                    _rt_in = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
-                    if _plat_in < _PLATFORM_CAP or not _is_platform_domain(it):
-                        if _rt_in < 1 or not _ct71_is_research_tutorial(it):
-                            _sel_append(it)
-
-        _log.info("iter72b Phase-2/3: selected=%d boma=%d actionable=%d",
-                  len(_selected),
-                  sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s)),
-                  sum(1 for s in _selected if _ct71_is_bigtech_actionable(s)))
-
-        # Phase-4: fill remaining to 7 — BOMA preferred, then BTA, then rescue
-        while len(_selected) < _max_events:
-            _p72_filled = False
-            # 4a: try BOMA first — iter72c: prefer new-bucket candidates
-            _p4c_cur_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
-            if len(_p4c_cur_buckets) < 4:
-                for it in _p72_pool_boma:
-                    if it not in _selected and _ct72b_strategic_bucket(it) not in _p4c_cur_buckets and _div_can_add(it, _selected) and not _is_platform_domain(it):
+        # Phase-2: leadership/politics quota — fill to >=2
+        _p73_lp_count = sum(1 for s in _selected if _is_leadership_politics_ai(s))
+        while _p73_lp_count < 2 and len(_selected) < _max_events:
+            _p73_lp_added = False
+            for it in _p73_pool_leader:
+                if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                    if not _ct71_is_research_tutorial(it):
                         _sel_append(it)
-                        _p72_filled = True
+                        _p73_lp_count += 1
+                        _p73_lp_added = True
                         break
-            if not _p72_filled:
+            if not _p73_lp_added:
+                # try from BOMA pool — items that are leadership_politics_ai
+                for it in _p72_pool_boma:
+                    if it not in _selected and _is_leadership_politics_ai(it) and _div_can_add(it, _selected):
+                        _sel_append(it)
+                        _p73_lp_count += 1
+                        _p73_lp_added = True
+                        break
+            if not _p73_lp_added:
+                # Phase-2 swap rescue: swap out non-leader item to make room for leader
+                _p73_lp_swap = False
+                for _lp_ri in range(len(_selected)):
+                    if _is_leadership_politics_ai(_selected[_lp_ri]):
+                        continue  # don't swap out a leader
+                    _lp_test = [s for j, s in enumerate(_selected) if j != _lp_ri]
+                    for _lp_cand in (_p73_pool_leader + _p72_pool_boma):
+                        if _lp_cand in _lp_test or not _is_leadership_politics_ai(_lp_cand):
+                            continue
+                        if _is_platform_domain(_lp_cand) or _ct71_is_research_tutorial(_lp_cand):
+                            continue
+                        _lp_new = _lp_test + [_lp_cand]
+                        _lp_dc = _DivCounter(_f6_domain_key(s) for s in _lp_new)
+                        _lp_vc = _DivCounter(_f6_vendor_key(s) for s in _lp_new)
+                        if (_lp_dc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                                and _lp_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                                and _hdf_all_scores.get(id(_lp_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
+                            _selected[_lp_ri] = _lp_cand
+                            _p73_lp_count = sum(1 for s in _selected if _is_leadership_politics_ai(s))
+                            _p73_lp_swap = True
+                            _log.info("iter73 Phase-2 swap: idx=%d for leader, lp_count=%d", _lp_ri, _p73_lp_count)
+                            break
+                    if _p73_lp_swap:
+                        break
+                if not _p73_lp_swap:
+                    break
+        _log.info("iter73 Phase-2 (leader): selected=%d lp_count=%d", len(_selected), _p73_lp_count)
+
+        # Phase-3: China AI/gov quota — fill to >=1
+        _p73_china_count = sum(1 for s in _selected if _is_china_ai_gov(s))
+        if _p73_china_count < 1 and len(_selected) < _max_events:
+            for it in _p73_pool_china:
+                if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                    if not _ct71_is_research_tutorial(it):
+                        _sel_append(it)
+                        _p73_china_count += 1
+                        break
+        # Phase-3 swap rescue: if no china item added, swap out non-china non-leader item
+        if _p73_china_count < 1:
+            _p73_china_swap = False
+            _p73_china_cands = _p73_pool_china + sorted([
+                it for it in _pool_300
+                if _is_china_ai_gov(it) and not _is_platform_domain(it) and not _f6_is_dev_noise(it)
+                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+            ], key=_sd73_key)
+            for _cn_ri in range(len(_selected)):
+                if _is_china_ai_gov(_selected[_cn_ri]) or _is_leadership_politics_ai(_selected[_cn_ri]):
+                    continue  # don't swap out china or leader items
+                _cn_test = [s for j, s in enumerate(_selected) if j != _cn_ri]
+                for _cn_cand in _p73_china_cands:
+                    if _cn_cand in _cn_test:
+                        continue
+                    if _is_platform_domain(_cn_cand) or _ct71_is_research_tutorial(_cn_cand):
+                        continue
+                    _cn_new = _cn_test + [_cn_cand]
+                    _cn_dc = _DivCounter(_f6_domain_key(s) for s in _cn_new)
+                    _cn_vc = _DivCounter(_f6_vendor_key(s) for s in _cn_new)
+                    if (_cn_dc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _cn_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _hdf_all_scores.get(id(_cn_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
+                        _selected[_cn_ri] = _cn_cand
+                        _p73_china_count = sum(1 for s in _selected if _is_china_ai_gov(s))
+                        _p73_china_swap = True
+                        _log.info("iter73 Phase-3 swap: idx=%d for china, china_count=%d", _cn_ri, _p73_china_count)
+                        break
+                if _p73_china_swap:
+                    break
+        _log.info("iter73 Phase-3 (china): selected=%d china_count=%d", len(_selected), _p73_china_count)
+
+        # Phase-4: fill bigtech_actionable_count >= 7 + BOMA >= 6
+        # Prefer BOMA (official/media), then BTA
+        _p73_boma = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
+        _p73_bta = sum(1 for s in _selected if _ct71_is_bigtech_actionable(s))
+        while (_p73_boma < 6 or _p73_bta < 7) and len(_selected) < _max_events:
+            _p73_f4 = False
+            # prefer BOMA first
+            if _p73_boma < 6:
                 for it in _p72_pool_boma:
                     if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
                         _sel_append(it)
-                        _p72_filled = True
+                        _p73_boma += 1
+                        _p73_bta += 1
+                        _p73_f4 = True
                         break
-            if _p72_filled:
-                continue
-            # 4b: try BTA (bigtech_actionable non-official/media)
-            for it in _p72_pool_bta:
-                if it not in _selected and _div_can_add(it, _selected):
-                    _sel_append(it)
-                    _p72_filled = True
-                    break
-            if _p72_filled:
-                continue
-            # 4c: try non-platform bigtech rescue
-            for it in _p72_pool_c:
-                if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
-                    _sel_append(it)
-                    _p72_filled = True
-                    break
-            if _p72_filled:
-                continue
-            # 4d: try platform (cap=1)
-            _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
-            if _plat_in_sel < _PLATFORM_CAP:
-                for it in _p72_pool_plat:
-                    if it not in _selected and _div_can_add(it, _selected):
+            if not _p73_f4 and _p73_bta < 7:
+                for it in (_p72_pool_boma + _p72_pool_bta):
+                    if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
                         _sel_append(it)
-                        _p72_filled = True
+                        if _ct72b_is_bigtech_official_media_actionable(it):
+                            _p73_boma += 1
+                        _p73_bta += 1
+                        _p73_f4 = True
                         break
-            if _p72_filled:
-                continue
-            # 4e: try research/tutorial (cap=1)
-            _rt_in_sel = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
-            if _rt_in_sel < 1:
-                for it in _p72_pool_rt:
-                    if it not in _selected and _div_can_add(it, _selected):
-                        _sel_append(it)
-                        _p72_filled = True
-                        break
-            if _p72_filled:
-                continue
-            # 4f: last resort — any bigtech with density pass
-            for it in _p72_pool_c:
-                if it not in _selected and _div_can_add(it, _selected):
-                    _sel_append(it)
-                    _p72_filled = True
-                    break
-            if not _p72_filled:
-                break  # can't fill any more
+            if not _p73_f4:
+                break
+        _log.info("iter73 Phase-4 (quota): selected=%d boma=%d bta=%d", len(_selected), _p73_boma, _p73_bta)
 
-        # Phase-5: 2-step swap (iter70 legacy — if at 6, try swap 1 for 2)
-        _swap_attempts = 0
-        _swap_successes = 0
-        if len(_selected) < _max_events and len(_selected) >= _max_events - 1:
-            _swap_pool = _oa_partition([
+        # Phase-5: fill to 10 — prefer non-platform actionable
+        while len(_selected) < _max_events:
+            _p73_f5 = False
+            # 5a: bucket-first from BOMA
+            _p73_cb = set(_ct72b_strategic_bucket(s) for s in _selected)
+            if len(_p73_cb) < 5:
+                for it in _p72_pool_boma:
+                    if it not in _selected and _ct72b_strategic_bucket(it) not in _p73_cb and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                        _sel_append(it)
+                        _p73_f5 = True
+                        break
+            if not _p73_f5:
+                for it in _p72_pool_boma:
+                    if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                        _sel_append(it)
+                        _p73_f5 = True
+                        break
+            if not _p73_f5:
+                for it in _p72_pool_bta:
+                    if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                        _sel_append(it)
+                        _p73_f5 = True
+                        break
+            if not _p73_f5:
+                for it in _p72_pool_c:
+                    if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                        _sel_append(it)
+                        _p73_f5 = True
+                        break
+            if not _p73_f5:
+                # allow platform (cap=1) or research/tutorial (cap=1)
+                _plat_in = sum(1 for s in _selected if _is_platform_domain(s))
+                _rt_in = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
+                if _plat_in < _PLATFORM_CAP:
+                    for it in _p72_pool_plat:
+                        if it not in _selected and _div_can_add(it, _selected):
+                            _sel_append(it)
+                            _p73_f5 = True
+                            break
+                if not _p73_f5 and _rt_in < 1:
+                    for it in _p72_pool_rt:
+                        if it not in _selected and _div_can_add(it, _selected):
+                            _sel_append(it)
+                            _p73_f5 = True
+                            break
+            if not _p73_f5:
+                # last resort — any bigtech with density pass, non-platform
+                for it in _p72_pool_c:
+                    if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                        _sel_append(it)
+                        _p73_f5 = True
+                        break
+            if not _p73_f5:
+                # penultimate resort — bigtech items from _pool_300 with density + strategic density pass
+                for it in _pool_300:
+                    if (it not in _selected and _div_can_add(it, _selected)
+                            and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
+                            and _f6_is_bigtech(it)
+                            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                            and _sd73_pass(it)):
+                        _sel_append(it)
+                        _p73_f5 = True
+                        break
+            if not _p73_f5:
+                # absolute last resort — bigtech items without strategic density pass (gate will check later)
+                for it in _pool_300:
+                    if (it not in _selected and _div_can_add(it, _selected)
+                            and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
+                            and _f6_is_bigtech(it)
+                            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
+                        _sel_append(it)
+                        _p73_f5 = True
+                        break
+            if not _p73_f5:
+                break
+
+        # Phase-6: bucket rescue swap — if buckets_distinct < 5, try swaps
+        _p73_all_pools = _p72_pool_boma + _p72_pool_bta + _p72_pool_c
+        while len(set(_ct72b_strategic_bucket(s) for s in _selected)) < 5:
+            _p6c_cur = set(_ct72b_strategic_bucket(s) for s in _selected)
+            _p6_best = None
+            for _p6i in range(len(_selected)):
+                _p6_rm = _selected[_p6i]
+                _p6_test = [s for j, s in enumerate(_selected) if j != _p6i]
+                _p6_tb = set(_ct72b_strategic_bucket(s) for s in _p6_test)
+                if len(_p6_tb) < len(_p6c_cur) - 1:
+                    continue
+                for _p6c in _p73_all_pools:
+                    if _p6c in _p6_test or _p6c == _p6_rm:
+                        continue
+                    _p6nb = _p6_tb | {_ct72b_strategic_bucket(_p6c)}
+                    if len(_p6nb) <= len(_p6c_cur):
+                        continue
+                    _p6c_rescue_attempts += 1
+                    _p6n = _p6_test + [_p6c]
+                    _p6nd = _DivCounter(_f6_domain_key(s) for s in _p6n)
+                    _p6nv = _DivCounter(_f6_vendor_key(s) for s in _p6n)
+                    if (_p6nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p6nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and sum(1 for s in _p6n if _is_platform_domain(s)) <= _PLATFORM_CAP
+                            and sum(1 for s in _p6n if _ct71_is_research_tutorial(s)) <= 1
+                            and sum(1 for s in _p6n if _ct72b_is_bigtech_official_media_actionable(s)) >= 6
+                            and _hdf_all_scores.get(id(_p6c), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                            and _sd73_pass(_p6c)):
+                        _p6_best = (_p6i, _p6c)
+                        break
+                if _p6_best:
+                    break
+            if _p6_best:
+                _selected[_p6_best[0]] = _p6_best[1]
+                _p6c_rescue_successes += 1
+                _log.info("iter73 Phase-6 bucket rescue: swapped idx=%d, distinct=%d",
+                          _p6_best[0], len(set(_ct72b_strategic_bucket(s) for s in _selected)))
+            else:
+                break
+
+        # Phase-7: 2-step swap rescue — if at max_events-1, try removing 1 and adding 2
+        if len(_selected) == _max_events - 1:
+            _p7_swap_pool = _oa_partition([
                 it for it in _pool_300
                 if it not in _selected
                 and not _f6_is_dev_noise(it)
                 and _f6_is_bigtech(it)
                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             ])
-            for _si in range(len(_selected)):
+            for _p7_si in range(len(_selected)):
                 if len(_selected) >= _max_events:
                     break
                 _swap_attempts += 1
-                _removed = _selected[_si]
-                _test_sel = [s for j, s in enumerate(_selected) if j != _si]
-                _add_pair = []
-                _plat_test = sum(1 for s in _test_sel if _is_platform_domain(s))
-                for _sc in _swap_pool:
-                    if _sc in _test_sel or _sc == _removed or _sc in _add_pair:
+                _p7_removed = _selected[_p7_si]
+                _p7_test = [s for j, s in enumerate(_selected) if j != _p7_si]
+                _p7_pair = []
+                _p7_plat_test = sum(1 for s in _p7_test if _is_platform_domain(s))
+                for _p7_sc in _p7_swap_pool:
+                    if _p7_sc in _p7_test or _p7_sc == _p7_removed or _p7_sc in _p7_pair:
                         continue
-                    if _is_platform_domain(_sc) and _plat_test + sum(1 for a in _add_pair if _is_platform_domain(a)) >= _PLATFORM_CAP:
+                    if _is_platform_domain(_p7_sc) and _p7_plat_test + sum(1 for a in _p7_pair if _is_platform_domain(a)) >= _PLATFORM_CAP:
                         continue
-                    _test_full = _test_sel + _add_pair + [_sc]
-                    _tdc = _DivCounter(_f6_domain_key(s) for s in _test_full)
-                    _tvc = _DivCounter(_f6_vendor_key(s) for s in _test_full)
-                    if (_tdc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                            and _tvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
-                            and _tdc[_f6_domain_key(_sc)] * _DOMAIN_SHARE_CAP_MULTIPLIER <= _max_events
-                            and _tvc[_f6_vendor_key(_sc)] * _DOMAIN_SHARE_CAP_MULTIPLIER <= _max_events):
-                        _add_pair.append(_sc)
-                        if len(_add_pair) >= 2:
+                    _p7_tf = _p7_test + _p7_pair + [_p7_sc]
+                    _p7_tdc = _DivCounter(_f6_domain_key(s) for s in _p7_tf)
+                    _p7_tvc = _DivCounter(_f6_vendor_key(s) for s in _p7_tf)
+                    if (_p7_tdc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p7_tvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _p7_tdc[_f6_domain_key(_p7_sc)] * _DOMAIN_SHARE_CAP_MULTIPLIER <= _max_events
+                            and _p7_tvc[_f6_vendor_key(_p7_sc)] * _DOMAIN_SHARE_CAP_MULTIPLIER <= _max_events):
+                        _p7_pair.append(_p7_sc)
+                        if len(_p7_pair) >= 2:
                             break
-                if len(_add_pair) == 2:
-                    _new_sel = _test_sel + _add_pair
-                    _ndc = _DivCounter(_f6_domain_key(s) for s in _new_sel)
-                    _nvc = _DivCounter(_f6_vendor_key(s) for s in _new_sel)
-                    _n_plat = sum(1 for s in _new_sel if _is_platform_domain(s))
-                    _n_act = sum(1 for s in _new_sel if _ct71_is_bigtech_actionable(s))
-                    _n_boma = sum(1 for s in _new_sel if _ct72b_is_bigtech_official_media_actionable(s))
-                    _n_rt = sum(1 for s in _new_sel if _ct71_is_research_tutorial(s))
-                    # iter72b: swap must maintain or improve BOMA count
-                    _cur_boma = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
-                    if (_ndc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                            and _nvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
-                            and len(_ndc) >= _DIV_MIN_DOMAINS
-                            and len(set(_f6_vendor_key(s) for s in _new_sel) - {"other"}) >= _DIV_MIN_VENDORS
-                            and _n_plat <= _PLATFORM_CAP
-                            and _n_rt <= 1
-                            and _n_boma >= _cur_boma):
-                        _selected[:] = _new_sel
+                if len(_p7_pair) == 2:
+                    _p7_new = _p7_test + _p7_pair
+                    _p7_ndc = _DivCounter(_f6_domain_key(s) for s in _p7_new)
+                    _p7_nvc = _DivCounter(_f6_vendor_key(s) for s in _p7_new)
+                    _p7_n_plat = sum(1 for s in _p7_new if _is_platform_domain(s))
+                    _p7_n_rt = sum(1 for s in _p7_new if _ct71_is_research_tutorial(s))
+                    _p7_n_boma = sum(1 for s in _p7_new if _ct72b_is_bigtech_official_media_actionable(s))
+                    _p7_cur_boma = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
+                    if (_p7_ndc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p7_nvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _p7_n_plat <= _PLATFORM_CAP
+                            and _p7_n_rt <= 1
+                            and _p7_n_boma >= min(_p7_cur_boma, 6)):
+                        _selected[:] = _p7_new
                         _swap_successes += 1
-                        _log.info("iter72b Phase-5: 2-step swap success at idx=%d, selected=%d boma=%d", _si, len(_selected), _n_boma)
+                        _log.info("iter73 Phase-7: 2-step swap at idx=%d, selected=%d", _p7_si, len(_selected))
                         break
 
-        # Phase-6 (iter72c): bucket rescue swap — if buckets_distinct < 4, try ANY swap that gains a new bucket
-        _p6c_rescue_attempts = 0
-        _p6c_rescue_successes = 0
-        _p6c_all_pools = _p72_pool_boma + _p72_pool_bta + _p72_pool_c
-        while len(set(_ct72b_strategic_bucket(s) for s in _selected)) < 4:
-            _p6c_cur_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
-            _p6c_best = None  # (rm_idx, cand, new_bucket_count)
-            for _p6_rm_idx in range(len(_selected)):
-                _p6_removed = _selected[_p6_rm_idx]
-                _p6_test = [s for j, s in enumerate(_selected) if j != _p6_rm_idx]
-                _p6_test_buckets = set(_ct72b_strategic_bucket(s) for s in _p6_test)
-                # removing this item must not drop bucket count below current-1
-                if len(_p6_test_buckets) < len(_p6c_cur_buckets) - 1:
-                    continue
-                for _p6_cand in _p6c_all_pools:
-                    if _p6_cand in _p6_test or _p6_cand == _p6_removed:
-                        continue
-                    _p6cb = _ct72b_strategic_bucket(_p6_cand)
-                    _p6_new_buckets = _p6_test_buckets | {_p6cb}
-                    if len(_p6_new_buckets) <= len(_p6c_cur_buckets):
-                        continue  # no bucket improvement
-                    _p6c_rescue_attempts += 1
-                    _p6_new = _p6_test + [_p6_cand]
-                    _p6_ndc = _DivCounter(_f6_domain_key(s) for s in _p6_new)
-                    _p6_nvc = _DivCounter(_f6_vendor_key(s) for s in _p6_new)
-                    _p6_n_plat = sum(1 for s in _p6_new if _is_platform_domain(s))
-                    _p6_n_rt = sum(1 for s in _p6_new if _ct71_is_research_tutorial(s))
-                    _p6_n_boma = sum(1 for s in _p6_new if _ct72b_is_bigtech_official_media_actionable(s))
-                    if (_p6_ndc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                            and _p6_nvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
-                            and len(_p6_ndc) >= _DIV_MIN_DOMAINS
-                            and len(set(_f6_vendor_key(s) for s in _p6_new) - {"other"}) >= _DIV_MIN_VENDORS
-                            and _p6_n_plat <= _PLATFORM_CAP
-                            and _p6_n_rt <= 1
-                            and _p6_n_boma >= 6
-                            and _hdf_all_scores.get(id(_p6_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
-                        _p6c_best = (_p6_rm_idx, _p6_cand, len(_p6_new_buckets))
-                        break
-                if _p6c_best:
-                    break
-            if _p6c_best:
-                _p6_rm_idx, _p6_cand, _p6_nb = _p6c_best
-                _p6_old_b = _ct72b_strategic_bucket(_selected[_p6_rm_idx])
-                _p6_new_b = _ct72b_strategic_bucket(_p6_cand)
-                _selected[_p6_rm_idx] = _p6_cand
-                _p6c_rescue_successes += 1
-                _log.info("iter72c Phase-6 bucket rescue: swapped idx=%d bucket=%s→%s, distinct=%d",
-                          _p6_rm_idx, _p6_old_b, _p6_new_b, len(set(_ct72b_strategic_bucket(s) for s in _selected)))
-            else:
-                break  # no valid swap found
-        if _p6c_rescue_attempts > 0:
-            _log.info("iter72c Phase-6 bucket rescue: attempts=%d successes=%d final_distinct=%d",
-                      _p6c_rescue_attempts, _p6c_rescue_successes, len(set(_ct72b_strategic_bucket(s) for s in _selected)))
-
-        # Phase-5 FAIL check: if < 7 items, write shortfall and FAIL
         if len(_selected) < _max_events:
-            _log.warning("iter72b Phase-5 FAIL: selected=%d < target=%d", len(_selected), _max_events)
+            _log.warning("iter73 FAIL: selected=%d < target=%d", len(_selected), _max_events)
 
-        _log.info("iter72c selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d buckets=%s",
+        _log.info("iter73 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d lp=%d china=%d buckets=%s",
                   len(_selected),
                   sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s)),
                   sum(1 for s in _selected if _ct71_is_bigtech_actionable(s)),
                   sum(1 for s in _selected if _is_platform_domain(s)),
                   sum(1 for s in _selected if _ct71_is_research_tutorial(s)),
+                  sum(1 for s in _selected if _is_leadership_politics_ai(s)),
+                  sum(1 for s in _selected if _is_china_ai_gov(s)),
                   sorted(set(_ct72b_strategic_bucket(s) for s in _selected)))
     else:
         # Non-daily: no swap tracking needed
@@ -8142,6 +8332,17 @@ def _f600_run_fast_path(
         _f6_om = 0
     _f6_focus = _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
 
+    # iter73: per-item strategic density floor (defined early — used by source_density patch + content_mix gate)
+    _cm73_sd_baseline = 10
+    _cm73_sd_floor = int(_cm73_sd_baseline * 1.5)  # 15
+    _cm73_per_item_sd_pass = True
+    _cm73_per_item_sd_failures = []
+    for _cm73_si, _cm73_ss in enumerate(_selected):
+        _cm73_ss_score = _sd72_all_scores.get(id(_cm73_ss), {}).get("strategic_density_score", 0)
+        if _cm73_ss_score < _cm73_sd_floor:
+            _cm73_per_item_sd_pass = False
+            _cm73_per_item_sd_failures.append({"idx": _cm73_si, "score": _cm73_ss_score, "title": str(getattr(_cm73_ss, "title", "") or "")[:80]})
+
     # iter56/iter66/iter72b: patch source_density.meta.json with selected flag + multiplier gate + strategic density
     try:
         _hdf_sel_urls = set(str(getattr(it, "url", "") or getattr(it, "link", "") or "")[:200] for it in _selected)
@@ -8172,6 +8373,12 @@ def _f600_run_fast_path(
                         _hdf_row["content_type"] = _ct71_classify(_sd72_sel_it)
                         _hdf_row["source_class"] = _ct72b_source_class(_sd72_sel_it)
                         _hdf_row["strategic_bucket"] = _ct72b_strategic_bucket(_sd72_sel_it)
+                        _hdf_row["geo_class"] = _geo_class(_sd72_sel_it)
+                        _hdf_row["leadership_politics_ai_item"] = _is_leadership_politics_ai(_sd72_sel_it)
+                        _hdf_row["china_ai_gov_item"] = _is_china_ai_gov(_sd72_sel_it)
+                        _hdf_row["bigtech_actionable"] = _ct71_is_bigtech_actionable(_sd72_sel_it)
+                        _hdf_row["bigtech_official_media_actionable"] = _ct72b_is_bigtech_official_media_actionable(_sd72_sel_it)
+                        _hdf_row["strategic_density_floor_pass"] = _sd72_sel_data.get("strategic_density_score", 0) >= _cm73_sd_floor
                         _hdf_row.update(_sd72_sel_data)
                         break
             _hdf_d["selected_pass"] = _hdf_sel_pass_count
@@ -8219,6 +8426,11 @@ def _f600_run_fast_path(
             _hdf_d["selected_avg_strategic_density_score"] = _sd72_sel_avg
             _hdf_d["selected_min_strategic_density_score"] = _sd72_sel_min
             _hdf_d["strategic_density_gate_pass"] = _sd72_gate_pass
+            # iter73: per-item strategic density floor gate
+            _hdf_d["base_min_density"] = _cm73_sd_baseline
+            _hdf_d["target_min_density_1p5"] = _cm73_sd_floor
+            _hdf_d["per_item_strategic_density_gate_pass"] = _cm73_per_item_sd_pass
+            _hdf_d["per_item_strategic_density_failures"] = _cm73_per_item_sd_failures
             if _hdf_inject_low_active:
                 _hdf_d["test_injected"] = True
                 _hdf_d["injected_low_density_count"] = _hdf_inject_low
@@ -8310,7 +8522,7 @@ def _f600_run_fast_path(
         if _non_bt_om > 0:
             _write_not_ready_report_md(
                 "DAILY_BIGTECH_ONLY_HARD_FAIL",
-                f"non_bigtech_or_non_official_count={_non_bt_om} (DAILY requires all 7 to be bigtech+official_or_media)",
+                f"non_bigtech_or_non_official_count={_non_bt_om} (DAILY requires all {_max_events} to be bigtech+official_or_media)",
                 run_id=_run_id, selected_items_count=len(_selected),
                 selected_sources_distinct=_f6_distinct,
                 bigtech_hit_count=_f6_bigtech,
@@ -8739,7 +8951,54 @@ def _f600_run_fast_path(
                             len(_hdf_sel_scores_ps2) > 0
                             and all(s >= _HDF_NEW_DENSITY_MIN for s in _hdf_sel_scores_ps2)
                         )
+                        # iter73: recompute per-item SD floor after platform swap
+                        _hdf_d_ps["per_item_strategic_density_gate_pass"] = _cm73_per_item_sd_pass
+                        _hdf_d_ps["per_item_strategic_density_failures"] = _cm73_per_item_sd_failures
                         _hdf_mp_ps.write_text(_f6_j.dumps(_hdf_d_ps, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+                # iter73: recompute per-item SD floor AFTER platform swap
+                _cm73_per_item_sd_pass = True
+                _cm73_per_item_sd_failures = []
+                for _cm73_psi, _cm73_pss in enumerate(_selected):
+                    # compute SD on-the-fly if not cached (swap items)
+                    if id(_cm73_pss) not in _sd72_all_scores:
+                        _sd72_all_scores[id(_cm73_pss)] = _sd72_score(_cm73_pss)
+                    _cm73_pss_score = _sd72_all_scores.get(id(_cm73_pss), {}).get("strategic_density_score", 0)
+                    if _cm73_pss_score < _cm73_sd_floor:
+                        _cm73_per_item_sd_pass = False
+                        _cm73_per_item_sd_failures.append({"idx": _cm73_psi, "score": _cm73_pss_score, "title": str(getattr(_cm73_pss, "title", "") or "")[:80]})
+                # Re-patch source_density.meta.json with updated per-item SD
+                try:
+                    _hdf_mp_ps2 = _outputs / "source_density.meta.json"
+                    if _hdf_mp_ps2.exists():
+                        _hdf_d_ps2 = _f6_j.loads(_hdf_mp_ps2.read_text(encoding="utf-8"))
+                        _sd72_sel_scores_ps3 = [_sd72_all_scores.get(id(s), {}).get("strategic_density_score", 0) for s in _selected]
+                        _hdf_d_ps2["selected_avg_strategic_density_score"] = round(sum(_sd72_sel_scores_ps3) / len(_sd72_sel_scores_ps3), 2) if _sd72_sel_scores_ps3 else 0
+                        _hdf_d_ps2["selected_min_strategic_density_score"] = min(_sd72_sel_scores_ps3) if _sd72_sel_scores_ps3 else 0
+                        _hdf_d_ps2["strategic_density_gate_pass"] = (_hdf_d_ps2["selected_avg_strategic_density_score"] >= _sd72_target_avg)
+                        _hdf_d_ps2["per_item_strategic_density_gate_pass"] = _cm73_per_item_sd_pass
+                        _hdf_d_ps2["per_item_strategic_density_failures"] = _cm73_per_item_sd_failures
+                        # re-enrich selected items in items[] with SD data
+                        _hdf_sel_urls_ps3 = set(str(getattr(s, "url", "") or getattr(s, "link", "") or "")[:200] for s in _selected)
+                        for _ps3_it in _selected:
+                            _ps3_url = str(getattr(_ps3_it, "url", "") or getattr(_ps3_it, "link", "") or "")[:200]
+                            _ps3_sd = _sd72_all_scores.get(id(_ps3_it), {})
+                            for _hdf_row_ps3 in _hdf_d_ps2.get("items", []):
+                                if _hdf_row_ps3.get("url", "") == _ps3_url and _hdf_row_ps3.get("selected"):
+                                    _hdf_row_ps3["geo_class"] = _geo_class(_ps3_it)
+                                    _hdf_row_ps3["leadership_politics_ai_item"] = _is_leadership_politics_ai(_ps3_it)
+                                    _hdf_row_ps3["china_ai_gov_item"] = _is_china_ai_gov(_ps3_it)
+                                    _hdf_row_ps3["bigtech_actionable"] = _ct71_is_bigtech_actionable(_ps3_it)
+                                    _hdf_row_ps3["bigtech_official_media_actionable"] = _ct72b_is_bigtech_official_media_actionable(_ps3_it)
+                                    _hdf_row_ps3["strategic_density_score"] = _ps3_sd.get("strategic_density_score", 0)
+                                    _hdf_row_ps3["strategic_density_floor_pass"] = _ps3_sd.get("strategic_density_score", 0) >= _cm73_sd_floor
+                                    _hdf_row_ps3["content_type"] = _ct71_classify(_ps3_it)
+                                    _hdf_row_ps3["source_class"] = _ct72b_source_class(_ps3_it)
+                                    _hdf_row_ps3["strategic_bucket"] = _ct72b_strategic_bucket(_ps3_it)
+                                    _hdf_row_ps3.update(_ps3_sd)
+                                    break
+                        _hdf_mp_ps2.write_text(_f6_j.dumps(_hdf_d_ps2, ensure_ascii=False, indent=2), encoding="utf-8")
                 except Exception:
                     pass
 
@@ -8990,10 +9249,12 @@ def _f600_run_fast_path(
         )
         _f6_fail("DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY", _pdc_fail_reason)
 
-    # --- iter72b: content_mix.meta.json + all content gates ---
+    # --- iter73: content_mix.meta.json + all content gates ---
     _cm71_bt_actionable = sum(1 for s in _selected if _ct71_is_bigtech_actionable(s))
     _cm72_bt_om_actionable = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
     _cm71_rt_total = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
+    _cm73_lp_count = sum(1 for s in _selected if _is_leadership_politics_ai(s))
+    _cm73_china_count = sum(1 for s in _selected if _is_china_ai_gov(s))
     _cm72_strategic_buckets = sorted(set(_ct72b_strategic_bucket(s) for s in _selected))
     _cm72_strategic_buckets_distinct = len(_cm72_strategic_buckets)
     _cm71_per_item = []
@@ -9007,22 +9268,32 @@ def _f600_run_fast_path(
             "content_type": _ct71_classify(_cm71_s),
             "strategic_bucket": _ct72b_strategic_bucket(_cm71_s),
             "source_class": _ct72b_source_class(_cm71_s),
+            "geo_class": _geo_class(_cm71_s),
             "bigtech_actionable": _ct71_is_bigtech_actionable(_cm71_s),
             "bigtech_official_media_actionable": _ct72b_is_bigtech_official_media_actionable(_cm71_s),
+            "leadership_politics_ai": _is_leadership_politics_ai(_cm71_s),
+            "china_ai_gov": _is_china_ai_gov(_cm71_s),
             "is_platform": _is_platform_domain(_cm71_s),
             "is_research_tutorial": _ct71_is_research_tutorial(_cm71_s),
             "strategic_density_score": _sd_item.get("strategic_density_score", 0),
+            "strategic_density_floor_pass": _sd_item.get("strategic_density_score", 0) >= _cm73_sd_floor,
         })
 
     # injection support
     _cm71_inject_plat = os.environ.get("INJECT_PLATFORM_DOMAIN_TOTAL", "")
     _cm71_inject_rt = os.environ.get("INJECT_RESEARCH_TUTORIAL_TOTAL", "")
     _cm72_inject_bom = os.environ.get("INJECT_BIGTECH_OFFICIAL_MEDIA_COUNT", "")
+    _cm73_inject_lp = os.environ.get("INJECT_LEADERSHIP_POLITICS_AI_COUNT", "")
+    _cm73_inject_china = os.environ.get("INJECT_CHINA_AI_GOV_COUNT", "")
     _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
     _cm71_rt_total_check = _cm71_rt_total
     _cm72_bom_check = _cm72_bt_om_actionable
+    _cm73_lp_check = _cm73_lp_count
+    _cm73_china_check = _cm73_china_count
     _cm71_rt_is_injected = bool(_cm71_inject_rt)
     _cm72_bom_is_injected = bool(_cm72_inject_bom)
+    _cm73_lp_is_injected = bool(_cm73_inject_lp)
+    _cm73_china_is_injected = bool(_cm73_inject_china)
     if _cm71_rt_is_injected:
         try:
             _cm71_rt_total_check = int(_cm71_inject_rt)
@@ -9035,24 +9306,47 @@ def _f600_run_fast_path(
         except ValueError:
             pass
         _log.info("INJECT_BIGTECH_OFFICIAL_MEDIA_COUNT=%s: bigtech_official_media_count overridden", _cm72_inject_bom)
+    if _cm73_lp_is_injected:
+        try:
+            _cm73_lp_check = int(_cm73_inject_lp)
+        except ValueError:
+            pass
+        _log.info("INJECT_LEADERSHIP_POLITICS_AI_COUNT=%s: leadership_politics_ai_count overridden", _cm73_inject_lp)
+    if _cm73_china_is_injected:
+        try:
+            _cm73_china_check = int(_cm73_inject_china)
+        except ValueError:
+            pass
+        _log.info("INJECT_CHINA_AI_GOV_COUNT=%s: china_ai_gov_count overridden", _cm73_inject_china)
 
-    _cm71_bt_act_pass = (_cm71_bt_actionable >= 6)
+    _cm71_bt_act_pass = (_cm71_bt_actionable >= 7)  # iter73: was 6
     _cm72_bom_pass = (_cm72_bom_check >= 6)
     _cm71_plat_pass = (_cm71_plat_total_check <= _PLATFORM_CAP)
     _cm71_rt_pass = (_cm71_rt_total_check <= 1)
-    _cm72_bucket_pass = (_cm72_strategic_buckets_distinct >= 4)
+    _cm72_bucket_pass = (_cm72_strategic_buckets_distinct >= 5)  # iter73: was 4
+    _cm73_lp_pass = (_cm73_lp_check >= 2)  # iter73: new
+    _cm73_china_pass = (_cm73_china_check >= 1)  # iter73: new
+    _cm73_total_pass = (len(_selected) >= 10)  # iter73: new
 
     try:
         _cm71_path = _outputs / "content_mix.meta.json"
         _cm71_meta = {
             "run_id": _run_id,
             "selected_events": len(_selected),
+            "total_events_min": 10,
+            "total_events_pass": _cm73_total_pass,
             "bigtech_actionable_count": _cm71_bt_actionable,
-            "bigtech_actionable_min": 6,
+            "bigtech_actionable_min": 7,
             "bigtech_actionable_min_pass": _cm71_bt_act_pass,
             "bigtech_official_media_count": _cm72_bom_check,
             "bigtech_official_media_min": 6,
             "bigtech_official_media_min_pass": _cm72_bom_pass,
+            "leadership_politics_ai_count": _cm73_lp_check,
+            "leadership_politics_ai_min": 2,
+            "leadership_politics_ai_min_pass": _cm73_lp_pass,
+            "china_ai_gov_count": _cm73_china_check,
+            "china_ai_gov_min": 1,
+            "china_ai_gov_min_pass": _cm73_china_pass,
             "platform_total": _cm71_plat_total_check,
             "platform_cap": _PLATFORM_CAP,
             "platform_cap_pass": _cm71_plat_pass,
@@ -9061,13 +9355,17 @@ def _f600_run_fast_path(
             "research_tutorial_cap_pass": _cm71_rt_pass,
             "selected_strategic_buckets": _cm72_strategic_buckets,
             "selected_strategic_buckets_distinct": _cm72_strategic_buckets_distinct,
-            "strategic_bucket_coverage_min": 4,
+            "strategic_bucket_coverage_min": 5,
             "strategic_bucket_coverage_pass": _cm72_bucket_pass,
+            "per_item_strategic_density_floor": _cm73_sd_floor,
+            "per_item_strategic_density_pass": _cm73_per_item_sd_pass,
+            "per_item_strategic_density_failures": _cm73_per_item_sd_failures,
             "bucket_rescue_attempts": _p6c_rescue_attempts if _is_daily else 0,
             "bucket_rescue_successes": _p6c_rescue_successes if _is_daily else 0,
             "strategic_bucket_per_item": [_cm71_per_item[i]["strategic_bucket"] for i in range(len(_cm71_per_item))],
             "content_type_per_item": [_cm71_per_item[i]["content_type"] for i in range(len(_cm71_per_item))],
             "source_class_per_item": [_cm71_per_item[i]["source_class"] for i in range(len(_cm71_per_item))],
+            "geo_class_per_item": [_cm71_per_item[i]["geo_class"] for i in range(len(_cm71_per_item))],
             "selected_content_types": _cm71_per_item,
         }
         if _cm71_rt_is_injected:
@@ -9079,13 +9377,32 @@ def _f600_run_fast_path(
         if _cm72_bom_is_injected:
             _cm71_meta["bigtech_official_media_test_injected"] = True
             _cm71_meta["injected_bigtech_official_media_count"] = _cm72_inject_bom
+        if _cm73_lp_is_injected:
+            _cm71_meta["leadership_politics_ai_test_injected"] = True
+            _cm71_meta["injected_leadership_politics_ai_count"] = _cm73_inject_lp
+        if _cm73_china_is_injected:
+            _cm71_meta["china_ai_gov_test_injected"] = True
+            _cm71_meta["injected_china_ai_gov_count"] = _cm73_inject_china
         _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _cm71_exc:
         _log.warning("content_mix.meta.json write failed: %s", _cm71_exc)
 
-    # BIGTECH_ACTIONABLE_MIN_HARD_DAILY gate (B1)
+    # iter73: TOTAL_EVENTS_HARD_DAILY gate (B0)
+    if _is_daily and not _cm73_total_pass:
+        _cm73_total_fail = f"TOTAL_EVENTS_HARD_DAILY_FAIL: selected={len(_selected)} < 10"
+        _write_not_ready_report_md(
+            "TOTAL_EVENTS_HARD_DAILY",
+            _cm73_total_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("TOTAL_EVENTS_HARD_DAILY", _cm73_total_fail)
+
+    # BIGTECH_ACTIONABLE_MIN_HARD_DAILY gate (B1) — iter73: threshold raised to 7
     if _is_daily and not _cm71_bt_act_pass:
-        _cm71_bt_fail = f"BIGTECH_ACTIONABLE_MIN_HARD_DAILY_FAIL: actionable={_cm71_bt_actionable} < 6"
+        _cm71_bt_fail = f"BIGTECH_ACTIONABLE_MIN_HARD_DAILY_FAIL: actionable={_cm71_bt_actionable} < 7"
         _write_not_ready_report_md(
             "BIGTECH_ACTIONABLE_MIN_HARD_DAILY",
             _cm71_bt_fail,
@@ -9126,9 +9443,9 @@ def _f600_run_fast_path(
         )
         _f6_fail("RESEARCH_TUTORIAL_CAP_HARD_DAILY", _cm71_rt_fail)
 
-    # iter72c: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY gate (B4) — min 4 distinct strategic buckets
+    # iter73: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY gate (B4) — min 5 distinct strategic buckets
     if _is_daily and not _cm72_bucket_pass:
-        _cm72_bucket_fail = f"STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={_cm72_strategic_buckets_distinct} < 4"
+        _cm72_bucket_fail = f"STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={_cm72_strategic_buckets_distinct} < 5"
         _write_not_ready_report_md(
             "STRATEGIC_BUCKET_COVERAGE_HARD_DAILY",
             _cm72_bucket_fail,
@@ -9138,6 +9455,49 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY", _cm72_bucket_fail)
+
+    # iter73: LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY gate (B5) — min 2
+    if _is_daily and not _cm73_lp_pass:
+        _cm73_lp_fail = f"LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY_FAIL: leadership_politics_ai={_cm73_lp_check} < 2"
+        if _cm73_lp_is_injected:
+            _cm73_lp_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY",
+            _cm73_lp_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY", _cm73_lp_fail)
+
+    # iter73: CHINA_AI_GOV_MIN_HARD_DAILY gate (B6) — min 1
+    if _is_daily and not _cm73_china_pass:
+        _cm73_china_fail = f"CHINA_AI_GOV_MIN_HARD_DAILY_FAIL: china_ai_gov={_cm73_china_check} < 1"
+        if _cm73_china_is_injected:
+            _cm73_china_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "CHINA_AI_GOV_MIN_HARD_DAILY",
+            _cm73_china_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("CHINA_AI_GOV_MIN_HARD_DAILY", _cm73_china_fail)
+
+    # iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY gate (B7) — each item >= 15
+    if _is_daily and not _cm73_per_item_sd_pass:
+        _cm73_sd_fail = f"PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY_FAIL: {len(_cm73_per_item_sd_failures)} items below floor={_cm73_sd_floor}"
+        _write_not_ready_report_md(
+            "PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY",
+            _cm73_sd_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY", _cm73_sd_fail)
 
     # iter53: BIGTECH_DIVERSITY gate (DAILY only)
     if _is_daily and not _div_pass:
@@ -11990,9 +12350,9 @@ def run_pipeline() -> None:
                         int(os.environ.get("BRIEF_MAX_EVENTS", "7") or "7"),
                     ),
                 )
-                # iter70: increase hydration pool for DAILY to get more non-platform candidates
-                _hy_mult = 6 if _is_daily else 4
-                _hy_floor = 42 if _is_daily else 30
+                # iter73: increase hydration pool for DAILY — 10-item brief needs wider diversity
+                _hy_mult = 8 if _is_daily else 4
+                _hy_floor = 80 if _is_daily else 30
                 _hydrate_n = min(max(_probe_target * _hy_mult, _hy_floor), len(raw_items))
                 _targeted_pool = list(raw_items[:_hydrate_n])  # already sorted by _bfp_score
                 # iter54e: DAILY domain diversity injection — ensure hydration pool
@@ -12018,6 +12378,9 @@ def run_pipeline() -> None:
                         "engineering.fb.com", "ai.meta.com",
                         "blog.google", "security.googleblog.com",
                         "techcrunch.com", "inside.com.tw", "ithome.com.tw",
+                        # iter73: Chinese tech domains for China AI coverage
+                        "36kr.com", "deepseek.com", "baidu.com", "alibaba.com", "aliyun.com",
+                        "tencent.com", "huawei.com",
                     })
                     _hy_injected = 0
                     # Pass 1: under-represented domains (count < 2)
@@ -12032,10 +12395,10 @@ def run_pipeline() -> None:
                             _hy_dom_counts[_hy_dk] += 1
                             _hy_injected += 1
                     # Pass 2: priority non-platform bigtech domains (count < 4)
-                    # iter70: raised cap from 10 to 15 to improve non-platform supply
+                    # iter73: raised cap from 15 to 25 for 10-item brief diversity
                     _hy_pri_injected = 0
                     for _hy_it in raw_items[_hydrate_n:]:
-                        if _hy_pri_injected >= 15:
+                        if _hy_pri_injected >= 25:
                             break
                         _hy_u = str(getattr(_hy_it, "url", "") or getattr(_hy_it, "link", "") or "")
                         _hy_dk = _hy_up(_hy_u).netloc.lower().lstrip("www.") if _hy_u else ""

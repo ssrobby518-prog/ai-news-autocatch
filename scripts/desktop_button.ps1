@@ -23,8 +23,8 @@ $repoRoot = Split-Path $PSScriptRoot -Parent
 Set-Location $repoRoot
 
 # --- Environment: budget + gates + entrypoint ---
-$env:PIPELINE_SOFT_TARGET_SEC = "160"
-$env:PIPELINE_TIME_BUDGET_SEC = "200"
+$env:PIPELINE_SOFT_TARGET_SEC = "140"   # iter73: optimization target soft
+$env:PIPELINE_TIME_BUDGET_SEC = "190"   # iter73: optimization target hard
 # Enable bigtech gates for both manual and daily (bigtech>=5, official_or_media>=4)
 $env:BIGTECH_GATES_ENFORCE = "1"
 # iter72c: always force entrypoint (was conditional; child powershell needs explicit env)
@@ -158,8 +158,11 @@ $cmPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
 if (Test-Path $cmPath) {
     try {
         $cmMeta = Get-Content $cmPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-Log "selected_events         = $(if ($cmMeta.PSObject.Properties['selected_events']) { $cmMeta.selected_events } else { 'N/A' })"
         Write-Log "bigtech_actionable_count = $(if ($cmMeta.PSObject.Properties['bigtech_actionable_count']) { $cmMeta.bigtech_actionable_count } else { 'N/A' })"
         Write-Log "bigtech_official_media_count = $(if ($cmMeta.PSObject.Properties['bigtech_official_media_count']) { $cmMeta.bigtech_official_media_count } else { 'N/A' })"
+        Write-Log "leadership_politics_ai_count = $(if ($cmMeta.PSObject.Properties['leadership_politics_ai_count']) { $cmMeta.leadership_politics_ai_count } else { 'N/A' })"
+        Write-Log "china_ai_gov_count      = $(if ($cmMeta.PSObject.Properties['china_ai_gov_count']) { $cmMeta.china_ai_gov_count } else { 'N/A' })"
         Write-Log "platform_total          = $(if ($cmMeta.PSObject.Properties['platform_total']) { $cmMeta.platform_total } else { 'N/A' })"
         Write-Log "research_tutorial_total  = $(if ($cmMeta.PSObject.Properties['research_tutorial_total']) { $cmMeta.research_tutorial_total } else { 'N/A' })"
         Write-Log "strategic_buckets_distinct = $(if ($cmMeta.PSObject.Properties['selected_strategic_buckets_distinct']) { $cmMeta.selected_strategic_buckets_distinct } else { 'N/A' })"
@@ -168,8 +171,10 @@ if (Test-Path $cmPath) {
 if (Test-Path $sdmPath) {
     try {
         $sdmMeta2 = Get-Content $sdmPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        Write-Log "strategic_density_target = $(if ($sdmMeta2.PSObject.Properties['target_avg_density_1p5']) { $sdmMeta2.target_avg_density_1p5 } else { 'N/A' })"
+        Write-Log "strategic_density_target_avg = $(if ($sdmMeta2.PSObject.Properties['target_avg_density_1p5']) { $sdmMeta2.target_avg_density_1p5 } else { 'N/A' })"
+        Write-Log "strategic_density_target_min = $(if ($sdmMeta2.PSObject.Properties['target_min_density_1p5']) { $sdmMeta2.target_min_density_1p5 } else { 'N/A' })"
         Write-Log "selected_avg_strategic_density = $(if ($sdmMeta2.PSObject.Properties['selected_avg_strategic_density_score']) { $sdmMeta2.selected_avg_strategic_density_score } else { 'N/A' })"
+        Write-Log "selected_min_strategic_density = $(if ($sdmMeta2.PSObject.Properties['selected_min_strategic_density_score']) { $sdmMeta2.selected_min_strategic_density_score } else { 'N/A' })"
     } catch {}
 }
 Write-Log "=== END P0 FINGERPRINT ==="

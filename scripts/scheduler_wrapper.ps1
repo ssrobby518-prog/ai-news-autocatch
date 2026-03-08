@@ -46,8 +46,11 @@ $sdFp = Join-Path $repoRoot "outputs\source_density.meta.json"
 if (Test-Path $cmFp) {
     try {
         $cmD = Get-Content $cmFp -Raw -Encoding UTF8 | ConvertFrom-Json
+        $fpLines += "selected_events = $($cmD.selected_events)"
         $fpLines += "bigtech_actionable_count = $($cmD.bigtech_actionable_count)"
         $fpLines += "bigtech_official_media_count = $($cmD.bigtech_official_media_count)"
+        $fpLines += "leadership_politics_ai_count = $($cmD.leadership_politics_ai_count)"
+        $fpLines += "china_ai_gov_count = $($cmD.china_ai_gov_count)"
         $fpLines += "platform_total = $($cmD.platform_total)"
         $fpLines += "research_tutorial_total = $($cmD.research_tutorial_total)"
         $fpLines += "strategic_buckets_distinct = $($cmD.selected_strategic_buckets_distinct)"
@@ -56,8 +59,10 @@ if (Test-Path $cmFp) {
 if (Test-Path $sdFp) {
     try {
         $sdD = Get-Content $sdFp -Raw -Encoding UTF8 | ConvertFrom-Json
-        $fpLines += "strategic_density_target = $($sdD.target_avg_density_1p5)"
+        $fpLines += "strategic_density_target_avg = $($sdD.target_avg_density_1p5)"
+        $fpLines += "strategic_density_target_min = $($sdD.target_min_density_1p5)"
         $fpLines += "selected_avg_strategic_density = $($sdD.selected_avg_strategic_density_score)"
+        $fpLines += "selected_min_strategic_density = $($sdD.selected_min_strategic_density_score)"
     } catch {}
 }
 $fpLines += "=== END P0 STRATEGIC FINGERPRINT ==="
