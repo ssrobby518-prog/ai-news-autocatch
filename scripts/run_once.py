@@ -7982,6 +7982,7 @@ def _f600_run_fast_path(
                 it for it in _pool_300
                 if it not in _selected
                 and not _f6_is_dev_noise(it)
+                and not _f6_is_google_research_blog(it)
                 and _f6_is_bigtech(it)
                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             ])
@@ -8682,6 +8683,7 @@ def _f600_run_fast_path(
             _overlap_count = len(_overlap_items)
             if _overlap_count > 2:
                 _backup_pool_all = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
+                                and not _f6_is_google_research_blog(it)
                                 and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
                                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
                 # iter69b: prefer non-overlap replacements (items NOT in prev daily)
@@ -8764,6 +8766,7 @@ def _f600_run_fast_path(
         # iter54: DAILY diversity backup must be bigtech+official_or_media
         # iter68: also filter by density to avoid density gate fail after swap
         _div_backup2 = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
+                        and not _f6_is_google_research_blog(it)
                         and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         _div_backup2.sort(key=lambda it: (int(getattr(it, "fulltext_len", 0) or 0), _f6_bfp(it)), reverse=True)
@@ -9709,9 +9712,12 @@ def _f600_run_fast_path(
     _dd_ok, _dd_reason, _dd_meta = _f600_check_digest_density(_digest_path, _outputs, _run_id)
     # If thin events exist, swap them with denser candidates (up to 2 rounds).
     # Use index-based matching: events in digest meta are in same order as _selected.
-    _dd_swap_pool = [it for it in _f6_tier(1200) if it not in _selected]
-    _dd_swap_pool += [it for it in _f6_tier(800) if it not in _selected and it not in _dd_swap_pool]
-    _dd_swap_pool += [it for it in _f6_tier(300) if it not in _selected and it not in _dd_swap_pool]  # iter42: wider fallback
+    _dd_swap_pool = [it for it in _f6_tier(1200) if it not in _selected
+                     and (not _is_daily or not _f6_is_google_research_blog(it))]
+    _dd_swap_pool += [it for it in _f6_tier(800) if it not in _selected and it not in _dd_swap_pool
+                      and (not _is_daily or not _f6_is_google_research_blog(it))]
+    _dd_swap_pool += [it for it in _f6_tier(300) if it not in _selected and it not in _dd_swap_pool
+                      and (not _is_daily or not _f6_is_google_research_blog(it))]  # iter42: wider fallback
     for _dd_round in range(5):  # iter42: allow up to 5 density swap rounds
         if _dd_ok or not _dd_meta.get("thin_events_count"):
             break
