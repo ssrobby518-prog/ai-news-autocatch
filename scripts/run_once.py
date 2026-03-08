@@ -7126,6 +7126,8 @@ def _f600_run_fast_path(
     _HDF_W_ACT = 3
     _HDF_W_SPEC = 2
     _HDF_DENSITY_MULTIPLIER = 1.5
+    _HDF_BASE_DENSITY_MIN = 8  # iter66: fixed baseline (pre-multiplier minimum acceptable)
+    _HDF_NEW_DENSITY_MIN = _hdf_math.ceil(_HDF_BASE_DENSITY_MIN * _HDF_DENSITY_MULTIPLIER)  # = 12
 
     def _hdf_score(it):
         """Return density metrics + weighted density_score for a single item."""
@@ -7185,10 +7187,12 @@ def _f600_run_fast_path(
     except Exception as _hdf_exc:
         _log.warning("source_density.meta.json write failed: %s", _hdf_exc)
 
-    # Filter: DAILY primary pool only admits items that pass density floor
-    _hdf_passed_items = [it for it in raw_items if _hdf_all_scores.get(id(it), {}).get("pass", False)]
-    _hdf_failed_items = [it for it in raw_items if not _hdf_all_scores.get(id(it), {}).get("pass", False)]
-    _log.info("HIGH_DENSITY_SOURCE_FLOOR: total=%d pass=%d fail=%d", len(raw_items), len(_hdf_passed_items), len(_hdf_failed_items))
+    # Filter: DAILY primary pool only admits items that pass density floor + density_score >= threshold
+    _hdf_passed_items = [it for it in raw_items
+                         if _hdf_all_scores.get(id(it), {}).get("pass", False)
+                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+    _hdf_failed_items = [it for it in raw_items if it not in _hdf_passed_items]
+    _log.info("HIGH_DENSITY_SOURCE_FLOOR: total=%d pass=%d fail=%d (density_min=%d)", len(raw_items), len(_hdf_passed_items), len(_hdf_failed_items), _HDF_NEW_DENSITY_MIN)
 
     # For DAILY: use only density-passed items for pool construction (fallback to all if too few)
     _hdf_pool_items = _hdf_passed_items if (_is_daily and len(_hdf_passed_items) >= _f6_target) else raw_items
@@ -7523,12 +7527,10 @@ def _f600_run_fast_path(
             _hdf_d["selected_pass"] = _hdf_sel_pass_count
             _hdf_d["selected_fail"] = _hdf_sel_fail_count
             _hdf_d["selected_all_pass"] = (_hdf_sel_fail_count == 0 and _hdf_sel_pass_count > 0)
-            # iter66: multiplier gate — selected_avg as base, target = ceil(base_avg * 1.5)
+            # iter66: multiplier gate — fixed base, target = ceil(base * 1.5)
             _hdf_sel_avg = round(sum(_hdf_sel_scores) / len(_hdf_sel_scores), 2) if _hdf_sel_scores else 0
             _hdf_sel_min = min(_hdf_sel_scores) if _hdf_sel_scores else 0
-            # base_density_min = selected_avg (first-run bootstrap); new_density_min = ceil(base * 1.5)
-            _hdf_base_avg = _hdf_sel_avg
-            _hdf_new_density_min = _hdf_math2.ceil(_hdf_base_avg * _HDF_DENSITY_MULTIPLIER)
+            _hdf_new_density_min = _HDF_NEW_DENSITY_MIN
             # iter66: INJECT_LOW_DENSITY_COUNT — override selected scores to force FAIL
             _hdf_inject_low = os.environ.get("INJECT_LOW_DENSITY_COUNT", "")
             _hdf_inject_low_active = bool(_hdf_inject_low)
@@ -7544,8 +7546,8 @@ def _f600_run_fast_path(
                     pass
             _hdf_d["selected_avg_density_score"] = _hdf_sel_avg
             _hdf_d["selected_min_density_score"] = _hdf_sel_min
-            _hdf_d["base_density_min"] = _hdf_base_avg
-            _hdf_d["base_source"] = "selected_avg"
+            _hdf_d["base_density_min"] = _HDF_BASE_DENSITY_MIN
+            _hdf_d["base_source"] = "fixed_constant"
             _hdf_d["new_density_min"] = _hdf_new_density_min
             _hdf_d["multiplier"] = _HDF_DENSITY_MULTIPLIER
             # gate: selected_min >= new_density_min
