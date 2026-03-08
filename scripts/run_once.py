@@ -7160,7 +7160,24 @@ def _f600_run_fast_path(
 
     def _ct72b_strategic_bucket(it) -> str:
         ct = _ct71_classify(it)
-        return _STRATEGIC_BUCKET_MAP.get(ct, "product")
+        _mapped = _STRATEGIC_BUCKET_MAP.get(ct)
+        if _mapped:
+            return _mapped
+        # iter72c: secondary classification via signal scores when content_type is default
+        _sigs = _sd72_all_scores.get(id(it), {})
+        _sig_gov = _sigs.get("governance_signal_hits", 0)
+        _sig_exec = _sigs.get("exec_signal_hits", 0)
+        _sig_dist = _sigs.get("distribution_signal_hits", 0)
+        _sig_econ = _sigs.get("economics_signal_hits", 0)
+        # pick the strongest non-product signal (min threshold=2)
+        _sig_pairs = [
+            (_sig_gov, "governance"), (_sig_exec, "leadership"),
+            (_sig_dist, "distribution"), (_sig_econ, "economics"),
+        ]
+        _sig_pairs.sort(key=lambda x: x[0], reverse=True)
+        if _sig_pairs[0][0] >= 2:
+            return _sig_pairs[0][1]
+        return "product"
 
     # iter72b: source_class classification — domain/URL-based, O(1) per item
     _SC72_OFFICIAL_DOMAINS = frozenset({
