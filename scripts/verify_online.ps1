@@ -5099,36 +5099,46 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter56: HIGH_DENSITY_SOURCE_FLOOR_HARD — all selected items must pass density floor
-#   Reads source_density.meta.json for selected_all_pass
+# iter66: SOURCE_DENSITY_MULTIPLIER_HARD_DAILY — density_score * 1.5 gate
+#   Reads source_density.meta.json for density_multiplier_gate_pass
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
-    $_hdfMetaPath = Join-Path $repoRoot "outputs\source_density.meta.json"
-    Write-Output "HIGH_DENSITY_SOURCE_FLOOR_HARD:"
-    if (Test-Path $_hdfMetaPath) {
+    $_sdmMetaPath = Join-Path $repoRoot "outputs\source_density.meta.json"
+    Write-Output "SOURCE_DENSITY_MULTIPLIER_HARD_DAILY:"
+    if (Test-Path $_sdmMetaPath) {
         try {
-            $_hdfMeta = Get-Content $_hdfMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_hdfSelPass  = if ($_hdfMeta.PSObject.Properties['selected_pass']) { [int]$_hdfMeta.selected_pass } else { 0 }
-            $_hdfSelFail  = if ($_hdfMeta.PSObject.Properties['selected_fail']) { [int]$_hdfMeta.selected_fail } else { 99 }
-            $_hdfAllPass  = if ($_hdfMeta.PSObject.Properties['selected_all_pass']) { $_hdfMeta.selected_all_pass } else { $false }
-            $_hdfTotal    = if ($_hdfMeta.PSObject.Properties['candidates_total']) { [int]$_hdfMeta.candidates_total } else { 0 }
-            $_hdfCandPass = if ($_hdfMeta.PSObject.Properties['candidates_pass']) { [int]$_hdfMeta.candidates_pass } else { 0 }
-            Write-Output ("  candidates_total          : {0}" -f $_hdfTotal)
-            Write-Output ("  candidates_pass           : {0}" -f $_hdfCandPass)
-            Write-Output ("  selected_pass             : {0}" -f $_hdfSelPass)
-            Write-Output ("  selected_fail             : {0}" -f $_hdfSelFail)
-            Write-Output ("  selected_all_pass         : {0}" -f $_hdfAllPass)
-            if (-not $_hdfAllPass) {
-                $_hdfFail = ("HIGH_DENSITY_SOURCE_FLOOR_HARD_FAIL: selected_pass={0} selected_fail={1}" -f $_hdfSelPass, $_hdfSelFail)
-                Write-Output ("  => FAIL: {0}" -f $_hdfFail)
-                Invoke-VerifyOnlineFailFast -Gate "HIGH_DENSITY_SOURCE_FLOOR_HARD" -Reason $_hdfFail
+            $_sdmMeta = Get-Content $_sdmMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_sdmTotal    = if ($_sdmMeta.PSObject.Properties['candidates_total']) { [int]$_sdmMeta.candidates_total } else { 0 }
+            $_sdmCandPass = if ($_sdmMeta.PSObject.Properties['candidates_pass']) { [int]$_sdmMeta.candidates_pass } else { 0 }
+            $_sdmSelAvg   = if ($_sdmMeta.PSObject.Properties['selected_avg_density_score']) { $_sdmMeta.selected_avg_density_score } else { 0 }
+            $_sdmSelMin   = if ($_sdmMeta.PSObject.Properties['selected_min_density_score']) { [int]$_sdmMeta.selected_min_density_score } else { 0 }
+            $_sdmBase     = if ($_sdmMeta.PSObject.Properties['base_density_min']) { $_sdmMeta.base_density_min } else { 0 }
+            $_sdmNew      = if ($_sdmMeta.PSObject.Properties['new_density_min']) { [int]$_sdmMeta.new_density_min } else { 0 }
+            $_sdmMult     = if ($_sdmMeta.PSObject.Properties['multiplier']) { $_sdmMeta.multiplier } else { 1.5 }
+            $_sdmGatePass = if ($_sdmMeta.PSObject.Properties['density_multiplier_gate_pass']) { $_sdmMeta.density_multiplier_gate_pass } else { $false }
+            $_sdmInjected = if ($_sdmMeta.PSObject.Properties['test_injected']) { $_sdmMeta.test_injected } else { $false }
+            Write-Output ("  candidates_total              : {0}" -f $_sdmTotal)
+            Write-Output ("  candidates_pass               : {0}" -f $_sdmCandPass)
+            Write-Output ("  selected_avg_density_score    : {0}" -f $_sdmSelAvg)
+            Write-Output ("  selected_min_density_score    : {0}" -f $_sdmSelMin)
+            Write-Output ("  base_density_min              : {0}" -f $_sdmBase)
+            Write-Output ("  new_density_min (base*1.5)    : {0}" -f $_sdmNew)
+            Write-Output ("  multiplier                    : {0}" -f $_sdmMult)
+            Write-Output ("  density_multiplier_gate_pass  : {0}" -f $_sdmGatePass)
+            if ($_sdmInjected) {
+                Write-Output "  test_injected                 : True"
             }
-            Write-Output "  => HIGH_DENSITY_SOURCE_FLOOR_HARD: PASS"
+            if (-not $_sdmGatePass) {
+                $_sdmFail = ("SOURCE_DENSITY_MULTIPLIER_HARD_DAILY_FAIL: selected_min={0} < new_density_min={1} avg={2} multiplier={3}" -f $_sdmSelMin, $_sdmNew, $_sdmSelAvg, $_sdmMult)
+                Write-Output ("  => FAIL: {0}" -f $_sdmFail)
+                Invoke-VerifyOnlineFailFast -Gate "SOURCE_DENSITY_MULTIPLIER_HARD_DAILY" -Reason $_sdmFail
+            }
+            Write-Output "  => SOURCE_DENSITY_MULTIPLIER_HARD_DAILY: PASS"
         } catch {
-            Write-Output ("  HIGH_DENSITY_SOURCE_FLOOR_HARD: WARN (parse error: {0})" -f $_)
+            Write-Output ("  SOURCE_DENSITY_MULTIPLIER_HARD_DAILY: WARN (parse error: {0})" -f $_)
         }
     } else {
-        Write-Output "  HIGH_DENSITY_SOURCE_FLOOR_HARD: WARN (source_density.meta.json not found)"
+        Write-Output "  SOURCE_DENSITY_MULTIPLIER_HARD_DAILY: WARN (source_density.meta.json not found)"
     }
 }
 Write-Output ""

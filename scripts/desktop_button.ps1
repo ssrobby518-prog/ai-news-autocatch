@@ -4,6 +4,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\desktop_button.ps1 -Mode daily
 #
 # iter45: desktop button wrapper with logging, auto-open DOCX, and window persistence
+# iter66: P0 fingerprint (RUN_ID, GIT_HEAD, ENTRYPOINT, DOMAIN_COUNTS, MAX_DOMAIN_SHARE, DENSITY_MULTIPLIER_TARGET)
 
 param(
     [ValidateSet("manual","daily")]
@@ -21,11 +22,15 @@ $env:PYTHONIOENCODING = "utf-8"
 $repoRoot = Split-Path $PSScriptRoot -Parent
 Set-Location $repoRoot
 
-# --- Environment: budget + gates ---
+# --- Environment: budget + gates + entrypoint ---
 $env:PIPELINE_SOFT_TARGET_SEC = "160"
 $env:PIPELINE_TIME_BUDGET_SEC = "200"
 # Enable bigtech gates for both manual and daily (bigtech>=5, official_or_media>=4)
 $env:BIGTECH_GATES_ENFORCE = "1"
+# iter66: entrypoint marker
+if (-not $env:PIPELINE_ENTRYPOINT) {
+    $env:PIPELINE_ENTRYPOINT = "desktop_button"
+}
 
 # --- Log setup ---
 $logDir = Join-Path $repoRoot "outputs"
@@ -42,15 +47,21 @@ function Write-Log {
     Add-Content -LiteralPath $logPath -Value $line -Encoding utf8
 }
 
-# --- Log header ---
+# --- P0 fingerprint ---
+$gitHead = "unknown"
+try { $gitHead = (git rev-parse --short HEAD 2>$null) } catch {}
+
 Add-Content -LiteralPath $logPath -Value "" -Encoding utf8
 Add-Content -LiteralPath $logPath -Value ("=" * 72) -Encoding utf8
 Write-Log "=== desktop_button.ps1 START ==="
-Write-Log "run_timestamp = $runTs"
-Write-Log "Mode          = $Mode"
-Write-Log "soft_target   = $($env:PIPELINE_SOFT_TARGET_SEC)s"
-Write-Log "hard_budget   = $($env:PIPELINE_TIME_BUDGET_SEC)s"
-Write-Log "repo_root     = $repoRoot"
+Write-Log "run_timestamp           = $runTs"
+Write-Log "Mode                    = $Mode"
+Write-Log "ENTRYPOINT              = $($env:PIPELINE_ENTRYPOINT)"
+Write-Log "GIT_HEAD                = $gitHead"
+Write-Log "DENSITY_MULTIPLIER_TARGET = 1.5"
+Write-Log "soft_target             = $($env:PIPELINE_SOFT_TARGET_SEC)s"
+Write-Log "hard_budget             = $($env:PIPELINE_TIME_BUDGET_SEC)s"
+Write-Log "repo_root               = $repoRoot"
 Write-Log ""
 
 # --- Run verify_online.ps1 ---
@@ -84,6 +95,7 @@ Write-Log "Pipeline exited with code: $exitCode (elapsed: ${elapsed}s)"
 $lrsPath = Join-Path $repoRoot "outputs\LAST_RUN_SUMMARY.txt"
 $status = "UNKNOWN"
 $failReason = ""
+$runId = "unknown"
 if (Test-Path $lrsPath) {
     $lrsContent = Get-Content $lrsPath -Raw -Encoding UTF8
     Write-Log "--- LAST_RUN_SUMMARY.txt ---"
@@ -92,11 +104,58 @@ if (Test-Path $lrsPath) {
         if ($trimmed) { Write-Log "  $trimmed" }
         if ($trimmed -match "^status\s*=\s*(.+)") { $status = $Matches[1].Trim() }
         if ($trimmed -match "^fail_reason\s*=\s*(.+)") { $failReason = $Matches[1].Trim() }
+        if ($trimmed -match "^run_id\s*=\s*(.+)") { $runId = $Matches[1].Trim() }
     }
     Write-Log "---"
 } else {
     Write-Log "WARNING: LAST_RUN_SUMMARY.txt not found"
 }
+
+# --- P0 fingerprint: read domain/density meta ---
+Write-Log ""
+Write-Log "=== P0 FINGERPRINT ==="
+Write-Log "RUN_ID                  = $runId"
+Write-Log "GIT_HEAD                = $gitHead"
+Write-Log "ENTRYPOINT              = $($env:PIPELINE_ENTRYPOINT)"
+Write-Log "DENSITY_MULTIPLIER_TARGET = 1.5"
+
+# Domain counts from bigtech_diversity.meta.json
+$bdmPath = Join-Path $repoRoot "outputs\bigtech_diversity.meta.json"
+if (Test-Path $bdmPath) {
+    try {
+        $bdmMeta = Get-Content $bdmPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $domCounts = $bdmMeta.domain_counts
+        $maxDom = if ($bdmMeta.PSObject.Properties['max_domain_count']) { [int]$bdmMeta.max_domain_count } else { 0 }
+        $selEv = if ($bdmMeta.PSObject.Properties['selected_events']) { [int]$bdmMeta.selected_events } else { 7 }
+        $domShare = if ($selEv -gt 0) { [math]::Round($maxDom / $selEv, 4) } else { 0 }
+        Write-Log "DOMAIN_COUNTS           = $($domCounts | ConvertTo-Json -Compress)"
+        Write-Log "MAX_DOMAIN_SHARE        = $maxDom / $selEv = $domShare"
+    } catch {
+        Write-Log "DOMAIN_COUNTS           = (parse error)"
+    }
+} else {
+    Write-Log "DOMAIN_COUNTS           = (bigtech_diversity.meta.json not found)"
+}
+
+# Density from source_density.meta.json
+$sdmPath = Join-Path $repoRoot "outputs\source_density.meta.json"
+if (Test-Path $sdmPath) {
+    try {
+        $sdmMeta = Get-Content $sdmPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $sdmAvg = if ($sdmMeta.PSObject.Properties['selected_avg_density_score']) { $sdmMeta.selected_avg_density_score } else { "N/A" }
+        $sdmMin = if ($sdmMeta.PSObject.Properties['selected_min_density_score']) { $sdmMeta.selected_min_density_score } else { "N/A" }
+        $sdmNew = if ($sdmMeta.PSObject.Properties['new_density_min']) { $sdmMeta.new_density_min } else { "N/A" }
+        Write-Log "DENSITY_AVG             = $sdmAvg"
+        Write-Log "DENSITY_MIN             = $sdmMin"
+        Write-Log "DENSITY_THRESHOLD(1.5x) = $sdmNew"
+    } catch {
+        Write-Log "DENSITY                 = (parse error)"
+    }
+} else {
+    Write-Log "DENSITY                 = (source_density.meta.json not found)"
+}
+Write-Log "=== END P0 FINGERPRINT ==="
+Write-Log ""
 
 # --- Post-run actions ---
 if ($status -eq "OK") {

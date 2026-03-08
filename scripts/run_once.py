@@ -7079,13 +7079,23 @@ def _f600_run_fast_path(
     def _f6_is_dev_noise(it) -> bool:
         return _f6_src_type(it) in ("dev_forum", "code_release", "social", "code") and not _f6_is_bigtech(it)
 
+    # iter66: research blog domains (lower priority — still selectable but not preferred)
+    _RESEARCH_BLOG_DOMAINS = {"blog.research.google", "research.google", "arxiv.org", "ar5iv.labs.arxiv.org"}
+
+    def _f6_is_research_blog(it) -> bool:
+        _dk = _f6_domain_key(it)
+        return _dk in _RESEARCH_BLOG_DOMAINS
+
     def _f6_sort_key(it) -> tuple:
         """iter40: bigtech-first, official/media first, then by fulltext density.
-        iter46: dev_forum penalty (-1e9 low, -50 high)."""
+        iter46: dev_forum penalty (-1e9 low, -50 high).
+        iter66: research blog deprioritized; density_score as secondary."""
         bt = 2 if _f6_is_bigtech(it) else 0
         st = _f6_src_type(it)
         om = 2 if st in ("official", "media") else 0
         dn = -2 if _f6_is_dev_noise(it) else 0
+        # iter66: research blog penalty (still above dev_noise, below official)
+        rb = -1 if _f6_is_research_blog(it) else 0
         # iter46: dev_forum value penalty
         _dfv = _assess_dev_forum_value(it)
         if _dfv == "low":
@@ -7095,7 +7105,7 @@ def _f600_run_fast_path(
         else:
             df_penalty = 0
         ftl = int(getattr(it, "fulltext_len", 0) or 0)
-        return (bt, om, dn, df_penalty, ftl, _f6_bfp(it))
+        return (bt, om, rb, dn, df_penalty, ftl, _f6_bfp(it))
 
     def _f6_tier(min_len: int) -> list:
         return sorted(
@@ -7103,24 +7113,38 @@ def _f600_run_fast_path(
             key=_f6_sort_key, reverse=True,
         )
 
-    # --- iter56: HIGH_DENSITY_SOURCE_FLOOR_HARD — regex-based density filter on hydrated fulltext ---
-    # Any ONE criterion met → pass: fulltext_chars>=1800 OR numeric_hits>=6 OR entity_hits>=10 OR release_artifact_hits>=2
+    # --- iter56/iter66: density scoring with weighted density_score + *1.5 multiplier gate ---
     import re as _hdf_re
-    _HDF_NUMERIC_RE = _hdf_re.compile(r'(?:\d[\d,]*\.?\d+\s*%|\$\s*\d[\d,.]*[BMKTbmkt]?|\d[\d,]*\.?\d*\s*(?:billion|million|thousand|B|M|K|x|fps|TOPS|TFLOPS|GB|TB|MB|ms|tokens?/s))', _hdf_re.IGNORECASE)
-    _HDF_ENTITY_RE = _hdf_re.compile(r'\b(?:Google|OpenAI|Anthropic|Meta|Microsoft|NVIDIA|Apple|Amazon|AWS|DeepSeek|Mistral|Alibaba|Qwen|Samsung|Intel|Baidu|Tesla|xAI|GPT|Gemini|Claude|Llama|DALL-E|Sora|Stable\s*Diffusion|Midjourney|Copilot|GitHub|HuggingFace|PyTorch|TensorFlow|CUDA|ROCm|ONNX|vLLM|Triton)\b', _hdf_re.IGNORECASE)
-    _HDF_RELEASE_RE = _hdf_re.compile(r'\b(?:v\d+\.\d+|release(?:d|s)?|launch(?:ed|es)?|announc(?:ed|es|ement)|open[\-\s]?sourc(?:ed|e|ing)|now\s+available|API\s+(?:key|endpoint|access)|changelog|breaking\s+change|deprecat(?:ed|ion))\b', _hdf_re.IGNORECASE)
+    import math as _hdf_math
+    _HDF_NUMBERS_RE = _hdf_re.compile(r'(?:\d[\d,]*\.?\d+\s*%|\$\s*\d[\d,.]*[BMKTbmkt]?|\d[\d,]*\.?\d*\s*(?:billion|million|thousand|B|M|K|x|fps|TOPS|TFLOPS|GB|TB|MB|ms|tokens?/s))', _hdf_re.IGNORECASE)
+    _HDF_PROPER_RE = _hdf_re.compile(r'\b(?:Google|OpenAI|Anthropic|Meta|Microsoft|NVIDIA|Apple|Amazon|AWS|DeepSeek|Mistral|Alibaba|Qwen|Samsung|Intel|Baidu|Tesla|xAI|GPT-\d|GPT|Gemini|Claude|Llama|DALL-E|Sora|Stable\s*Diffusion|Midjourney|Copilot|GitHub|HuggingFace|PyTorch|TensorFlow|CUDA|ROCm|ONNX|vLLM|Triton|Whisper|BERT|LoRA|Mixtral|Phi-\d|Falcon)\b', _hdf_re.IGNORECASE)
+    _HDF_ACTION_RE = _hdf_re.compile(r'\b(?:launch(?:ed|es)?|release(?:d|s)?|acquir(?:ed|es|ing)|rais(?:ed|es|ing)|regulat(?:ion|ory|ed)|security\s+advisory|earnings|partnership|collaborat(?:ion|ed|ing)|announc(?:ed|es|ement)|invest(?:ed|ment|ing)|IPO|merger|recall|ban(?:ned|s)?|fine(?:d|s)?|lawsuit|patent)\b', _hdf_re.IGNORECASE)
+    _HDF_SPEC_RE = _hdf_re.compile(r'\b(?:GB|TB|MB|TFLOPS|TOPS|latency|throughput|bandwidth|version|v\d+\.\d+|GA|preview|beta|stable|LTS|tokens?/s|tok/s|context\s*window|parameter|FP16|FP32|INT8|INT4|BF16|batch\s*size|inference|training|fine[\-\s]?tun(?:ed|ing)|quantiz(?:ed|ation))\b', _hdf_re.IGNORECASE)
+    # iter66: weights: 2*numbers + 1*proper_noun + 3*action + 2*spec
+    _HDF_W_NUM = 2
+    _HDF_W_PROP = 1
+    _HDF_W_ACT = 3
+    _HDF_W_SPEC = 2
+    _HDF_DENSITY_MULTIPLIER = 1.5
 
     def _hdf_score(it):
-        """Return density metrics for a single item."""
+        """Return density metrics + weighted density_score for a single item."""
         _ft = str(getattr(it, "fulltext", "") or getattr(it, "body", "") or "")
         _chars = len(_ft)
-        _num = len(_HDF_NUMERIC_RE.findall(_ft))
-        _ent = len(_HDF_ENTITY_RE.findall(_ft))
-        _rel = len(_HDF_RELEASE_RE.findall(_ft))
-        _pass = (_chars >= 1800 or _num >= 6 or _ent >= 10 or _rel >= 2)
-        return {"chars": _chars, "numeric_hits": _num, "entity_hits": _ent, "release_hits": _rel, "pass": _pass}
+        _num = len(_HDF_NUMBERS_RE.findall(_ft))
+        _prop = len(_HDF_PROPER_RE.findall(_ft))
+        _act = len(_HDF_ACTION_RE.findall(_ft))
+        _spec = len(_HDF_SPEC_RE.findall(_ft))
+        _ds = _HDF_W_NUM * _num + _HDF_W_PROP * _prop + _HDF_W_ACT * _act + _HDF_W_SPEC * _spec
+        # iter56 floor: any ONE met → pass basic floor
+        _pass = (_chars >= 1800 or _num >= 6 or _prop >= 10 or _act >= 2)
+        return {
+            "chars": _chars, "numbers_count": _num, "proper_noun_like_count": _prop,
+            "action_keyword_hits": _act, "spec_keyword_hits": _spec,
+            "density_score": _ds, "pass": _pass,
+        }
 
-    # Score ALL candidates and write source_density.meta.json
+    # Score ALL candidates
     _hdf_all_scores = {}
     for _hdf_it in raw_items:
         _hdf_key = str(getattr(_hdf_it, "url", "") or getattr(_hdf_it, "link", "") or getattr(_hdf_it, "title", ""))
@@ -7128,13 +7152,15 @@ def _f600_run_fast_path(
         _hdf_all_scores[id(_hdf_it)]["url"] = _hdf_key[:200]
         _hdf_all_scores[id(_hdf_it)]["title"] = str(getattr(_hdf_it, "title", "") or "")[:120]
 
-    # Write source_density.meta.json
+    # Write source_density.meta.json (initial — will be patched post-selection with multiplier gate)
     try:
         _hdf_meta_path = _outputs / "source_density.meta.json"
         _hdf_meta = {
             "run_id": _run_id,
-            "gate": "HIGH_DENSITY_SOURCE_FLOOR_HARD",
-            "thresholds": {"fulltext_chars": 1800, "numeric_hits": 6, "entity_hits": 10, "release_artifact_hits": 2},
+            "gate": "SOURCE_DENSITY_MULTIPLIER_HARD_DAILY",
+            "density_formula": "2*numbers + 1*proper_noun + 3*action + 2*spec",
+            "weights": {"numbers": _HDF_W_NUM, "proper_noun": _HDF_W_PROP, "action": _HDF_W_ACT, "spec": _HDF_W_SPEC},
+            "multiplier": _HDF_DENSITY_MULTIPLIER,
             "candidates_total": len(raw_items),
             "candidates_pass": sum(1 for v in _hdf_all_scores.values() if v["pass"]),
             "candidates_fail": sum(1 for v in _hdf_all_scores.values() if not v["pass"]),
@@ -7143,9 +7169,13 @@ def _f600_run_fast_path(
                     "url": _hdf_all_scores[id(it)]["url"],
                     "title": _hdf_all_scores[id(it)]["title"],
                     "chars": _hdf_all_scores[id(it)]["chars"],
-                    "numeric_hits": _hdf_all_scores[id(it)]["numeric_hits"],
-                    "entity_hits": _hdf_all_scores[id(it)]["entity_hits"],
-                    "release_hits": _hdf_all_scores[id(it)]["release_hits"],
+                    "density_features": {
+                        "numbers_count": _hdf_all_scores[id(it)]["numbers_count"],
+                        "proper_noun_like_count": _hdf_all_scores[id(it)]["proper_noun_like_count"],
+                        "action_keyword_hits": _hdf_all_scores[id(it)]["action_keyword_hits"],
+                        "spec_keyword_hits": _hdf_all_scores[id(it)]["spec_keyword_hits"],
+                    },
+                    "density_score": _hdf_all_scores[id(it)]["density_score"],
                     "pass": _hdf_all_scores[id(it)]["pass"],
                 }
                 for it in raw_items
@@ -7472,17 +7502,20 @@ def _f600_run_fast_path(
         _f6_om = 0
     _f6_focus = _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
 
-    # iter56: patch source_density.meta.json with selected flag
+    # iter56/iter66: patch source_density.meta.json with selected flag + multiplier gate
     try:
         _hdf_sel_urls = set(str(getattr(it, "url", "") or getattr(it, "link", "") or "")[:200] for it in _selected)
         _hdf_mp = _outputs / "source_density.meta.json"
         if _hdf_mp.exists():
+            import math as _hdf_math2
             _hdf_d = _f6_j.loads(_hdf_mp.read_text(encoding="utf-8"))
             _hdf_sel_pass_count = 0
             _hdf_sel_fail_count = 0
+            _hdf_sel_scores = []
             for _hdf_row in _hdf_d.get("items", []):
                 _hdf_row["selected"] = _hdf_row.get("url", "") in _hdf_sel_urls
                 if _hdf_row["selected"]:
+                    _hdf_sel_scores.append(_hdf_row.get("density_score", 0))
                     if _hdf_row.get("pass"):
                         _hdf_sel_pass_count += 1
                     else:
@@ -7490,6 +7523,37 @@ def _f600_run_fast_path(
             _hdf_d["selected_pass"] = _hdf_sel_pass_count
             _hdf_d["selected_fail"] = _hdf_sel_fail_count
             _hdf_d["selected_all_pass"] = (_hdf_sel_fail_count == 0 and _hdf_sel_pass_count > 0)
+            # iter66: multiplier gate — selected_avg as base, target = ceil(base_avg * 1.5)
+            _hdf_sel_avg = round(sum(_hdf_sel_scores) / len(_hdf_sel_scores), 2) if _hdf_sel_scores else 0
+            _hdf_sel_min = min(_hdf_sel_scores) if _hdf_sel_scores else 0
+            # base_density_min = selected_avg (first-run bootstrap); new_density_min = ceil(base * 1.5)
+            _hdf_base_avg = _hdf_sel_avg
+            _hdf_new_density_min = _hdf_math2.ceil(_hdf_base_avg * _HDF_DENSITY_MULTIPLIER)
+            # iter66: INJECT_LOW_DENSITY_COUNT — override selected scores to force FAIL
+            _hdf_inject_low = os.environ.get("INJECT_LOW_DENSITY_COUNT", "")
+            _hdf_inject_low_active = bool(_hdf_inject_low)
+            if _hdf_inject_low_active:
+                try:
+                    _hdf_inject_n = int(_hdf_inject_low)
+                    # Override: pretend all selected have density_score=1
+                    _hdf_sel_scores = [1] * _hdf_inject_n
+                    _hdf_sel_avg = 1.0
+                    _hdf_sel_min = 1
+                    _log.info("INJECT_LOW_DENSITY_COUNT=%s: density scores overridden to 1", _hdf_inject_low)
+                except ValueError:
+                    pass
+            _hdf_d["selected_avg_density_score"] = _hdf_sel_avg
+            _hdf_d["selected_min_density_score"] = _hdf_sel_min
+            _hdf_d["base_density_min"] = _hdf_base_avg
+            _hdf_d["base_source"] = "selected_avg"
+            _hdf_d["new_density_min"] = _hdf_new_density_min
+            _hdf_d["multiplier"] = _HDF_DENSITY_MULTIPLIER
+            # gate: selected_min >= new_density_min
+            _hdf_gate_pass = (_hdf_sel_min >= _hdf_new_density_min and len(_hdf_sel_scores) > 0)
+            _hdf_d["density_multiplier_gate_pass"] = _hdf_gate_pass
+            if _hdf_inject_low_active:
+                _hdf_d["test_injected"] = True
+                _hdf_d["injected_low_density_count"] = _hdf_inject_low
             _hdf_mp.write_text(_f6_j.dumps(_hdf_d, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -7994,6 +8058,35 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("SINGLE_VENDOR_SHARE_CAP_HARD_DAILY", _vsc_fail_reason)
+
+    # iter66: SOURCE_DENSITY_MULTIPLIER_HARD_DAILY gate (DAILY only)
+    if _is_daily:
+        try:
+            _sdm_mp = _outputs / "source_density.meta.json"
+            if _sdm_mp.exists():
+                _sdm_d = _f6_j.loads(_sdm_mp.read_text(encoding="utf-8"))
+                _sdm_pass = _sdm_d.get("density_multiplier_gate_pass", True)
+                if not _sdm_pass:
+                    _sdm_min = _sdm_d.get("selected_min_density_score", 0)
+                    _sdm_thr = _sdm_d.get("new_density_min", 0)
+                    _sdm_avg = _sdm_d.get("selected_avg_density_score", 0)
+                    _sdm_inj = _sdm_d.get("test_injected", False)
+                    _sdm_fail_reason = (f"SOURCE_DENSITY_MULTIPLIER_HARD_DAILY_FAIL: "
+                                        f"selected_min={_sdm_min} < new_density_min={_sdm_thr} "
+                                        f"selected_avg={_sdm_avg} multiplier={_HDF_DENSITY_MULTIPLIER}")
+                    if _sdm_inj:
+                        _sdm_fail_reason += " [test_injected=true]"
+                    _write_not_ready_report_md(
+                        "SOURCE_DENSITY_MULTIPLIER_HARD_DAILY",
+                        _sdm_fail_reason,
+                        run_id=_run_id, selected_items_count=len(_selected),
+                        selected_sources_distinct=_f6_distinct,
+                        bigtech_hit_count=_f6_bigtech,
+                        official_or_media_count=_f6_om,
+                    )
+                    _f6_fail("SOURCE_DENSITY_MULTIPLIER_HARD_DAILY", _sdm_fail_reason)
+        except Exception as _sdm_exc:
+            _log.warning("SOURCE_DENSITY_MULTIPLIER gate check failed: %s", _sdm_exc)
 
     # --- Step 4: build digest.md from card dicts ---
     stg["digest_write_start"] = time.time()
