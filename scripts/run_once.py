@@ -7243,11 +7243,18 @@ def _f600_run_fast_path(
     _DIV_MIN_VENDORS = 4
     from collections import Counter as _DivCounter
 
+    # iter68: platform domain cap — huggingface.co / discuss.huggingface.co / github.com combined <= 1
+    _PLATFORM_DOMAINS = frozenset({"huggingface.co", "discuss.huggingface.co", "github.com"})
+    _PLATFORM_CAP = 1  # max total items from platform domains
+
+    def _is_platform_domain(it) -> bool:
+        return _f6_domain_key(it) in _PLATFORM_DOMAINS
+
     # iter65: single-domain share cap — max_domain_count*3 <= selected_events_target
     _DOMAIN_SHARE_CAP_MULTIPLIER = 3  # max_domain_count * 3 <= target
 
     def _div_can_add(it, sel_list):
-        """Check if adding it to sel_list would violate domain/vendor caps or share cap."""
+        """Check if adding it to sel_list would violate domain/vendor caps, share cap, or platform cap."""
         _dk = _f6_domain_key(it)
         _vk = _f6_vendor_key(it)
         _d_counts = _DivCounter(_f6_domain_key(s) for s in sel_list)
@@ -7262,39 +7269,43 @@ def _f600_run_fast_path(
         _new_vk_count = _v_counts[_vk] + 1
         if _new_vk_count * _DOMAIN_SHARE_CAP_MULTIPLIER > _max_events:
             return False
+        # iter68: platform domain cap — total platform items <= _PLATFORM_CAP
+        if _is_platform_domain(it):
+            _plat_current = sum(1 for s in sel_list if _is_platform_domain(s))
+            if _plat_current >= _PLATFORM_CAP:
+                return False
         return True
 
     _selected: list = []
     if _is_daily:
-        # iter67: two-phase DAILY selection — Phase-1: diversity skeleton, Phase-2: fill to target
-        # Phase-1: build skeleton with domains>=4 vendors>=4, strict cap enforcement
-        _ph1_seen_domains: dict = {}
-        _ph1_seen_vendors: dict = {}
-        for it in _bt_om_pool:
+        # iter68: three-phase DAILY selection — non-platform first, then allow <=1 platform
+        # Phase-1: fill non-platform bigtech+om items (skeleton: diversity + no platform)
+        _bt_om_nonplat = [it for it in _bt_om_pool if not _is_platform_domain(it)]
+        _bt_om_plat = [it for it in _bt_om_pool if _is_platform_domain(it)]
+        for it in _bt_om_nonplat:
             if len(_selected) >= _max_events:
                 break
-            if it in _selected:
-                continue
-            _dk = _f6_domain_key(it)
-            _vk = _f6_vendor_key(it)
-            # Phase-1 priority: items from unseen domains/vendors first
-            _ph1_seen_domains.setdefault(_dk, 0)
-            _ph1_seen_vendors.setdefault(_vk, 0)
-            if _div_can_add(it, _selected):
+            if it not in _selected and _div_can_add(it, _selected):
                 _selected.append(it)
-                _ph1_seen_domains[_dk] = _ph1_seen_domains.get(_dk, 0) + 1
-                _ph1_seen_vendors[_vk] = _ph1_seen_vendors.get(_vk, 0) + 1
-        _log.info("iter67 Phase-1: skeleton=%d domains=%d vendors=%d",
+        _log.info("iter68 Phase-1 (non-platform): skeleton=%d domains=%d vendors=%d",
                   len(_selected), len(set(_f6_domain_key(s) for s in _selected)),
                   len(set(_f6_vendor_key(s) for s in _selected) - {"other"}))
-        # Phase-2: fill to target (still cap-enforced, no relaxation)
+        # Phase-2: allow up to _PLATFORM_CAP platform items (cap enforced by _div_can_add)
         if len(_selected) < _max_events:
-            for it in _bt_om_pool:
+            for it in _bt_om_plat:
                 if it not in _selected and _div_can_add(it, _selected):
                     _selected.append(it)
                     if len(_selected) >= _max_events:
                         break
-        # Last fallback: bigtech items (even non-official) — still cap-enforced
+        # Phase-3: fill remaining from non-platform bigtech (even non-official)
+        if len(_selected) < _max_events:
+            _bt_nonplat = [it for it in _bt_pool if not _is_platform_domain(it)]
+            for it in _bt_nonplat:
+                if it not in _selected and _div_can_add(it, _selected):
+                    _selected.append(it)
+                    if len(_selected) >= _max_events:
+                        break
+        # Last fallback: platform bigtech (still cap-enforced)
         if len(_selected) < _max_events:
             for it in _bt_pool:
                 if it not in _selected and _div_can_add(it, _selected):
@@ -8075,6 +8086,70 @@ def _f600_run_fast_path(
         _dvc_path.write_text(_f6_j.dumps(_dvc, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _dvc_exc:
         _log.warning("domain_vendor_cap.meta.json write failed: %s", _dvc_exc)
+
+    # --- iter68: DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY — platform domains combined <= 1 ---
+    _pdc_platform_items = [s for s in _selected if _is_platform_domain(s)]
+    _pdc_platform_total = len(_pdc_platform_items)
+    _pdc_platform_domain_counts = dict(_DivCounter(_f6_domain_key(s) for s in _pdc_platform_items))
+    _pdc_platform_domains = sorted(set(_f6_domain_key(s) for s in _pdc_platform_items))
+    _pdc_inject = os.environ.get("INJECT_PLATFORM_DOMAIN_TOTAL", "")
+    _pdc_is_injected = bool(_pdc_inject)
+    if _pdc_is_injected:
+        try:
+            _pdc_platform_total = int(_pdc_inject)
+        except ValueError:
+            pass
+        _log.info("INJECT_PLATFORM_DOMAIN_TOTAL=%s: platform cap overridden", _pdc_inject)
+    _pdc_pass = (_pdc_platform_total <= _PLATFORM_CAP)
+
+    # Write dev_platform_cap.meta.json
+    try:
+        _pdc_meta_path = _outputs / "dev_platform_cap.meta.json"
+        _pdc_meta = {
+            "run_id": _run_id,
+            "selected_events": len(_selected),
+            "platform_domains": _pdc_platform_domains,
+            "platform_domain_total_count": _pdc_platform_total,
+            "platform_domain_counts": _pdc_platform_domain_counts,
+            "cap": _PLATFORM_CAP,
+            "cap_rule": "platform_total<=1",
+            "cap_pass": _pdc_pass,
+            "mode": "daily" if _is_daily else "manual",
+        }
+        if _pdc_is_injected:
+            _pdc_meta["test_injected"] = True
+            _pdc_meta["injected_platform_total"] = _pdc_inject
+        _pdc_meta_path.write_text(_f6_j.dumps(_pdc_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as _pdc_exc:
+        _log.warning("dev_platform_cap.meta.json write failed: %s", _pdc_exc)
+
+    # Patch selection_audit.meta.json with platform cap fields
+    try:
+        _sa_pdc = _outputs / "selection_audit.meta.json"
+        if _sa_pdc.exists():
+            _sa_pdc_d = _f6_j.loads(_sa_pdc.read_text(encoding="utf-8"))
+            _sa_pdc_d["platform_domain_total_count"] = _pdc_platform_total
+            _sa_pdc_d["platform_cap_pass"] = _pdc_pass
+            if _pdc_is_injected:
+                _sa_pdc_d["platform_cap_test_injected"] = True
+            _sa_pdc.write_text(_f6_j.dumps(_sa_pdc_d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    # DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY gate (daily mode — all entrypoints)
+    if _is_daily and not _pdc_pass:
+        _pdc_fail_reason = (f"DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY_FAIL: platform_total={_pdc_platform_total} > {_PLATFORM_CAP}")
+        if _pdc_is_injected:
+            _pdc_fail_reason += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY",
+            _pdc_fail_reason,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY", _pdc_fail_reason)
 
     # iter53: BIGTECH_DIVERSITY gate (DAILY only)
     if _is_daily and not _div_pass:

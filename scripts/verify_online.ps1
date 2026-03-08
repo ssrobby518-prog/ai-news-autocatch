@@ -458,6 +458,12 @@ if (Test-Path $_dvcPreCleanPath) {
     Remove-Item -LiteralPath $_dvcPreCleanPath -Force -ErrorAction SilentlyContinue
     Write-Output "  [PRE-CLEAN] 已刪除 domain_vendor_cap.meta.json"
 }
+# iter68: PRE-CLEAN dev_platform_cap.meta.json
+$_pdcPreCleanPath = Join-Path $repoRoot "outputs\dev_platform_cap.meta.json"
+if (Test-Path $_pdcPreCleanPath) {
+    Remove-Item -LiteralPath $_pdcPreCleanPath -Force -ErrorAction SilentlyContinue
+    Write-Output "  [PRE-CLEAN] 已刪除 dev_platform_cap.meta.json"
+}
 Write-Output "[PRE-CLEAN] 清除舊的 notion/xmind/deep_analysis 殘留產物..."
 foreach ($_voPreClean in @(
     "outputs\notion_page.md",
@@ -5180,6 +5186,43 @@ if ($_fast300Daily) {
         }
     } else {
         Write-Output "  DAILY_BIGTECH_ONLY_HARD: WARN (selection_audit.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter68: DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY — platform domains (HF/GitHub) combined <= 1
+#   Reads dev_platform_cap.meta.json
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_pdcMetaPath = Join-Path $repoRoot "outputs\dev_platform_cap.meta.json"
+    Write-Output "DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY:"
+    if (Test-Path $_pdcMetaPath) {
+        try {
+            $_pdcMeta = Get-Content $_pdcMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_pdcTotal    = if ($_pdcMeta.PSObject.Properties['platform_domain_total_count']) { [int]$_pdcMeta.platform_domain_total_count } else { 99 }
+            $_pdcCap      = if ($_pdcMeta.PSObject.Properties['cap']) { [int]$_pdcMeta.cap } else { 1 }
+            $_pdcPass     = if ($_pdcMeta.PSObject.Properties['cap_pass']) { $_pdcMeta.cap_pass } else { $false }
+            $_pdcInjected = if ($_pdcMeta.PSObject.Properties['test_injected']) { $_pdcMeta.test_injected } else { $false }
+            $_pdcDomains  = if ($_pdcMeta.PSObject.Properties['platform_domains']) { ($_pdcMeta.platform_domains -join ", ") } else { "N/A" }
+            Write-Output ("  platform_domain_total_count : {0}" -f $_pdcTotal)
+            Write-Output ("  cap                         : {0}" -f $_pdcCap)
+            Write-Output ("  platform_domains            : {0}" -f $_pdcDomains)
+            Write-Output ("  cap_pass                    : {0}" -f $_pdcPass)
+            if ($_pdcInjected) {
+                Write-Output "  test_injected               : True"
+            }
+            if (-not $_pdcPass) {
+                $_pdcFail = ("DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY_FAIL: platform_total={0} > {1}" -f $_pdcTotal, $_pdcCap)
+                Write-Output ("  => FAIL: {0}" -f $_pdcFail)
+                Invoke-VerifyOnlineFailFast -Gate "DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY" -Reason $_pdcFail
+            }
+            Write-Output "  => DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY: WARN (dev_platform_cap.meta.json not found)"
     }
 }
 Write-Output ""
