@@ -7099,7 +7099,9 @@ def _f600_run_fast_path(
     _CT_RULES = [
         # actionable types (checked first — order matters)
         # iter72b: expanded actionable types with strategic_bucket mapping
-        (_ct71_re.compile(r'\b(?:CEO|CTO|CPO|CIO|Chief|SVP|VP|Head\s+of|Founder|appointed|joins?|joined|hired|steps?\s*down|stepped\s+down|reorg(?:anization)?|exec\s+team|board|chairman|president|執行長|技術長|產品長|高管|主管|改組|任命|卸任)\b', _ct71_re.I), "executive_move"),
+        # executive_move requires BOTH a title (CEO/CTO/etc) AND an action (appointed/steps down/etc) nearby
+        (_ct71_re.compile(r'\b(?:CEO|CTO|CPO|CIO|Chief\s+(?:Executive|Technology|Product|Information)|SVP|Head\s+of)\b.*\b(?:appointed|joins?|joined|hired|steps?\s*down|stepped\s+down|reorg(?:anization)?|exec\s+team|改組|任命|卸任)\b', _ct71_re.I), "executive_move"),
+        (_ct71_re.compile(r'\b(?:appointed|joins?|joined|hired|steps?\s*down|stepped\s+down|reorg(?:anization)?|改組|任命|卸任)\b.*\b(?:CEO|CTO|CPO|CIO|Chief|SVP|Head\s+of|Founder|president|chairman|執行長|技術長|產品長|高管|主管)\b', _ct71_re.I), "executive_move"),
         (_ct71_re.compile(r'\b(?:acquir(?:ed|es|ing|ition)|merger|buyout|investment|invested|funding|rais(?:ed|es|ing)\s+\$)\b', _ct71_re.I), "acquisition_investment"),
         (_ct71_re.compile(r'\b(?:partnership|collaborat(?:ion|ed|ing)|alliance|joint\s+venture|distribution|OEM|carrier|operator|preinstall|integrat(?:e[ds]?|ion|ing)|bundl(?:e[ds]?|ing)|channel|reseller)\b', _ct71_re.I), "partnership_distribution"),
         (_ct71_re.compile(r'\b(?:enterprise|on[\-\s]?prem(?:ise)?|rollout|general\s+availability|GA\b)', _ct71_re.I), "enterprise_rollout"),
@@ -7146,13 +7148,13 @@ def _f600_run_fast_path(
         "partnership_distribution": "distribution",
         "enterprise_rollout": "distribution",
         "platform_ecosystem_move": "ecosystem",
-        "benchmark_competitive": "product",
+        "benchmark_competitive": "economics",  # iter72b: benchmark/perf impacts pricing/competitiveness → economics
         "pricing_packaging": "economics",
         "acquisition_investment": "economics",
         "security_advisory": "governance", "regulatory_governance": "governance",
         # legacy aliases
         "api_update": "product", "sdk_update": "product",
-        "pricing": "economics", "benchmark": "product",
+        "pricing": "economics", "benchmark": "economics",
         "partnership": "distribution", "acquisition": "economics",
     }
 
@@ -7165,6 +7167,7 @@ def _f600_run_fast_path(
         "openai.com", "blog.openai.com", "anthropic.com", "docs.anthropic.com",
         "blog.google", "ai.google", "research.google", "blog.research.google",
         "deepmind.google", "cloud.google.com", "developers.googleblog.com",
+        "ai.googleblog.com",
         "developer.nvidia.com", "blogs.nvidia.com", "nvidianews.nvidia.com",
         "aws.amazon.com", "aboutamazon.com", "azure.microsoft.com",
         "blogs.microsoft.com", "microsoft.com", "ai.meta.com",
@@ -7184,16 +7187,18 @@ def _f600_run_fast_path(
         "macrumors.com",
     })
     _SC72_PLATFORM_DOMAINS = frozenset({"huggingface.co", "discuss.huggingface.co", "github.com"})
-    _SC72_RESEARCH_DOMAINS = frozenset({"arxiv.org", "ar5iv.labs.arxiv.org", "blog.research.google", "research.google"})
+    _SC72_RESEARCH_DOMAINS = frozenset({"arxiv.org", "ar5iv.labs.arxiv.org"})
 
     def _ct72b_source_class(it) -> str:
         _dk = _f6_domain_key(it)
         if _dk in _SC72_PLATFORM_DOMAINS:
             return "platform"
-        if _dk in _SC72_RESEARCH_DOMAINS:
-            return "research"
+        # iter72b: official takes priority over research for bigtech domains
+        # (blog.research.google is still an official Google property)
         if _dk in _SC72_OFFICIAL_DOMAINS:
             return "official"
+        if _dk in _SC72_RESEARCH_DOMAINS:
+            return "research"
         if _dk in _SC72_MEDIA_DOMAINS:
             return "media"
         # fallback: use existing _f6_src_type
@@ -7717,12 +7722,15 @@ def _f600_run_fast_path(
                     _n_act = sum(1 for s in _new_sel if _ct71_is_bigtech_actionable(s))
                     _n_boma = sum(1 for s in _new_sel if _ct72b_is_bigtech_official_media_actionable(s))
                     _n_rt = sum(1 for s in _new_sel if _ct71_is_research_tutorial(s))
+                    # iter72b: swap must maintain or improve BOMA count
+                    _cur_boma = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
                     if (_ndc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
                             and _nvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
                             and len(_ndc) >= _DIV_MIN_DOMAINS
                             and len(set(_f6_vendor_key(s) for s in _new_sel) - {"other"}) >= _DIV_MIN_VENDORS
                             and _n_plat <= _PLATFORM_CAP
-                            and _n_rt <= 1):
+                            and _n_rt <= 1
+                            and _n_boma >= _cur_boma):
                         _selected[:] = _new_sel
                         _swap_successes += 1
                         _log.info("iter72b Phase-5: 2-step swap success at idx=%d, selected=%d boma=%d", _si, len(_selected), _n_boma)
