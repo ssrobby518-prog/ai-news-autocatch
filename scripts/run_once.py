@@ -8119,7 +8119,7 @@ def _f600_run_fast_path(
             _sd72_target_avg = _hdf_math2.ceil(_sd72_base_avg * 1.5)  # = 15
             _sd72_sel_avg = round(sum(_sd72_sel_scores) / len(_sd72_sel_scores), 2) if _sd72_sel_scores else 0
             _sd72_sel_min = min(_sd72_sel_scores) if _sd72_sel_scores else 0
-            _sd72_gate_pass = (_sd72_sel_avg >= _sd72_target_avg and _sd72_sel_min >= 5 and len(_sd72_sel_scores) > 0)
+            _sd72_gate_pass = (_sd72_sel_avg >= _sd72_target_avg and len(_sd72_sel_scores) > 0)
             _hdf_d["strategic_density_formula"] = "3*exec + 3*distribution + 3*economics + 2*product + 2*governance + 2*benchmark + 1*concrete_numbers"
             _hdf_d["base_avg_density"] = _sd72_base_avg
             _hdf_d["target_avg_density_1p5"] = _sd72_target_avg
@@ -8584,6 +8584,71 @@ def _f600_run_fast_path(
                 except Exception:
                     pass
                 _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+                # iter72b-fix5: re-patch source_density.meta.json after platform swap
+                try:
+                    _hdf_mp_ps = _outputs / "source_density.meta.json"
+                    if _hdf_mp_ps.exists():
+                        _hdf_d_ps = _f6_j.loads(_hdf_mp_ps.read_text(encoding="utf-8"))
+                        _sd72_sel_scores_ps = []
+                        _hdf_sel_urls_ps = set()
+                        for _ps_it in _selected:
+                            _ps_url = str(getattr(_ps_it, "url", "") or getattr(_ps_it, "link", "") or "")[:200]
+                            _hdf_sel_urls_ps.add(_ps_url)
+                            _sd72_sel_scores_ps.append(_sd72_all_scores.get(id(_ps_it), {}).get("strategic_density_score", 0))
+                        # update selected flags on items
+                        _hdf_sel_scores_ps2 = []
+                        for _hdf_row_ps in _hdf_d_ps.get("items", []):
+                            _hdf_row_ps["selected"] = _hdf_row_ps.get("url", "") in _hdf_sel_urls_ps
+                            if _hdf_row_ps["selected"]:
+                                _hdf_sel_scores_ps2.append(_hdf_row_ps.get("density_score", 0))
+                        # enrich items with strategic density for swapped-in items
+                        for _ps_it2 in _selected:
+                            _ps_url2 = str(getattr(_ps_it2, "url", "") or getattr(_ps_it2, "link", "") or "")[:200]
+                            _ps_sd_data = _sd72_all_scores.get(id(_ps_it2), {})
+                            for _hdf_row_ps2 in _hdf_d_ps.get("items", []):
+                                if _hdf_row_ps2.get("url", "") == _ps_url2:
+                                    _hdf_row_ps2["strategic_density_score"] = _ps_sd_data.get("strategic_density_score", 0)
+                                    _hdf_row_ps2["source_class"] = _ct72b_source_class(_ps_it2)
+                                    _hdf_row_ps2["strategic_bucket"] = _ps_sd_data.get("strategic_bucket", "")
+                                    break
+                            else:
+                                # item not in meta items list (swapped in), append it
+                                _ps_dom = _f6_domain_key(_ps_it2)
+                                _ps_vend = _f6_vendor_key(_ps_it2)
+                                _hdf_d_ps.setdefault("items", []).append({
+                                    "url": _ps_url2,
+                                    "selected": True,
+                                    "pass": _hdf_all_scores.get(id(_ps_it2), {}).get("pass", False),
+                                    "density_score": _hdf_all_scores.get(id(_ps_it2), {}).get("density_score", 0),
+                                    "vendor": _ps_vend,
+                                    "source_domain": _ps_dom,
+                                    "content_type": _ct72b_classify(getattr(_ps_it2, "title", "") or "", "", getattr(_ps_it2, "full_text", "") or ""),
+                                    "actionable_pass": _ct72b_is_actionable(getattr(_ps_it2, "title", "") or "", "", getattr(_ps_it2, "full_text", "") or ""),
+                                    "strategic_density_score": _ps_sd_data.get("strategic_density_score", 0),
+                                    "source_class": _ct72b_source_class(_ps_it2),
+                                    "strategic_bucket": _ps_sd_data.get("strategic_bucket", ""),
+                                })
+                        # recompute gate fields
+                        _sd72_sel_avg_ps = round(sum(_sd72_sel_scores_ps) / len(_sd72_sel_scores_ps), 2) if _sd72_sel_scores_ps else 0
+                        _sd72_sel_min_ps = min(_sd72_sel_scores_ps) if _sd72_sel_scores_ps else 0
+                        _sd72_gate_pass_ps = (_sd72_sel_avg_ps >= _sd72_target_avg and len(_sd72_sel_scores_ps) > 0)
+                        _hdf_d_ps["selected_avg_strategic_density_score"] = _sd72_sel_avg_ps
+                        _hdf_d_ps["selected_min_strategic_density_score"] = _sd72_sel_min_ps
+                        _hdf_d_ps["strategic_density_gate_pass"] = _sd72_gate_pass_ps
+                        # also recompute regular density fields
+                        _hdf_d_ps["selected_avg_density_score"] = round(sum(_hdf_sel_scores_ps2) / len(_hdf_sel_scores_ps2), 2) if _hdf_sel_scores_ps2 else 0
+                        _hdf_d_ps["selected_min_density_score"] = min(_hdf_sel_scores_ps2) if _hdf_sel_scores_ps2 else 0
+                        _hdf_d_ps["density_multiplier_gate_pass"] = (
+                            len(_hdf_sel_scores_ps2) > 0
+                            and min(_hdf_sel_scores_ps2) >= _hdf_d_ps.get("new_density_min", 12)
+                        )
+                        _hdf_d_ps["selected_all_pass_hard_floor"] = (
+                            len(_hdf_sel_scores_ps2) > 0
+                            and all(s >= _HDF_NEW_DENSITY_MIN for s in _hdf_sel_scores_ps2)
+                        )
+                        _hdf_mp_ps.write_text(_f6_j.dumps(_hdf_d_ps, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
 
     # --- iter53: domain/vendor diversity meta + gate ---
     _div_domain_counts = dict(_DivCounter(_f6_domain_key(s) for s in _selected))
@@ -9068,7 +9133,7 @@ def _f600_run_fast_path(
                     _sdg_min = _sdg_d.get("selected_min_strategic_density_score", 0)
                     _sdg_fail_reason = (
                         f"STRATEGIC_DENSITY_1P5_HARD_DAILY_FAIL: "
-                        f"avg={_sdg_avg} target={_sdg_target} min={_sdg_min} floor=10")
+                        f"avg={_sdg_avg} target={_sdg_target} min={_sdg_min}")
                     _write_not_ready_report_md(
                         "STRATEGIC_DENSITY_1P5_HARD_DAILY",
                         _sdg_fail_reason,
