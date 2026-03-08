@@ -7103,19 +7103,84 @@ def _f600_run_fast_path(
             key=_f6_sort_key, reverse=True,
         )
 
+    # --- iter56: HIGH_DENSITY_SOURCE_FLOOR_HARD — regex-based density filter on hydrated fulltext ---
+    # Any ONE criterion met → pass: fulltext_chars>=1800 OR numeric_hits>=6 OR entity_hits>=10 OR release_artifact_hits>=2
+    import re as _hdf_re
+    _HDF_NUMERIC_RE = _hdf_re.compile(r'(?:\d[\d,]*\.?\d+\s*%|\$\s*\d[\d,.]*[BMKTbmkt]?|\d[\d,]*\.?\d*\s*(?:billion|million|thousand|B|M|K|x|fps|TOPS|TFLOPS|GB|TB|MB|ms|tokens?/s))', _hdf_re.IGNORECASE)
+    _HDF_ENTITY_RE = _hdf_re.compile(r'\b(?:Google|OpenAI|Anthropic|Meta|Microsoft|NVIDIA|Apple|Amazon|AWS|DeepSeek|Mistral|Alibaba|Qwen|Samsung|Intel|Baidu|Tesla|xAI|GPT|Gemini|Claude|Llama|DALL-E|Sora|Stable\s*Diffusion|Midjourney|Copilot|GitHub|HuggingFace|PyTorch|TensorFlow|CUDA|ROCm|ONNX|vLLM|Triton)\b', _hdf_re.IGNORECASE)
+    _HDF_RELEASE_RE = _hdf_re.compile(r'\b(?:v\d+\.\d+|release(?:d|s)?|launch(?:ed|es)?|announc(?:ed|es|ement)|open[\-\s]?sourc(?:ed|e|ing)|now\s+available|API\s+(?:key|endpoint|access)|changelog|breaking\s+change|deprecat(?:ed|ion))\b', _hdf_re.IGNORECASE)
+
+    def _hdf_score(it):
+        """Return density metrics for a single item."""
+        _ft = str(getattr(it, "fulltext", "") or getattr(it, "body", "") or "")
+        _chars = len(_ft)
+        _num = len(_HDF_NUMERIC_RE.findall(_ft))
+        _ent = len(_HDF_ENTITY_RE.findall(_ft))
+        _rel = len(_HDF_RELEASE_RE.findall(_ft))
+        _pass = (_chars >= 1800 or _num >= 6 or _ent >= 10 or _rel >= 2)
+        return {"chars": _chars, "numeric_hits": _num, "entity_hits": _ent, "release_hits": _rel, "pass": _pass}
+
+    # Score ALL candidates and write source_density.meta.json
+    _hdf_all_scores = {}
+    for _hdf_it in raw_items:
+        _hdf_key = str(getattr(_hdf_it, "url", "") or getattr(_hdf_it, "link", "") or getattr(_hdf_it, "title", ""))
+        _hdf_all_scores[id(_hdf_it)] = _hdf_score(_hdf_it)
+        _hdf_all_scores[id(_hdf_it)]["url"] = _hdf_key[:200]
+        _hdf_all_scores[id(_hdf_it)]["title"] = str(getattr(_hdf_it, "title", "") or "")[:120]
+
+    # Write source_density.meta.json
+    try:
+        _hdf_meta_path = _outputs / "source_density.meta.json"
+        _hdf_meta = {
+            "run_id": _run_id,
+            "gate": "HIGH_DENSITY_SOURCE_FLOOR_HARD",
+            "thresholds": {"fulltext_chars": 1800, "numeric_hits": 6, "entity_hits": 10, "release_artifact_hits": 2},
+            "candidates_total": len(raw_items),
+            "candidates_pass": sum(1 for v in _hdf_all_scores.values() if v["pass"]),
+            "candidates_fail": sum(1 for v in _hdf_all_scores.values() if not v["pass"]),
+            "items": [
+                {
+                    "url": _hdf_all_scores[id(it)]["url"],
+                    "title": _hdf_all_scores[id(it)]["title"],
+                    "chars": _hdf_all_scores[id(it)]["chars"],
+                    "numeric_hits": _hdf_all_scores[id(it)]["numeric_hits"],
+                    "entity_hits": _hdf_all_scores[id(it)]["entity_hits"],
+                    "release_hits": _hdf_all_scores[id(it)]["release_hits"],
+                    "pass": _hdf_all_scores[id(it)]["pass"],
+                }
+                for it in raw_items
+            ],
+        }
+        _hdf_meta_path.write_text(_f6_j.dumps(_hdf_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as _hdf_exc:
+        _log.warning("source_density.meta.json write failed: %s", _hdf_exc)
+
+    # Filter: DAILY primary pool only admits items that pass density floor
+    _hdf_passed_items = [it for it in raw_items if _hdf_all_scores.get(id(it), {}).get("pass", False)]
+    _hdf_failed_items = [it for it in raw_items if not _hdf_all_scores.get(id(it), {}).get("pass", False)]
+    _log.info("HIGH_DENSITY_SOURCE_FLOOR: total=%d pass=%d fail=%d", len(raw_items), len(_hdf_passed_items), len(_hdf_failed_items))
+
+    # For DAILY: use only density-passed items for pool construction (fallback to all if too few)
+    _hdf_pool_items = _hdf_passed_items if (_is_daily and len(_hdf_passed_items) >= _f6_target) else raw_items
+
+    # Override raw_items reference for pool construction below (only for pool building)
+    _pool_raw = _hdf_pool_items
+
     # iter40: bigtech-first selection — fill bigtech items first, then official/media, minimize dev noise
-    _bt_pool = [it for it in _f6_tier(300) if _f6_is_bigtech(it)]
-    _om_pool = [it for it in _f6_tier(300) if not _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
-    _other_pool = [it for it in _f6_tier(300) if it not in _bt_pool and it not in _om_pool and not _f6_is_dev_noise(it)]
-    _devnoise_pool = [it for it in _f6_tier(300) if _f6_is_dev_noise(it)]
+    _bt_pool = [it for it in sorted(_pool_raw, key=_f6_sort_key, reverse=True) if int(getattr(it, "fulltext_len", 0) or 0) >= 300 and _f6_is_bigtech(it)]
+    _pool_sorted = sorted(_pool_raw, key=_f6_sort_key, reverse=True)
+    _pool_300 = [it for it in _pool_sorted if int(getattr(it, "fulltext_len", 0) or 0) >= 300]
+    _om_pool = [it for it in _pool_300 if not _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
+    _other_pool = [it for it in _pool_300 if it not in _bt_pool and it not in _om_pool and not _f6_is_dev_noise(it)]
+    _devnoise_pool = [it for it in _pool_300 if _f6_is_dev_noise(it)]
     # iter54: DAILY_BIGTECH_ONLY — pool of items that are bigtech AND (official/media/code_release)
     # code_release from bigtech (e.g. GitHub microsoft/autogen) counts as official for DAILY purposes
     _BT_OM_TYPES = ("official", "media", "code_release")
-    _bt_om_pool = [it for it in _f6_tier(300) if _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
+    _bt_om_pool = [it for it in _pool_300 if _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
 
     # iter53: domain/vendor quota-aware selection
     _DIV_MAX_DOMAIN = 2
-    _DIV_MAX_VENDOR = 3
+    _DIV_MAX_VENDOR = 2  # iter56: tightened from 3 to 2 (vendor_share_cap: max_vendor*3 <= 7)
     _DIV_MIN_DOMAINS = 4
     _DIV_MIN_VENDORS = 4
     from collections import Counter as _DivCounter
@@ -7134,6 +7199,10 @@ def _f600_run_fast_path(
         # iter65: share cap — after adding, (new_count)*3 must <= target
         _new_dk_count = _d_counts[_dk] + 1
         if _new_dk_count * _DOMAIN_SHARE_CAP_MULTIPLIER > _max_events:
+            return False
+        # iter56: vendor share cap — after adding, (new_vcount)*3 must <= target
+        _new_vk_count = _v_counts[_vk] + 1
+        if _new_vk_count * _DOMAIN_SHARE_CAP_MULTIPLIER > _max_events:
             return False
         return True
 
@@ -7402,6 +7471,29 @@ def _f600_run_fast_path(
         _f6_bigtech = 0
         _f6_om = 0
     _f6_focus = _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+
+    # iter56: patch source_density.meta.json with selected flag
+    try:
+        _hdf_sel_urls = set(str(getattr(it, "url", "") or getattr(it, "link", "") or "")[:200] for it in _selected)
+        _hdf_mp = _outputs / "source_density.meta.json"
+        if _hdf_mp.exists():
+            _hdf_d = _f6_j.loads(_hdf_mp.read_text(encoding="utf-8"))
+            _hdf_sel_pass_count = 0
+            _hdf_sel_fail_count = 0
+            for _hdf_row in _hdf_d.get("items", []):
+                _hdf_row["selected"] = _hdf_row.get("url", "") in _hdf_sel_urls
+                if _hdf_row["selected"]:
+                    if _hdf_row.get("pass"):
+                        _hdf_sel_pass_count += 1
+                    else:
+                        _hdf_sel_fail_count += 1
+            _hdf_d["selected_pass"] = _hdf_sel_pass_count
+            _hdf_d["selected_fail"] = _hdf_sel_fail_count
+            _hdf_d["selected_all_pass"] = (_hdf_sel_fail_count == 0 and _hdf_sel_pass_count > 0)
+            _hdf_mp.write_text(_f6_j.dumps(_hdf_d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
     _f6_devnoise_count = _f6_focus.get("non_bigtech_dev_noise_count", 0)
     # iter50: injection test support for DEV_NOISE_CAP_HARD
     _dn_inject_n = int(os.environ.get("INJECT_DEV_NOISE_COUNT", "0"))
@@ -7759,6 +7851,21 @@ def _f600_run_fast_path(
     _dsc_share_ratio = round(_dsc_max_domain_count / _dsc_selected_events, 4) if _dsc_selected_events > 0 else 1.0
     _dsc_pass = (_dsc_max_domain_count * _DOMAIN_SHARE_CAP_MULTIPLIER <= _dsc_selected_events)
 
+    # --- iter56: SINGLE_VENDOR_SHARE_CAP_HARD_DAILY ---
+    _VENDOR_SHARE_CAP_MULTIPLIER = 3  # max_vendor_count * 3 <= selected_events
+    _vsc_selected_events = len(_selected)
+    _vsc_max_vendor_count = _div_max_vendor
+    _vsc_inject_count = os.environ.get("INJECT_SINGLE_VENDOR_COUNT", "")
+    _vsc_is_injected = bool(_vsc_inject_count)
+    if _vsc_is_injected:
+        try:
+            _vsc_max_vendor_count = int(_vsc_inject_count)
+        except ValueError:
+            pass
+        _log.info("INJECT_SINGLE_VENDOR_COUNT=%s: vendor share cap overridden", _vsc_inject_count)
+    _vsc_share_ratio = round(_vsc_max_vendor_count / _vsc_selected_events, 4) if _vsc_selected_events > 0 else 1.0
+    _vsc_pass = (_vsc_max_vendor_count * _VENDOR_SHARE_CAP_MULTIPLIER <= _vsc_selected_events)
+
     # Patch selection_audit.meta.json with diversity fields
     try:
         _sa_path2 = _outputs / "selection_audit.meta.json"
@@ -7786,6 +7893,14 @@ def _f600_run_fast_path(
                 _sa2["domain_share_cap_test_injected"] = True
                 _sa2["domain_share_cap_injected_count"] = _dsc_inject_count
                 _sa2["domain_share_cap_injected_name"] = _dsc_inject_name
+            # iter56: vendor share cap fields
+            _sa2["vendor_share_cap_pass"] = _vsc_pass
+            _sa2["vendor_share_cap_rule"] = "max_vendor_count*3 <= selected_events"
+            _sa2["vendor_share_cap_max_vendor_count"] = _vsc_max_vendor_count
+            _sa2["vendor_share_cap_ratio"] = _vsc_share_ratio
+            if _vsc_is_injected:
+                _sa2["vendor_share_cap_test_injected"] = True
+                _sa2["vendor_share_cap_injected_count"] = _vsc_inject_count
             _sa_path2.write_text(_f6_j.dumps(_sa2, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -7813,7 +7928,13 @@ def _f600_run_fast_path(
             "max_domain_share_ratio": _dsc_share_ratio,
             "selected_events": _dsc_selected_events,
             "domain_share_cap_pass": _dsc_pass,
+            "max_vendor_share_rule": "max_vendor_count*3 <= selected_events",
+            "max_vendor_share_ratio": _vsc_share_ratio,
+            "vendor_share_cap_pass": _vsc_pass,
         }
+        if _vsc_is_injected:
+            _bdm["vendor_share_cap_test_injected"] = True
+            _bdm["vendor_share_cap_injected_count"] = _vsc_inject_count
         if _div_is_injected:
             _bdm["test_injected"] = True
             _bdm["injected_vendor"] = _div_inject_vendor
@@ -7857,6 +7978,22 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY", _dsc_fail_reason)
+
+    # iter56: SINGLE_VENDOR_SHARE_CAP_HARD_DAILY gate (DAILY only)
+    if _is_daily and not _vsc_pass:
+        _vsc_fail_reason = (f"SINGLE_VENDOR_SHARE_CAP_HARD_DAILY_FAIL: max_vendor={_vsc_max_vendor_count}"
+                            f" events={_vsc_selected_events} share={_vsc_share_ratio}")
+        if _vsc_is_injected:
+            _vsc_fail_reason += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "SINGLE_VENDOR_SHARE_CAP_HARD_DAILY",
+            _vsc_fail_reason,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("SINGLE_VENDOR_SHARE_CAP_HARD_DAILY", _vsc_fail_reason)
 
     # --- Step 4: build digest.md from card dicts ---
     stg["digest_write_start"] = time.time()

@@ -5009,7 +5009,7 @@ if ($_fast300Daily) {
             Write-Output ("  max_domain_count          : {0}" -f $_divMaxDom)
             Write-Output ("  max_vendor_count          : {0}" -f $_divMaxVen)
             Write-Output ("  diversity_pass            : {0}" -f $_divPass)
-            if ($_divDomains -lt 4 -or $_divMaxDom -gt 2 -or $_divVendors -lt 4 -or $_divMaxVen -gt 3) {
+            if ($_divDomains -lt 4 -or $_divMaxDom -gt 2 -or $_divVendors -lt 4 -or $_divMaxVen -gt 2) {
                 $_divFail = ("BIGTECH_DIVERSITY_HARD_DAILY_FAIL: domains={0} max_domain={1} vendors={2} max_vendor={3}" -f $_divDomains, $_divMaxDom, $_divVendors, $_divMaxVen)
                 Write-Output ("  => FAIL: {0}" -f $_divFail)
                 Invoke-VerifyOnlineFailFast -Gate "BIGTECH_DIVERSITY_HARD_DAILY" -Reason $_divFail
@@ -5057,6 +5057,78 @@ if ($_fast300Daily) {
         }
     } else {
         Write-Output "  SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY: WARN (bigtech_diversity.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter56: SINGLE_VENDOR_SHARE_CAP_HARD_DAILY — max_vendor_count*3 <= selected_events
+#   Reads bigtech_diversity.meta.json for vendor_share_cap_pass
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_vscMetaPath = Join-Path $repoRoot "outputs\bigtech_diversity.meta.json"
+    Write-Output "SINGLE_VENDOR_SHARE_CAP_HARD_DAILY:"
+    if (Test-Path $_vscMetaPath) {
+        try {
+            $_vscMeta = Get-Content $_vscMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_vscMaxVen    = if ($_vscMeta.PSObject.Properties['max_vendor_count']) { [int]$_vscMeta.max_vendor_count } else { 99 }
+            $_vscEvents    = if ($_vscMeta.PSObject.Properties['selected_events']) { [int]$_vscMeta.selected_events } else { 0 }
+            $_vscRatio     = if ($_vscMeta.PSObject.Properties['max_vendor_share_ratio']) { $_vscMeta.max_vendor_share_ratio } else { "N/A" }
+            $_vscPass      = if ($_vscMeta.PSObject.Properties['vendor_share_cap_pass']) { $_vscMeta.vendor_share_cap_pass } else { $false }
+            $_vscInjected  = if ($_vscMeta.PSObject.Properties['vendor_share_cap_test_injected']) { $_vscMeta.vendor_share_cap_test_injected } else { $false }
+            Write-Output ("  max_vendor_count          : {0}" -f $_vscMaxVen)
+            Write-Output ("  selected_events           : {0}" -f $_vscEvents)
+            Write-Output ("  max_vendor_share_ratio    : {0}" -f $_vscRatio)
+            Write-Output ("  vendor_share_cap_pass     : {0}" -f $_vscPass)
+            if ($_vscInjected) {
+                Write-Output "  vendor_share_cap_test_injected : True"
+            }
+            if (-not $_vscPass) {
+                $_vscFail = ("SINGLE_VENDOR_SHARE_CAP_HARD_DAILY_FAIL: max_vendor={0} events={1} ratio={2}" -f $_vscMaxVen, $_vscEvents, $_vscRatio)
+                Write-Output ("  => FAIL: {0}" -f $_vscFail)
+                Invoke-VerifyOnlineFailFast -Gate "SINGLE_VENDOR_SHARE_CAP_HARD_DAILY" -Reason $_vscFail
+            }
+            Write-Output "  => SINGLE_VENDOR_SHARE_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  SINGLE_VENDOR_SHARE_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  SINGLE_VENDOR_SHARE_CAP_HARD_DAILY: WARN (bigtech_diversity.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter56: HIGH_DENSITY_SOURCE_FLOOR_HARD — all selected items must pass density floor
+#   Reads source_density.meta.json for selected_all_pass
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_hdfMetaPath = Join-Path $repoRoot "outputs\source_density.meta.json"
+    Write-Output "HIGH_DENSITY_SOURCE_FLOOR_HARD:"
+    if (Test-Path $_hdfMetaPath) {
+        try {
+            $_hdfMeta = Get-Content $_hdfMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_hdfSelPass  = if ($_hdfMeta.PSObject.Properties['selected_pass']) { [int]$_hdfMeta.selected_pass } else { 0 }
+            $_hdfSelFail  = if ($_hdfMeta.PSObject.Properties['selected_fail']) { [int]$_hdfMeta.selected_fail } else { 99 }
+            $_hdfAllPass  = if ($_hdfMeta.PSObject.Properties['selected_all_pass']) { $_hdfMeta.selected_all_pass } else { $false }
+            $_hdfTotal    = if ($_hdfMeta.PSObject.Properties['candidates_total']) { [int]$_hdfMeta.candidates_total } else { 0 }
+            $_hdfCandPass = if ($_hdfMeta.PSObject.Properties['candidates_pass']) { [int]$_hdfMeta.candidates_pass } else { 0 }
+            Write-Output ("  candidates_total          : {0}" -f $_hdfTotal)
+            Write-Output ("  candidates_pass           : {0}" -f $_hdfCandPass)
+            Write-Output ("  selected_pass             : {0}" -f $_hdfSelPass)
+            Write-Output ("  selected_fail             : {0}" -f $_hdfSelFail)
+            Write-Output ("  selected_all_pass         : {0}" -f $_hdfAllPass)
+            if (-not $_hdfAllPass) {
+                $_hdfFail = ("HIGH_DENSITY_SOURCE_FLOOR_HARD_FAIL: selected_pass={0} selected_fail={1}" -f $_hdfSelPass, $_hdfSelFail)
+                Write-Output ("  => FAIL: {0}" -f $_hdfFail)
+                Invoke-VerifyOnlineFailFast -Gate "HIGH_DENSITY_SOURCE_FLOOR_HARD" -Reason $_hdfFail
+            }
+            Write-Output "  => HIGH_DENSITY_SOURCE_FLOOR_HARD: PASS"
+        } catch {
+            Write-Output ("  HIGH_DENSITY_SOURCE_FLOOR_HARD: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  HIGH_DENSITY_SOURCE_FLOOR_HARD: WARN (source_density.meta.json not found)"
     }
 }
 Write-Output ""
