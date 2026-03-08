@@ -7084,17 +7084,22 @@ def _f600_run_fast_path(
 
     # iter67: practical-signal scoring (regex/O(n)) — version/API/pricing/security/benchmark/deploy signals
     import re as _pss_re
+    # iter70: expanded practical signal patterns for short official updates
     _PRACTICAL_SIGNAL_RE = _pss_re.compile(
         r'\b(?:v\d+\.\d+|GA|RC|beta|preview|stable|LTS|'
         r'API|SDK|pricing|price|cost|'
-        r'security|CVE-\d{4}|vulnerability|advisory|'
+        r'security|CVE-\d{4}|vulnerability|advisory|patch|'
         r'benchmark|perf(?:ormance)?|latency|throughput|'
         r'release\s+notes?|changelog|what\'?s\s+new|'
         r'compatibility|backward|deprecat(?:ed|ion)|migration|upgrade|'
         r'hardware|spec(?:ification)?s?|deployment|deploy|rollout|'
         r'enterprise|production|on[\-\s]?prem(?:ise)?|'
         r'TFLOPS|TOPS|tok(?:en)?s?/s|context[\-\s]?window|'
-        r'fine[\-\s]?tun(?:ed|ing)|quantiz(?:ed|ation)|INT[48]|FP16|BF16)\b',
+        r'fine[\-\s]?tun(?:ed|ing)|quantiz(?:ed|ation)|INT[48]|FP16|BF16|'
+        r'support(?:ed|s)?|update(?:d|s)?|fix(?:ed|es)?|'
+        r'availab(?:le|ility)|region|endpoint|quota|limit|'
+        r'model\s+card|safety|alignment|guardrail|'
+        r'inference|training|serving|batch|pipeline|workflow)\b',
         _pss_re.IGNORECASE,
     )
 
@@ -7162,14 +7167,15 @@ def _f600_run_fast_path(
         _act = len(_HDF_ACTION_RE.findall(_ft))
         _spec = len(_HDF_SPEC_RE.findall(_ft))
         _ds = _HDF_W_NUM * _num + _HDF_W_PROP * _prop + _HDF_W_ACT * _act + _HDF_W_SPEC * _spec
-        # iter69: practical signal bonus — short but actionable official updates get density boost
-        # Uses the same _PRACTICAL_SIGNAL_RE from iter67 (version/API/security/benchmark/deploy)
+        # iter69/70: practical signal bonus — short but actionable official updates get density boost
         _pss = len(_PRACTICAL_SIGNAL_RE.findall(_ft))
-        _practical_bonus = min(_pss, 6)  # cap at 6 to prevent research papers from dominating
+        # iter70: raised cap from 6 to 8 for richer signal coverage
+        _practical_bonus = min(_pss, 8)
         _ds += _practical_bonus
         # iter56 floor: any ONE met → pass basic floor
         # iter69: practical_signals >= 4 also passes (short official release notes)
-        _pass = (_chars >= 1800 or _num >= 6 or _prop >= 10 or _act >= 2 or _pss >= 4)
+        # iter70: practical_signals >= 3 also passes (short announcements with 3+ signals)
+        _pass = (_chars >= 1800 or _num >= 6 or _prop >= 10 or _act >= 2 or _pss >= 3)
         return {
             "chars": _chars, "numbers_count": _num, "proper_noun_like_count": _prop,
             "action_keyword_hits": _act, "spec_keyword_hits": _spec,
@@ -7191,8 +7197,8 @@ def _f600_run_fast_path(
         _hdf_meta = {
             "run_id": _run_id,
             "gate": "SOURCE_DENSITY_MULTIPLIER_HARD_DAILY",
-            "density_formula": "2*numbers + 1*proper_noun + 3*action + 2*spec + min(practical_signal, 6)",
-            "weights": {"numbers": _HDF_W_NUM, "proper_noun": _HDF_W_PROP, "action": _HDF_W_ACT, "spec": _HDF_W_SPEC, "practical_bonus_cap": 6},
+            "density_formula": "2*numbers + 1*proper_noun + 3*action + 2*spec + min(practical_signal, 8)",
+            "weights": {"numbers": _HDF_W_NUM, "proper_noun": _HDF_W_PROP, "action": _HDF_W_ACT, "spec": _HDF_W_SPEC, "practical_bonus_cap": 8},
             "multiplier": _HDF_DENSITY_MULTIPLIER,
             "candidates_total": len(raw_items),
             "candidates_pass": sum(1 for v in _hdf_all_scores.values() if v["pass"]),
@@ -7361,7 +7367,84 @@ def _f600_run_fast_path(
                         _plat_in_sel += 1
                     if len(_selected) >= _max_events:
                         break
+        # iter70 Phase-4: supply rescue — try broader pool (bigtech items that are
+        # code_release or non-bt official/media, if density passes and not platform-capped)
+        if len(_selected) < _max_events:
+            _rescue_pool = _oa_partition([
+                it for it in _pool_300
+                if it not in _selected
+                and not _f6_is_dev_noise(it)
+                and _f6_is_bigtech(it)
+                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+            ])
+            _plat_in_sel_r = sum(1 for s in _selected if _is_platform_domain(s))
+            for it in _rescue_pool:
+                if _is_platform_domain(it) and _plat_in_sel_r >= _PLATFORM_CAP:
+                    continue
+                if _div_can_add(it, _selected):
+                    _sel_append(it)
+                    if _is_platform_domain(it):
+                        _plat_in_sel_r += 1
+                    if len(_selected) >= _max_events:
+                        break
+            _log.info("iter70 Phase-4 supply rescue: selected=%d after rescue", len(_selected))
+        # iter70 Phase-5: 2-step swap — if at 6, try swapping an existing item with a pair
+        # that produces a net +1 (swap 1 out, add 2 back) while keeping all gates valid
+        _swap_attempts = 0
+        _swap_successes = 0
+        if len(_selected) < _max_events and len(_selected) >= _max_events - 1:
+            # We're at 6, need 7. Try removing each selected item and seeing if we can
+            # add 2 items from the pool that satisfy all diversity constraints
+            _swap_pool = _oa_partition([
+                it for it in _pool_300
+                if it not in _selected
+                and not _f6_is_dev_noise(it)
+                and _f6_is_bigtech(it)
+                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+            ])
+            for _si in range(len(_selected)):
+                if len(_selected) >= _max_events:
+                    break
+                _swap_attempts += 1
+                _removed = _selected[_si]
+                _test_sel = [s for j, s in enumerate(_selected) if j != _si]
+                # Try to find 2 items that fit the slot left by removing _removed
+                _add_pair = []
+                _plat_test = sum(1 for s in _test_sel if _is_platform_domain(s))
+                for _sc in _swap_pool:
+                    if _sc in _test_sel or _sc == _removed or _sc in _add_pair:
+                        continue
+                    if _is_platform_domain(_sc) and _plat_test + sum(1 for a in _add_pair if _is_platform_domain(a)) >= _PLATFORM_CAP:
+                        continue
+                    _test_full = _test_sel + _add_pair + [_sc]
+                    _tdc = _DivCounter(_f6_domain_key(s) for s in _test_full)
+                    _tvc = _DivCounter(_f6_vendor_key(s) for s in _test_full)
+                    if (_tdc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _tvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _tdc[_f6_domain_key(_sc)] * _DOMAIN_SHARE_CAP_MULTIPLIER <= _max_events
+                            and _tvc[_f6_vendor_key(_sc)] * _DOMAIN_SHARE_CAP_MULTIPLIER <= _max_events):
+                        _add_pair.append(_sc)
+                        if len(_add_pair) >= 2:
+                            break
+                if len(_add_pair) == 2:
+                    # Verify the full set passes all constraints
+                    _new_sel = _test_sel + _add_pair
+                    _ndc = _DivCounter(_f6_domain_key(s) for s in _new_sel)
+                    _nvc = _DivCounter(_f6_vendor_key(s) for s in _new_sel)
+                    _n_plat = sum(1 for s in _new_sel if _is_platform_domain(s))
+                    if (_ndc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _nvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and len(_ndc) >= _DIV_MIN_DOMAINS
+                            and len(set(_f6_vendor_key(s) for s in _new_sel) - {"other"}) >= _DIV_MIN_VENDORS
+                            and _n_plat <= _PLATFORM_CAP):
+                        _selected[:] = _new_sel
+                        _swap_successes += 1
+                        _log.info("iter70 Phase-5: 2-step swap success at idx=%d, selected=%d", _si, len(_selected))
+                        break
     else:
+        # Non-daily: no swap tracking needed
+        _swap_attempts = 0
+        _swap_successes = 0
         # Non-daily: original pool priority
         for _pool in [_bt_pool, _om_pool, _other_pool]:
             if len(_selected) >= _max_events:
@@ -7591,6 +7674,62 @@ def _f600_run_fast_path(
         len(_selected), _hydrated_ok_count, len(raw_items),
         sum(1 for it in _selected if _f6_is_bigtech(it)),
     )
+
+    # iter70: write selection_shortfall.meta.json if selected < target
+    if _is_daily and len(_selected) < _max_events:
+        try:
+            # Count blocking reasons across all pool candidates
+            _sf_eligible_np = 0
+            _sf_eligible_plat = 0
+            _sf_overlap_blocked = 0
+            _sf_platform_blocked = 0
+            _sf_vendor_blocked = 0
+            _sf_domain_blocked = 0
+            _sf_density_blocked = 0
+            for _sf_it in _pool_300:
+                if _sf_it in _selected or _f6_is_dev_noise(_sf_it) or not _f6_is_bigtech(_sf_it):
+                    continue
+                _sf_ds = _hdf_all_scores.get(id(_sf_it), {}).get("density_score", 0)
+                if _sf_ds < _HDF_NEW_DENSITY_MIN:
+                    _sf_density_blocked += 1
+                    continue
+                if _is_platform_domain(_sf_it):
+                    _sf_eligible_plat += 1
+                    _p_in = sum(1 for s in _selected if _is_platform_domain(s))
+                    if _p_in >= _PLATFORM_CAP:
+                        _sf_platform_blocked += 1
+                        continue
+                else:
+                    _sf_eligible_np += 1
+                _dk = _f6_domain_key(_sf_it)
+                _vk = _f6_vendor_key(_sf_it)
+                _dc = _DivCounter(_f6_domain_key(s) for s in _selected)
+                _vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
+                if _dc[_dk] >= _DIV_MAX_DOMAIN:
+                    _sf_domain_blocked += 1
+                elif _vc[_vk] >= _DIV_MAX_VENDOR:
+                    _sf_vendor_blocked += 1
+                elif _oa_prev_ids and _oa_item_hash(_sf_it) in _oa_prev_ids:
+                    _sf_overlap_blocked += 1
+            _sf_meta = {
+                "run_id": _run_id,
+                "eligible_non_platform_count": _sf_eligible_np,
+                "eligible_platform_count": _sf_eligible_plat,
+                "overlap_blocked_count": _sf_overlap_blocked,
+                "platform_blocked_count": _sf_platform_blocked,
+                "vendor_blocked_count": _sf_vendor_blocked,
+                "domain_blocked_count": _sf_domain_blocked,
+                "density_blocked_count": _sf_density_blocked,
+                "final_selected_count": len(_selected),
+                "target": _max_events,
+                "fail_reason": "INSUFFICIENT_ELIGIBLE_NON_PLATFORM_SUPPLY",
+            }
+            (_outputs / "selection_shortfall.meta.json").write_text(
+                _f6_j.dumps(_sf_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        _f6_fail("DAILY_SELECTION_UNDER_MIN_EVENTS",
+                 f"selected={len(_selected)} < target={_max_events} (INSUFFICIENT_ELIGIBLE_NON_PLATFORM_SUPPLY)")
 
     # --- Step 2: write selection audit meta + bigtech_focus meta (card dicts) ---
     _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
@@ -8328,6 +8467,9 @@ def _f600_run_fast_path(
             _sa_ov_d["overlap_cap_pass"] = (_overlap_count <= _OVERLAP_CAP)
             _sa_ov_d["replacements_made"] = _replacements_made
             _sa_ov_d["prev_daily_file_used"] = _prev_daily_file
+            # iter70: swap stats
+            _sa_ov_d["swap_attempts"] = _swap_attempts if _is_daily else 0
+            _sa_ov_d["swap_successes"] = _swap_successes if _is_daily else 0
             _sa_ov.write_text(_f6_j.dumps(_sa_ov_d, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -11172,7 +11314,10 @@ def run_pipeline() -> None:
                         int(os.environ.get("BRIEF_MAX_EVENTS", "7") or "7"),
                     ),
                 )
-                _hydrate_n = min(max(_probe_target * 4, 30), len(raw_items))
+                # iter70: increase hydration pool for DAILY to get more non-platform candidates
+                _hy_mult = 6 if _is_daily else 4
+                _hy_floor = 42 if _is_daily else 30
+                _hydrate_n = min(max(_probe_target * _hy_mult, _hy_floor), len(raw_items))
                 _targeted_pool = list(raw_items[:_hydrate_n])  # already sorted by _bfp_score
                 # iter54e: DAILY domain diversity injection — ensure hydration pool
                 # includes items from 6+ distinct domains so selection can satisfy
@@ -11211,9 +11356,10 @@ def run_pipeline() -> None:
                             _hy_dom_counts[_hy_dk] += 1
                             _hy_injected += 1
                     # Pass 2: priority non-platform bigtech domains (count < 4)
+                    # iter70: raised cap from 10 to 15 to improve non-platform supply
                     _hy_pri_injected = 0
                     for _hy_it in raw_items[_hydrate_n:]:
-                        if _hy_pri_injected >= 10:
+                        if _hy_pri_injected >= 15:
                             break
                         _hy_u = str(getattr(_hy_it, "url", "") or getattr(_hy_it, "link", "") or "")
                         _hy_dk = _hy_up(_hy_u).netloc.lower().lstrip("www.") if _hy_u else ""
