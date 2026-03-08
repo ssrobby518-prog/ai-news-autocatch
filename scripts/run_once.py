@@ -7254,7 +7254,7 @@ def _f600_run_fast_path(
     _DOMAIN_SHARE_CAP_MULTIPLIER = 3  # max_domain_count * 3 <= target
 
     def _div_can_add(it, sel_list):
-        """Check if adding it to sel_list would violate domain/vendor caps, share cap, or platform cap."""
+        """Check if adding it to sel_list would violate domain/vendor caps or share cap."""
         _dk = _f6_domain_key(it)
         _vk = _f6_vendor_key(it)
         _d_counts = _DivCounter(_f6_domain_key(s) for s in sel_list)
@@ -7269,19 +7269,14 @@ def _f600_run_fast_path(
         _new_vk_count = _v_counts[_vk] + 1
         if _new_vk_count * _DOMAIN_SHARE_CAP_MULTIPLIER > _max_events:
             return False
-        # iter68: platform domain cap — total platform items <= _PLATFORM_CAP
-        if _is_platform_domain(it):
-            _plat_current = sum(1 for s in sel_list if _is_platform_domain(s))
-            if _plat_current >= _PLATFORM_CAP:
-                return False
         return True
 
     _selected: list = []
     if _is_daily:
-        # iter68: three-phase DAILY selection — non-platform first, then allow <=1 platform
-        # Phase-1: fill non-platform bigtech+om items (skeleton: diversity + no platform)
+        # iter68: three-phase DAILY selection — non-platform first, then <=1 platform, then fill
         _bt_om_nonplat = [it for it in _bt_om_pool if not _is_platform_domain(it)]
         _bt_om_plat = [it for it in _bt_om_pool if _is_platform_domain(it)]
+        # Phase-1: fill non-platform bigtech+om items first
         for it in _bt_om_nonplat:
             if len(_selected) >= _max_events:
                 break
@@ -7290,14 +7285,16 @@ def _f600_run_fast_path(
         _log.info("iter68 Phase-1 (non-platform): skeleton=%d domains=%d vendors=%d",
                   len(_selected), len(set(_f6_domain_key(s) for s in _selected)),
                   len(set(_f6_vendor_key(s) for s in _selected) - {"other"}))
-        # Phase-2: allow up to _PLATFORM_CAP platform items (cap enforced by _div_can_add)
+        # Phase-2: allow platform items (up to _PLATFORM_CAP preferred, but cap is post-selection gate)
         if len(_selected) < _max_events:
+            _plat_added = 0
             for it in _bt_om_plat:
                 if it not in _selected and _div_can_add(it, _selected):
                     _selected.append(it)
+                    _plat_added += 1
                     if len(_selected) >= _max_events:
                         break
-        # Phase-3: fill remaining from non-platform bigtech (even non-official)
+        # Phase-3: fill remaining from any bigtech (non-platform first, then platform)
         if len(_selected) < _max_events:
             _bt_nonplat = [it for it in _bt_pool if not _is_platform_domain(it)]
             for it in _bt_nonplat:
@@ -7305,7 +7302,6 @@ def _f600_run_fast_path(
                     _selected.append(it)
                     if len(_selected) >= _max_events:
                         break
-        # Last fallback: platform bigtech (still cap-enforced)
         if len(_selected) < _max_events:
             for it in _bt_pool:
                 if it not in _selected and _div_can_add(it, _selected):
@@ -7920,6 +7916,57 @@ def _f600_run_fast_path(
                   len(_d_fin), _d_fin.most_common(1)[0][1] if _d_fin else 0,
                   len(set(_f6_vendor_key(s) for s in _selected) - {"other"}),
                   _v_fin.most_common(1)[0][1] if _v_fin else 0)
+
+    # --- iter68: platform domain swap — try to reduce platform items to <= _PLATFORM_CAP ---
+    if _is_daily and len(_selected) >= _max_events:
+        _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
+        if _plat_in_sel > _PLATFORM_CAP:
+            # Build non-platform replacement pool (bigtech+om, not already selected)
+            _plat_repl_pool = [it for it in _f6_tier(300) if it not in _selected
+                               and not _is_platform_domain(it)
+                               and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
+            # Also allow non-official bigtech as fallback
+            _plat_repl_pool2 = [it for it in _f6_tier(300) if it not in _selected
+                                and not _is_platform_domain(it)
+                                and _f6_is_bigtech(it) and it not in _plat_repl_pool]
+            _plat_repl_all = _plat_repl_pool + _plat_repl_pool2
+            for _plat_swap_round in range(20):
+                _plat_count = sum(1 for s in _selected if _is_platform_domain(s))
+                if _plat_count <= _PLATFORM_CAP:
+                    break
+                if not _plat_repl_all:
+                    break
+                # Find worst platform item to replace (lowest sort key)
+                _plat_items = [(i, s) for i, s in enumerate(_selected) if _is_platform_domain(s)]
+                _plat_worst_idx, _plat_worst = min(_plat_items, key=lambda x: _f6_sort_key(x[1]))
+                # Find best replacement that doesn't break diversity
+                _plat_swapped = False
+                for _ri, _rcand in enumerate(_plat_repl_all):
+                    _test_sel = [s for j, s in enumerate(_selected) if j != _plat_worst_idx] + [_rcand]
+                    _test_dc = _DivCounter(_f6_domain_key(s) for s in _test_sel)
+                    _test_vc = _DivCounter(_f6_vendor_key(s) for s in _test_sel)
+                    _test_max_dc = _test_dc.most_common(1)[0][1]
+                    _test_max_vc = _test_vc.most_common(1)[0][1]
+                    if _test_max_dc <= _DIV_MAX_DOMAIN and _test_max_vc <= _DIV_MAX_VENDOR:
+                        _log.info("iter68 platform swap: replaced idx=%d (%s) with (%s/%s)",
+                                  _plat_worst_idx, _f6_domain_key(_plat_worst), _f6_domain_key(_rcand), _f6_vendor_key(_rcand))
+                        _selected[_plat_worst_idx] = _rcand
+                        _plat_repl_all.pop(_ri)
+                        _plat_swapped = True
+                        break
+                if not _plat_swapped:
+                    break
+            _plat_final = sum(1 for s in _selected if _is_platform_domain(s))
+            _log.info("iter68 platform swap: final platform_count=%d (cap=%d)", _plat_final, _PLATFORM_CAP)
+            if _plat_final != _plat_in_sel:
+                # Rebuild card_dicts and re-write audit after platform swap
+                _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+                _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+                try:
+                    _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                except Exception:
+                    pass
+                _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
 
     # --- iter53: domain/vendor diversity meta + gate ---
     _div_domain_counts = dict(_DivCounter(_f6_domain_key(s) for s in _selected))
