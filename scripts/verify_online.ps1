@@ -5394,7 +5394,7 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter72b: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY — strategic_buckets_distinct >= 4
+# iter73: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY — strategic_buckets_distinct >= 5
 #   Reads content_mix.meta.json
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {

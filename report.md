@@ -1,3 +1,79 @@
+# iter74b: de-research validation pack — google research <=1, official/media>=7, 4 injection fails
+
+run_date: 2026-03-08
+
+## A) 同一 HEAD 閉環證據（iter74 code HEAD = `6d3bfde`）
+
+| 入口 | run_id | GIT_HEAD | ENTRYPOINT | MODE | selected_events | status |
+|------|--------|----------|------------|------|-----------------|--------|
+| 桌面按鈕 | 20260308_155046 | 6d3bfde | desktop_button | daily | 10 | OK |
+| 北京09:00排程 | 20260308_160947 | 6d3bfde | scheduled_task | daily | 10 | OK |
+
+**結論：兩邊 GIT_HEAD = `6d3bfde`，完全一致，且均 PASS。**
+
+### 桌面按鈕 P0 FINGERPRINT (run_id=20260308_155046)
+
+```
+GIT_HEAD=6d3bfde  ENTRYPOINT=desktop_button  MODE=daily
+selected_events=10  bigtech_actionable_count=8  bigtech_official_media_count=8
+leadership_politics_ai_count=3  china_ai_gov_count=1
+platform_total=1  research_tutorial_total=0  google_research_total=1
+strategic_buckets_distinct=5  buckets=[distribution, economics, ecosystem, leadership, product]
+selected_avg_strategic_density=84.2  selected_min_strategic_density=15
+```
+
+### 排程 P0 FINGERPRINT (run_id=20260308_160947)
+
+```
+GIT_HEAD=6d3bfde  ENTRYPOINT=scheduled_task  MODE=daily
+selected_events=10  bigtech_actionable_count=8  bigtech_official_media_count=8
+leadership_politics_ai_count=3  china_ai_gov_count=1
+platform_total=1  research_tutorial_total=0  google_research_total=1
+strategic_buckets_distinct=5  buckets=[distribution, economics, ecosystem, leadership, product]
+selected_avg_strategic_density=84.2  selected_min_strategic_density=15
+```
+
+## B) Gate 數字門檻證據（程式碼直接摘錄）
+
+| Gate | 門檻 | 程式碼位置 | 摘錄 |
+|------|------|-----------|------|
+| STRATEGIC_BUCKET_COVERAGE_HARD_DAILY | >=5 | run_once.py:9402 | `_cm72_bucket_pass = (_cm72_strategic_buckets_distinct >= 5)` |
+| GOOGLE_RESEARCH_CAP_HARD_DAILY | <=1 | run_once.py:9574 | `google_research_total={_cm74_grt_check} > 1` |
+| RESEARCH_TUTORIAL_CAP_HARD_DAILY | <=1 | run_once.py:9516 | `research_tutorial_total={_cm71_rt_total_check} > 1` |
+| BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY | >=7 | run_once.py:9399 | `_cm72_bom_pass = (_cm72_bom_check >= 7)` |
+
+verify_online.ps1 同步確認：
+- line 5397: `STRATEGIC_BUCKET_COVERAGE_HARD_DAILY — strategic_buckets_distinct >= 5`
+- line 5350: `official_media={0} < 7`
+- line 5382: `google_research_total={0} > 1`
+- line 5317: `research_tutorial_total={0} > 1`
+
+## C) 注入 FAIL 驗證（4/4 通過）
+
+| # | 注入 | 預期 FAIL Gate | 實際 FAIL 訊息 | 結果 |
+|---|------|---------------|---------------|------|
+| 1 | INJECT_PLATFORM_DOMAIN_TOTAL=2 | DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY | `platform_total=2 > 1 [test_injected=true]` | FAIL ✓ |
+| 2 | INJECT_RESEARCH_TUTORIAL_TOTAL=2 | RESEARCH_TUTORIAL_CAP_HARD_DAILY | `research_tutorial_total=2 > 1 [test_injected=true]` | FAIL ✓ |
+| 3 | INJECT_BIGTECH_OFFICIAL_MEDIA_COUNT=6 | BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY | `official_media=6 < 7 [test_injected=true]` | FAIL ✓ |
+| 4 | INJECT_GOOGLE_RESEARCH_TOTAL=2 | GOOGLE_RESEARCH_CAP_HARD_DAILY | `google_research_total=2 > 1 [test_injected=true]` | FAIL ✓ |
+
+## D) 本輪程式碼變更（iter74 全 4 commits）
+
+| 檔案 | 變更 |
+|------|------|
+| run_once.py | de-research: google_research <=1 gate, official/media >=7 (was 6), pool/ranking/swap hardened, BOMA dedup protection |
+| verify_online.ps1 | GOOGLE_RESEARCH_CAP_HARD_DAILY gate, BIGTECH_OFFICIAL_MEDIA_MIN raised to >=7, bucket comment fix >=5 |
+
+```
+git log --oneline (iter74 commits):
+6d3bfde iter74: protect BOMA count during daily cross-day dedup
+0490af5 iter74: plug google_research leak in ALL remaining swap pools
+e0f8689 iter74: plug google_research leak in all post-selection swap pools
+e832848 iter74: de-research daily brief — Google Research <=1, official/media>=7, pool/ranking/swap hardened
+```
+
+---
+
 # iter73b: Final Validation Loop — Same HEAD Desktop + Scheduler PASS
 
 run_date: 2026-03-08
