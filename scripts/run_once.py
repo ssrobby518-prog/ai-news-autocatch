@@ -7162,11 +7162,18 @@ def _f600_run_fast_path(
         _act = len(_HDF_ACTION_RE.findall(_ft))
         _spec = len(_HDF_SPEC_RE.findall(_ft))
         _ds = _HDF_W_NUM * _num + _HDF_W_PROP * _prop + _HDF_W_ACT * _act + _HDF_W_SPEC * _spec
+        # iter69: practical signal bonus — short but actionable official updates get density boost
+        # Uses the same _PRACTICAL_SIGNAL_RE from iter67 (version/API/security/benchmark/deploy)
+        _pss = len(_PRACTICAL_SIGNAL_RE.findall(_ft))
+        _practical_bonus = min(_pss, 6)  # cap at 6 to prevent research papers from dominating
+        _ds += _practical_bonus
         # iter56 floor: any ONE met → pass basic floor
-        _pass = (_chars >= 1800 or _num >= 6 or _prop >= 10 or _act >= 2)
+        # iter69: practical_signals >= 4 also passes (short official release notes)
+        _pass = (_chars >= 1800 or _num >= 6 or _prop >= 10 or _act >= 2 or _pss >= 4)
         return {
             "chars": _chars, "numbers_count": _num, "proper_noun_like_count": _prop,
             "action_keyword_hits": _act, "spec_keyword_hits": _spec,
+            "practical_signal_hits": _pss, "practical_bonus": _practical_bonus,
             "density_score": _ds, "pass": _pass,
         }
 
@@ -7184,8 +7191,8 @@ def _f600_run_fast_path(
         _hdf_meta = {
             "run_id": _run_id,
             "gate": "SOURCE_DENSITY_MULTIPLIER_HARD_DAILY",
-            "density_formula": "2*numbers + 1*proper_noun + 3*action + 2*spec",
-            "weights": {"numbers": _HDF_W_NUM, "proper_noun": _HDF_W_PROP, "action": _HDF_W_ACT, "spec": _HDF_W_SPEC},
+            "density_formula": "2*numbers + 1*proper_noun + 3*action + 2*spec + min(practical_signal, 6)",
+            "weights": {"numbers": _HDF_W_NUM, "proper_noun": _HDF_W_PROP, "action": _HDF_W_ACT, "spec": _HDF_W_SPEC, "practical_bonus_cap": 6},
             "multiplier": _HDF_DENSITY_MULTIPLIER,
             "candidates_total": len(raw_items),
             "candidates_pass": sum(1 for v in _hdf_all_scores.values() if v["pass"]),
@@ -7200,6 +7207,8 @@ def _f600_run_fast_path(
                         "proper_noun_like_count": _hdf_all_scores[id(it)]["proper_noun_like_count"],
                         "action_keyword_hits": _hdf_all_scores[id(it)]["action_keyword_hits"],
                         "spec_keyword_hits": _hdf_all_scores[id(it)]["spec_keyword_hits"],
+                        "practical_signal_hits": _hdf_all_scores[id(it)].get("practical_signal_hits", 0),
+                        "practical_bonus": _hdf_all_scores[id(it)].get("practical_bonus", 0),
                     },
                     "density_score": _hdf_all_scores[id(it)]["density_score"],
                     "pass": _hdf_all_scores[id(it)]["pass"],
@@ -7285,16 +7294,18 @@ def _f600_run_fast_path(
         _log.info("iter68 Phase-1 (non-platform): skeleton=%d domains=%d vendors=%d",
                   len(_selected), len(set(_f6_domain_key(s) for s in _selected)),
                   len(set(_f6_vendor_key(s) for s in _selected) - {"other"}))
-        # Phase-2: allow platform items (up to _PLATFORM_CAP preferred, but cap is post-selection gate)
+        # Phase-2: allow platform items (hard limit to _PLATFORM_CAP)
         if len(_selected) < _max_events:
             _plat_added = 0
             for it in _bt_om_plat:
+                if _plat_added >= _PLATFORM_CAP:
+                    break
                 if it not in _selected and _div_can_add(it, _selected):
                     _selected.append(it)
                     _plat_added += 1
                     if len(_selected) >= _max_events:
                         break
-        # Phase-3: fill remaining from any bigtech (non-platform first, then platform)
+        # Phase-3: fill remaining from any bigtech (non-platform first, then platform up to cap)
         if len(_selected) < _max_events:
             _bt_nonplat = [it for it in _bt_pool if not _is_platform_domain(it)]
             for it in _bt_nonplat:
@@ -7303,9 +7314,14 @@ def _f600_run_fast_path(
                     if len(_selected) >= _max_events:
                         break
         if len(_selected) < _max_events:
+            _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
             for it in _bt_pool:
+                if _is_platform_domain(it) and _plat_in_sel >= _PLATFORM_CAP:
+                    continue
                 if it not in _selected and _div_can_add(it, _selected):
                     _selected.append(it)
+                    if _is_platform_domain(it):
+                        _plat_in_sel += 1
                     if len(_selected) >= _max_events:
                         break
     else:
@@ -11101,7 +11117,18 @@ def run_pipeline() -> None:
                         _hy_dk = _hy_up(_hy_u).netloc.lower().lstrip("www.") if _hy_u else ""
                         _hy_dom_counts[_hy_dk] += 1
                         _hy_pool_ids.add(id(_hy_it))
+                    # iter69: priority non-platform bigtech domains — inject even at count<4
+                    # These are official product/security/release feeds that produce high practical density
+                    _HY_PRIORITY_DOMAINS = frozenset({
+                        "aws.amazon.com", "microsoft.com", "azure.microsoft.com", "msrc.microsoft.com",
+                        "cloud.google.com", "developer.android.com", "chromereleases.googleblog.com",
+                        "nvidia.com", "openai.com", "anthropic.com",
+                        "engineering.fb.com", "ai.meta.com",
+                        "blog.google", "security.googleblog.com",
+                        "techcrunch.com", "inside.com.tw", "ithome.com.tw",
+                    })
                     _hy_injected = 0
+                    # Pass 1: under-represented domains (count < 2)
                     for _hy_it in raw_items[_hydrate_n:]:
                         if _hy_injected >= 20:
                             break
@@ -11112,9 +11139,24 @@ def run_pipeline() -> None:
                             _hy_pool_ids.add(id(_hy_it))
                             _hy_dom_counts[_hy_dk] += 1
                             _hy_injected += 1
+                    # Pass 2: priority non-platform bigtech domains (count < 4)
+                    _hy_pri_injected = 0
+                    for _hy_it in raw_items[_hydrate_n:]:
+                        if _hy_pri_injected >= 10:
+                            break
+                        _hy_u = str(getattr(_hy_it, "url", "") or getattr(_hy_it, "link", "") or "")
+                        _hy_dk = _hy_up(_hy_u).netloc.lower().lstrip("www.") if _hy_u else ""
+                        if (_hy_dk and _hy_dk in _HY_PRIORITY_DOMAINS
+                                and _hy_dom_counts[_hy_dk] < 4
+                                and id(_hy_it) not in _hy_pool_ids):
+                            _targeted_pool.append(_hy_it)
+                            _hy_pool_ids.add(id(_hy_it))
+                            _hy_dom_counts[_hy_dk] += 1
+                            _hy_pri_injected += 1
+                            _hy_injected += 1
                     if _hy_injected:
-                        log.info("DAILY hydration diversity: injected %d items from %d under-represented domains",
-                                 _hy_injected, len([d for d, c in _hy_dom_counts.items() if c <= 2 and d]))
+                        log.info("DAILY hydration diversity: injected %d items from %d under-represented domains (priority=%d)",
+                                 _hy_injected, len([d for d, c in _hy_dom_counts.items() if c <= 2 and d]), _hy_pri_injected)
                 # iter42: DAILY uses per-url=4s, batch_timeout=55s (hydrate_hard_deadline)
                 _hy_timeout = 4 if _is_daily else 8
                 _hy_batch   = 55 if _is_daily else 180
