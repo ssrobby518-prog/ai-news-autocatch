@@ -187,7 +187,13 @@ NOT_READY_report.docx 3/7/2026 4:10:48 PM  35885
 ## Section D — Commit/Push
 
 ```
-（commit 後填入）
+> git log --oneline -3
+25ce5bd iter65: evidence pack — single-domain share <=1/3 hard cap (success + controlled injection fail)
+80132d5 iter65: enforce single-domain share <=1/3 hard cap + controlled injection support
+002da1f iter64: evidence hardening (git log -12 + auto-pick dir Test-Path proof)
+
+> git rev-list --left-right --count origin/main...HEAD
+0	0
 ```
 
 ---
