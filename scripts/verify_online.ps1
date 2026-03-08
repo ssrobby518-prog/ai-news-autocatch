@@ -396,6 +396,14 @@ fail_reason         = $Gate
 }
 
 Write-Output "=== verify_online.ps1 開始 ==="
+# iter70b: entrypoint/git-head/run-id evidence
+$_voGitHead = "unknown"
+try { $_voGitHead = (git rev-parse --short HEAD 2>$null) } catch {}
+$_voEntrypoint = if ($env:PIPELINE_ENTRYPOINT) { $env:PIPELINE_ENTRYPOINT } else { "direct" }
+Write-Output ("RUN_ID={0}" -f $_voRunId)
+Write-Output ("GIT_HEAD={0}" -f $_voGitHead)
+Write-Output ("MODE={0}" -f $(if ($Mode) { $Mode } else { "default" }))
+Write-Output ("ENTRYPOINT={0}" -f $_voEntrypoint)
 Write-Output ""
 
 # ---------------------------------------------------------------------------

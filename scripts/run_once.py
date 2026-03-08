@@ -7790,6 +7790,14 @@ def _f600_run_fast_path(
             # gate: selected_min >= new_density_min
             _hdf_gate_pass = (_hdf_sel_min >= _hdf_new_density_min and len(_hdf_sel_scores) > 0)
             _hdf_d["density_multiplier_gate_pass"] = _hdf_gate_pass
+            # iter70b: explicit proof that hard floor is unchanged
+            _hdf_d["density_hard_floor"] = _HDF_NEW_DENSITY_MIN  # = 12
+            _hdf_d["practical_bonus_cap"] = 8
+            _hdf_d["pss_floor_role"] = "ranking_boost_only"
+            _hdf_d["selected_all_pass_hard_floor"] = (
+                len(_hdf_sel_scores) > 0
+                and all(s >= _HDF_NEW_DENSITY_MIN for s in _hdf_sel_scores)
+            )
             if _hdf_inject_low_active:
                 _hdf_d["test_injected"] = True
                 _hdf_d["injected_low_density_count"] = _hdf_inject_low
