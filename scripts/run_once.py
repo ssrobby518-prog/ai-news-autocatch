@@ -7169,13 +7169,13 @@ def _f600_run_fast_path(
         _sig_exec = _sigs.get("exec_signal_hits", 0)
         _sig_dist = _sigs.get("distribution_signal_hits", 0)
         _sig_econ = _sigs.get("economics_signal_hits", 0)
-        # pick the strongest non-product signal (min threshold=2)
+        # pick the strongest non-product signal (min threshold=1)
         _sig_pairs = [
             (_sig_gov, "governance"), (_sig_exec, "leadership"),
             (_sig_dist, "distribution"), (_sig_econ, "economics"),
         ]
         _sig_pairs.sort(key=lambda x: x[0], reverse=True)
-        if _sig_pairs[0][0] >= 2:
+        if _sig_pairs[0][0] >= 1:
             return _sig_pairs[0][1]
         return "product"
 
@@ -7773,56 +7773,56 @@ def _f600_run_fast_path(
                         _log.info("iter72b Phase-5: 2-step swap success at idx=%d, selected=%d boma=%d", _si, len(_selected), _n_boma)
                         break
 
-        # Phase-6 (iter72c): bucket rescue swap — if buckets_distinct < 4, swap duplicate-bucket for new-bucket
+        # Phase-6 (iter72c): bucket rescue swap — if buckets_distinct < 4, try ANY swap that gains a new bucket
         _p6c_rescue_attempts = 0
         _p6c_rescue_successes = 0
-        _p6c_cur_buckets_map = {}
-        for _p6i, _p6s in enumerate(_selected):
-            _p6b = _ct72b_strategic_bucket(_p6s)
-            _p6c_cur_buckets_map.setdefault(_p6b, []).append(_p6i)
-        _p6c_distinct = len(_p6c_cur_buckets_map)
-        if _p6c_distinct < 4:
-            _p6c_dup_buckets = [b for b, idxs in _p6c_cur_buckets_map.items() if len(idxs) >= 2]
-            _p6c_all_pools = _p72_pool_boma + _p72_pool_bta + _p72_pool_c
-            for _p6db in _p6c_dup_buckets:
-                if len(set(_ct72b_strategic_bucket(s) for s in _selected)) >= 4:
-                    break
-                _p6_dup_idxs = [i for i in range(len(_selected)) if _ct72b_strategic_bucket(_selected[i]) == _p6db]
-                for _p6_rm_idx in reversed(_p6_dup_idxs[1:]):
+        _p6c_all_pools = _p72_pool_boma + _p72_pool_bta + _p72_pool_c
+        while len(set(_ct72b_strategic_bucket(s) for s in _selected)) < 4:
+            _p6c_cur_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
+            _p6c_best = None  # (rm_idx, cand, new_bucket_count)
+            for _p6_rm_idx in range(len(_selected)):
+                _p6_removed = _selected[_p6_rm_idx]
+                _p6_test = [s for j, s in enumerate(_selected) if j != _p6_rm_idx]
+                _p6_test_buckets = set(_ct72b_strategic_bucket(s) for s in _p6_test)
+                # removing this item must not drop bucket count below current-1
+                if len(_p6_test_buckets) < len(_p6c_cur_buckets) - 1:
+                    continue
+                for _p6_cand in _p6c_all_pools:
+                    if _p6_cand in _p6_test or _p6_cand == _p6_removed:
+                        continue
+                    _p6cb = _ct72b_strategic_bucket(_p6_cand)
+                    _p6_new_buckets = _p6_test_buckets | {_p6cb}
+                    if len(_p6_new_buckets) <= len(_p6c_cur_buckets):
+                        continue  # no bucket improvement
                     _p6c_rescue_attempts += 1
-                    _p6_removed = _selected[_p6_rm_idx]
-                    _p6_test = [s for j, s in enumerate(_selected) if j != _p6_rm_idx]
-                    _p6_test_buckets = set(_ct72b_strategic_bucket(s) for s in _p6_test)
-                    _p6_found = False
-                    for _p6_cand in _p6c_all_pools:
-                        if _p6_cand in _p6_test or _p6_cand == _p6_removed:
-                            continue
-                        _p6cb = _ct72b_strategic_bucket(_p6_cand)
-                        if _p6cb in _p6_test_buckets:
-                            continue
-                        _p6_new = _p6_test + [_p6_cand]
-                        _p6_ndc = _DivCounter(_f6_domain_key(s) for s in _p6_new)
-                        _p6_nvc = _DivCounter(_f6_vendor_key(s) for s in _p6_new)
-                        _p6_n_plat = sum(1 for s in _p6_new if _is_platform_domain(s))
-                        _p6_n_rt = sum(1 for s in _p6_new if _ct71_is_research_tutorial(s))
-                        _p6_n_boma = sum(1 for s in _p6_new if _ct72b_is_bigtech_official_media_actionable(s))
-                        _p6_cur_boma = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
-                        if (_p6_ndc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                                and _p6_nvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
-                                and len(_p6_ndc) >= _DIV_MIN_DOMAINS
-                                and len(set(_f6_vendor_key(s) for s in _p6_new) - {"other"}) >= _DIV_MIN_VENDORS
-                                and _p6_n_plat <= _PLATFORM_CAP
-                                and _p6_n_rt <= 1
-                                and _p6_n_boma >= min(_p6_cur_boma, 6)
-                                and _hdf_all_scores.get(id(_p6_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
-                            _selected[:] = _p6_new
-                            _p6c_rescue_successes += 1
-                            _log.info("iter72c Phase-6 bucket rescue: swapped idx=%d bucket=%s for new_bucket=%s, distinct=%d",
-                                      _p6_rm_idx, _p6db, _p6cb, len(set(_ct72b_strategic_bucket(s) for s in _selected)))
-                            _p6_found = True
-                            break
-                    if _p6_found:
+                    _p6_new = _p6_test + [_p6_cand]
+                    _p6_ndc = _DivCounter(_f6_domain_key(s) for s in _p6_new)
+                    _p6_nvc = _DivCounter(_f6_vendor_key(s) for s in _p6_new)
+                    _p6_n_plat = sum(1 for s in _p6_new if _is_platform_domain(s))
+                    _p6_n_rt = sum(1 for s in _p6_new if _ct71_is_research_tutorial(s))
+                    _p6_n_boma = sum(1 for s in _p6_new if _ct72b_is_bigtech_official_media_actionable(s))
+                    if (_p6_ndc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p6_nvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and len(_p6_ndc) >= _DIV_MIN_DOMAINS
+                            and len(set(_f6_vendor_key(s) for s in _p6_new) - {"other"}) >= _DIV_MIN_VENDORS
+                            and _p6_n_plat <= _PLATFORM_CAP
+                            and _p6_n_rt <= 1
+                            and _p6_n_boma >= 6
+                            and _hdf_all_scores.get(id(_p6_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
+                        _p6c_best = (_p6_rm_idx, _p6_cand, len(_p6_new_buckets))
                         break
+                if _p6c_best:
+                    break
+            if _p6c_best:
+                _p6_rm_idx, _p6_cand, _p6_nb = _p6c_best
+                _p6_old_b = _ct72b_strategic_bucket(_selected[_p6_rm_idx])
+                _p6_new_b = _ct72b_strategic_bucket(_p6_cand)
+                _selected[_p6_rm_idx] = _p6_cand
+                _p6c_rescue_successes += 1
+                _log.info("iter72c Phase-6 bucket rescue: swapped idx=%d bucket=%s→%s, distinct=%d",
+                          _p6_rm_idx, _p6_old_b, _p6_new_b, len(set(_ct72b_strategic_bucket(s) for s in _selected)))
+            else:
+                break  # no valid swap found
         if _p6c_rescue_attempts > 0:
             _log.info("iter72c Phase-6 bucket rescue: attempts=%d successes=%d final_distinct=%d",
                       _p6c_rescue_attempts, _p6c_rescue_successes, len(set(_ct72b_strategic_bucket(s) for s in _selected)))
