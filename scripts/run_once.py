@@ -7799,14 +7799,30 @@ def _f600_run_fast_path(
             _overlap_count = len(_overlap_items)
             if _overlap_count > 2:
                 _backup_pool = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
-                                and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))]
+                                and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
+                                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
                 _backup_pool.sort(key=_f6_sort_key, reverse=True)
                 for _oi, _oh in sorted(_overlap_items[2:], key=lambda x: _f6_bfp(_selected[x[0]])):
                     if not _backup_pool:
                         break
-                    _repl = _backup_pool.pop(0)
-                    _selected[_oi] = _repl
-                    _replacements_made += 1
+                    # iter68: pick replacement that respects diversity constraints
+                    _dedup_replaced = False
+                    for _bp_idx, _bp_cand in enumerate(_backup_pool):
+                        _test_dd = [s if j != _oi else _bp_cand for j, s in enumerate(_selected)]
+                        _test_dd_dc = _DivCounter(_f6_domain_key(s) for s in _test_dd)
+                        _test_dd_vc = _DivCounter(_f6_vendor_key(s) for s in _test_dd)
+                        if (_test_dd_dc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                                and _test_dd_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR):
+                            _selected[_oi] = _bp_cand
+                            _backup_pool.pop(_bp_idx)
+                            _replacements_made += 1
+                            _dedup_replaced = True
+                            break
+                    if not _dedup_replaced:
+                        # Fall back to best candidate even if it breaks diversity (post-dedup swap will try to fix)
+                        _repl = _backup_pool.pop(0)
+                        _selected[_oi] = _repl
+                        _replacements_made += 1
                 _cur_hashes = [_item_hash(it) for it in _selected]
                 _overlap_count = sum(1 for h in _cur_hashes if h and h in _prev_ids)
             if _overlap_count > 2:
@@ -7843,8 +7859,10 @@ def _f600_run_fast_path(
     # --- iter53: post-dedup diversity re-enforcement ---
     if _is_daily and len(_selected) >= _max_events:
         # iter54: DAILY diversity backup must be bigtech+official_or_media
+        # iter68: also filter by density to avoid density gate fail after swap
         _div_backup2 = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
-                        and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
+                        and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                        and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         _div_backup2.sort(key=lambda it: (int(getattr(it, "fulltext_len", 0) or 0), _f6_bfp(it)), reverse=True)
         for _div_round2 in range(30):
             _d_counts2 = _DivCounter(_f6_domain_key(s) for s in _selected)
