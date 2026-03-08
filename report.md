@@ -1,3 +1,197 @@
+# iter65: Single-domain <= 1/3 hard cap — SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY
+
+run_date: 2026-03-07
+
+## 規則
+
+- 硬門檻：`max_domain_count * 3 <= selected_events`
+- selected_events=7 時，max_domain_count 最多 2（`2*3=6 <= 7` PASS；`3*3=9 > 7` FAIL）
+- Gate 名稱：`SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY`
+- 失敗產出 NOT_READY 二件套（md + docx），無 pptx
+
+## Section A — Git（commit 前快照）
+
+```
+> git diff --name-only
+（空白 — 程式碼已於 80132d5 commit）
+
+> git status -sb
+## main...origin/main
+
+> git log --oneline -5
+80132d5 iter65: enforce single-domain share <=1/3 hard cap + controlled injection support
+002da1f iter64: evidence hardening (git log -12 + auto-pick dir Test-Path proof)
+b9ada5b iter63: progress report auto-pick normal/stress delivery_dir + full sha256 cross-proof + stress semantics pinned (no behavior change)
+e528b0c iter62: update Section D with push evidence
+b3efcfd iter62: evidence hardening — git logs + all-miss daily + docx timestamp proof
+```
+
+## Section B — DAILY 成功（domain share cap PASS）
+
+### 【外部輸出】type outputs\LAST_RUN_SUMMARY.txt
+
+```
+run_id              = 20260307_160738
+started_at          = 2026-03-07T16:08:52.3441017-08:00
+finished_at         = 2026-03-07T16:08:52.3441017-08:00
+mode                = daily
+report_mode         = brief
+status              = OK
+selected_events     = 7
+ai_selected_events  = 7
+canonical_output_dir = outputs
+produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
+```
+
+### 【外部輸出】type outputs\bigtech_diversity.meta.json
+
+```json
+{
+  "run_id": "20260307_160738",
+  "mode": "daily",
+  "constraints": {
+    "min_domains": 4,
+    "max_domain": 2,
+    "min_vendors": 4,
+    "max_vendor": 3
+  },
+  "selected_domains_distinct": 5,
+  "selected_vendors_distinct": 4,
+  "domain_counts": {
+    "inside.com.tw": 1,
+    "huggingface.co": 2,
+    "github.com": 1,
+    "techcrunch.com": 1,
+    "blog.research.google": 2
+  },
+  "vendor_counts": {
+    "NVIDIA": 1,
+    "HuggingFace": 2,
+    "Microsoft": 1,
+    "Google": 3
+  },
+  "max_domain_count": 2,
+  "max_vendor_count": 3,
+  "pass": true,
+  "max_domain_share_rule": "max_domain_count*3 <= selected_events",
+  "max_domain_share_ratio": 0.2857,
+  "selected_events": 7,
+  "domain_share_cap_pass": true
+}
+```
+
+### 【外部輸出】type outputs\selection_audit.meta.json（摘要）
+
+- selected_items_count: 7
+- bigtech_hit_count: 7
+- official_or_media_count: 6
+- domain_counts: inside.com.tw=1, huggingface.co=2, github.com=1, techcrunch.com=1, blog.research.google=2
+- max_domain_count: 2
+- diversity_pass: true
+- domain_share_cap_pass: true
+- domain_share_cap_rule: "max_domain_count*3 <= selected_events"
+- domain_share_cap_max_domain_count: 2
+- domain_share_cap_ratio: 0.2857
+
+### 【外部輸出】Get-Item outputs\latest_brief.md, outputs\executive_report.docx
+
+```
+Name                  LastWriteTime       Length
+latest_brief.md       3/7/2026 4:08:52 PM   7479
+executive_report.docx 3/7/2026 4:08:49 PM  39971
+```
+
+### 【外部輸出】dir outputs\*.pptx
+
+```
+（空白 — 0 個 pptx）
+```
+
+## Section C — 受控失敗（注入單一 domain 佔比 >1/3 → gate FAIL）
+
+注入：`$env:INJECT_SINGLE_DOMAIN_COUNT="7"` / `$env:INJECT_SINGLE_DOMAIN_NAME="blog.research.google"`
+
+### 【外部輸出】type outputs\LAST_RUN_SUMMARY.txt
+
+```
+run_id              = 20260307_160932
+started_at          = 2026-03-07T16:10:48.9343523-08:00
+finished_at         = 2026-03-07T16:10:48.9343523-08:00
+mode                = daily
+report_mode         = brief
+status              = FAIL
+selected_events     = 0
+ai_selected_events  = 0
+canonical_output_dir = outputs
+produced_files      = outputs\NOT_READY_report.md, outputs\NOT_READY_report.docx
+fail_reason         = PIPELINE_GATE_FAIL: SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY
+```
+
+### 【外部輸出】Get-Item outputs\NOT_READY_report.md, outputs\NOT_READY_report.docx
+
+```
+Name                  LastWriteTime       Length
+NOT_READY_report.md   3/7/2026 4:10:48 PM    994
+NOT_READY_report.docx 3/7/2026 4:10:48 PM  35885
+```
+
+### 【外部輸出】Get-Content outputs\NOT_READY_report.md -TotalCount 60
+
+```
+# NOT READY Report — 20260307_160932
+
+| Field | Value |
+|-------|-------|
+| run_id | `20260307_160932` |
+| status | **FAIL** |
+
+## Failure
+
+- gate: `SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY`
+- fail_reason: SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY_FAIL: max_domain=7 events=7 share=1.0 [test_injected=true]
+
+## Selection Stats
+
+| Metric | Value |
+|--------|-------|
+| selected_items_count | 7 |
+| bigtech_hit_count | 7 |
+| official_or_media_count | 7 |
+```
+
+### 【外部輸出】type outputs\bigtech_diversity.meta.json
+
+```json
+{
+  "run_id": "20260307_160932",
+  "mode": "daily",
+  "max_domain_count": 2,
+  "max_vendor_count": 3,
+  "pass": true,
+  "max_domain_share_rule": "max_domain_count*3 <= selected_events",
+  "max_domain_share_ratio": 1.0,
+  "selected_events": 7,
+  "domain_share_cap_pass": false,
+  "domain_share_cap_test_injected": true,
+  "domain_share_cap_injected_count": "7",
+  "domain_share_cap_injected_name": "blog.research.google"
+}
+```
+
+核對：
+- domain_share_cap_pass = false（注入 max_domain=7, 7*3=21 > 7 → FAIL）
+- domain_share_cap_test_injected = true（確認為注入測試）
+- LAST_RUN_SUMMARY status = FAIL, fail_reason 命中 SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY
+- NOT_READY 二件套已產出（md + docx），無 pptx
+
+## Section D — Commit/Push
+
+```
+（commit 後填入）
+```
+
+---
+
 # Progress Report — Iter63 Evidence Pack (Auto-pick Normal/Stress delivery_dir)
 
 run_date: 2026-03-07
