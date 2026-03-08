@@ -7619,48 +7619,61 @@ def _f600_run_fast_path(
                   sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s)),
                   sum(1 for s in _selected if _ct71_is_bigtech_actionable(s)))
 
-        # Phase-4: 7th slot — prefer non-platform actionable, then platform<=1 or rt<=1
-        if len(_selected) < _max_events:
+        # Phase-4: fill remaining to 7 — BOMA preferred, then BTA, then rescue
+        while len(_selected) < _max_events:
             _p72_filled = False
-            # Try non-platform actionable (official/media first)
-            for it in (_p72_pool_boma + _p72_pool_bta):
-                if _p72_filled:
+            # 4a: try BOMA first
+            for it in _p72_pool_boma:
+                if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                    _sel_append(it)
+                    _p72_filled = True
                     break
+            if _p72_filled:
+                continue
+            # 4b: try BTA (bigtech_actionable non-official/media)
+            for it in _p72_pool_bta:
                 if it not in _selected and _div_can_add(it, _selected):
                     _sel_append(it)
                     _p72_filled = True
-            # Try non-platform bigtech rescue
-            if not _p72_filled:
-                for it in _p72_pool_c:
-                    if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
-                        _sel_append(it)
-                        _p72_filled = True
-                        break
-            # Try platform (cap=1)
-            if not _p72_filled:
-                _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
-                if _plat_in_sel < _PLATFORM_CAP:
-                    for it in _p72_pool_plat:
-                        if it not in _selected and _div_can_add(it, _selected):
-                            _sel_append(it)
-                            _p72_filled = True
-                            break
-            # Try research/tutorial (cap=1)
-            if not _p72_filled:
-                _rt_in_sel = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
-                if _rt_in_sel < 1:
-                    for it in _p72_pool_rt:
-                        if it not in _selected and _div_can_add(it, _selected):
-                            _sel_append(it)
-                            _p72_filled = True
-                            break
-            # Last resort: any non-platform bigtech
-            if not _p72_filled:
-                for it in _p72_pool_c:
+                    break
+            if _p72_filled:
+                continue
+            # 4c: try non-platform bigtech rescue
+            for it in _p72_pool_c:
+                if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                    _sel_append(it)
+                    _p72_filled = True
+                    break
+            if _p72_filled:
+                continue
+            # 4d: try platform (cap=1)
+            _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
+            if _plat_in_sel < _PLATFORM_CAP:
+                for it in _p72_pool_plat:
                     if it not in _selected and _div_can_add(it, _selected):
                         _sel_append(it)
                         _p72_filled = True
                         break
+            if _p72_filled:
+                continue
+            # 4e: try research/tutorial (cap=1)
+            _rt_in_sel = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
+            if _rt_in_sel < 1:
+                for it in _p72_pool_rt:
+                    if it not in _selected and _div_can_add(it, _selected):
+                        _sel_append(it)
+                        _p72_filled = True
+                        break
+            if _p72_filled:
+                continue
+            # 4f: last resort — any bigtech with density pass
+            for it in _p72_pool_c:
+                if it not in _selected and _div_can_add(it, _selected):
+                    _sel_append(it)
+                    _p72_filled = True
+                    break
+            if not _p72_filled:
+                break  # can't fill any more
 
         # Phase-5: 2-step swap (iter70 legacy — if at 6, try swap 1 for 2)
         _swap_attempts = 0
@@ -8461,15 +8474,22 @@ def _f600_run_fast_path(
                   len(set(_f6_vendor_key(s) for s in _selected) - {"other"}),
                   _v_fin.most_common(1)[0][1] if _v_fin else 0)
 
-    # --- iter68: platform domain swap — try to reduce platform items to <= _PLATFORM_CAP ---
+    # --- iter68→72b: platform domain swap — try to reduce platform items to <= _PLATFORM_CAP ---
+    # iter72b: prefer BOMA replacements to maintain bigtech_official_media_actionable count
     if _is_daily and len(_selected) >= _max_events:
         _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
         if _plat_in_sel > _PLATFORM_CAP:
-            # Build non-platform replacement pool: must have density >= threshold to avoid density gate fail
-            _plat_repl_pool = [it for it in _f6_tier(300) if it not in _selected
+            # Build non-platform replacement pool: BOMA first, then regular bigtech
+            _plat_repl_boma = [it for it in _f6_tier(300) if it not in _selected
                                and not _is_platform_domain(it)
-                               and _f6_is_bigtech(it)
+                               and _ct72b_is_bigtech_official_media_actionable(it)
                                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+            _plat_repl_other = [it for it in _f6_tier(300) if it not in _selected
+                                and not _is_platform_domain(it)
+                                and _f6_is_bigtech(it)
+                                and not _ct72b_is_bigtech_official_media_actionable(it)
+                                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+            _plat_repl_pool = _plat_repl_boma + _plat_repl_other
             for _plat_swap_round in range(20):
                 _plat_count = sum(1 for s in _selected if _is_platform_domain(s))
                 if _plat_count <= _PLATFORM_CAP:
