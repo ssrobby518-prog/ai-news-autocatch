@@ -464,6 +464,12 @@ if (Test-Path $_pdcPreCleanPath) {
     Remove-Item -LiteralPath $_pdcPreCleanPath -Force -ErrorAction SilentlyContinue
     Write-Output "  [PRE-CLEAN] 已刪除 dev_platform_cap.meta.json"
 }
+# iter69b: PRE-CLEAN daily_overlap.meta.json
+$_doPreCleanPath = Join-Path $repoRoot "outputs\daily_overlap.meta.json"
+if (Test-Path $_doPreCleanPath) {
+    Remove-Item -LiteralPath $_doPreCleanPath -Force -ErrorAction SilentlyContinue
+    Write-Output "  [PRE-CLEAN] 已刪除 daily_overlap.meta.json"
+}
 Write-Output "[PRE-CLEAN] 清除舊的 notion/xmind/deep_analysis 殘留產物..."
 foreach ($_voPreClean in @(
     "outputs\notion_page.md",

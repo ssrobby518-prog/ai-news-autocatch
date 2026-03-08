@@ -7262,8 +7262,27 @@ def _f600_run_fast_path(
     # iter65: single-domain share cap — max_domain_count*3 <= selected_events_target
     _DOMAIN_SHARE_CAP_MULTIPLIER = 3  # max_domain_count * 3 <= target
 
+    # iter69b: overlap-aware selection — load prev daily IDs BEFORE selection
+    import hashlib as _oa_hash
+    _OVERLAP_CAP = 2  # must match gate threshold
+    _oa_state_dir = _outputs / "state"
+    _oa_state_dir.mkdir(parents=True, exist_ok=True)
+    _oa_prev_file = _oa_state_dir / "daily_last_ids.json"
+    _oa_prev_ids: set = set()
+    if _is_daily and _oa_prev_file.exists():
+        try:
+            _oa_prev_data = _f6_j.loads(_oa_prev_file.read_text(encoding="utf-8"))
+            _oa_prev_ids = set(_oa_prev_data.get("ids", []))
+        except Exception:
+            pass
+    _oa_overlap_tracker = [0]  # [count] — incremented by _sel_append
+
+    def _oa_item_hash(it) -> str:
+        u = str(getattr(it, "url", "") or getattr(it, "link", "") or "")
+        return _oa_hash.md5(u.encode()).hexdigest() if u else ""
+
     def _div_can_add(it, sel_list):
-        """Check if adding it to sel_list would violate domain/vendor caps or share cap."""
+        """Check if adding it to sel_list would violate domain/vendor caps, share cap, or overlap cap."""
         _dk = _f6_domain_key(it)
         _vk = _f6_vendor_key(it)
         _d_counts = _DivCounter(_f6_domain_key(s) for s in sel_list)
@@ -7281,16 +7300,34 @@ def _f600_run_fast_path(
         return True
 
     _selected: list = []
+
+    # iter69b: overlap-aware append — track overlap count as items are added
+    def _sel_append(it):
+        _selected.append(it)
+        if _is_daily and _oa_prev_ids:
+            _h = _oa_item_hash(it)
+            if _h and _h in _oa_prev_ids:
+                _oa_overlap_tracker[0] += 1
+
     if _is_daily:
+        # iter69b: partition pools to prefer non-overlap items (stable order within each group)
+        def _oa_partition(pool):
+            if not _oa_prev_ids:
+                return pool
+            _non_ov = [it for it in pool if not (_oa_item_hash(it) in _oa_prev_ids)]
+            _ov = [it for it in pool if _oa_item_hash(it) in _oa_prev_ids]
+            return _non_ov + _ov
+        _bt_om_pool_sorted = _oa_partition(_bt_om_pool)
+        _bt_pool_sorted = _oa_partition(_bt_pool)
         # iter68: three-phase DAILY selection — non-platform first, then <=1 platform, then fill
-        _bt_om_nonplat = [it for it in _bt_om_pool if not _is_platform_domain(it)]
-        _bt_om_plat = [it for it in _bt_om_pool if _is_platform_domain(it)]
+        _bt_om_nonplat = [it for it in _bt_om_pool_sorted if not _is_platform_domain(it)]
+        _bt_om_plat = [it for it in _bt_om_pool_sorted if _is_platform_domain(it)]
         # Phase-1: fill non-platform bigtech+om items first
         for it in _bt_om_nonplat:
             if len(_selected) >= _max_events:
                 break
             if it not in _selected and _div_can_add(it, _selected):
-                _selected.append(it)
+                _sel_append(it)
         _log.info("iter68 Phase-1 (non-platform): skeleton=%d domains=%d vendors=%d",
                   len(_selected), len(set(_f6_domain_key(s) for s in _selected)),
                   len(set(_f6_vendor_key(s) for s in _selected) - {"other"}))
@@ -7301,25 +7338,25 @@ def _f600_run_fast_path(
                 if _plat_added >= _PLATFORM_CAP:
                     break
                 if it not in _selected and _div_can_add(it, _selected):
-                    _selected.append(it)
+                    _sel_append(it)
                     _plat_added += 1
                     if len(_selected) >= _max_events:
                         break
         # Phase-3: fill remaining from any bigtech (non-platform first, then platform up to cap)
         if len(_selected) < _max_events:
-            _bt_nonplat = [it for it in _bt_pool if not _is_platform_domain(it)]
+            _bt_nonplat = [it for it in _bt_pool_sorted if not _is_platform_domain(it)]
             for it in _bt_nonplat:
                 if it not in _selected and _div_can_add(it, _selected):
-                    _selected.append(it)
+                    _sel_append(it)
                     if len(_selected) >= _max_events:
                         break
         if len(_selected) < _max_events:
             _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
-            for it in _bt_pool:
+            for it in _bt_pool_sorted:
                 if _is_platform_domain(it) and _plat_in_sel >= _PLATFORM_CAP:
                     continue
                 if it not in _selected and _div_can_add(it, _selected):
-                    _selected.append(it)
+                    _sel_append(it)
                     if _is_platform_domain(it):
                         _plat_in_sel += 1
                     if len(_selected) >= _max_events:
@@ -7814,10 +7851,15 @@ def _f600_run_fast_path(
             _overlap_items = [(i, h) for i, h in enumerate(_cur_hashes) if h and h in _prev_ids]
             _overlap_count = len(_overlap_items)
             if _overlap_count > 2:
-                _backup_pool = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
+                _backup_pool_all = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
                                 and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
                                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
-                _backup_pool.sort(key=_f6_sort_key, reverse=True)
+                # iter69b: prefer non-overlap replacements (items NOT in prev daily)
+                _backup_nonoverlap = [it for it in _backup_pool_all if _item_hash(it) not in _prev_ids]
+                _backup_overlap = [it for it in _backup_pool_all if _item_hash(it) in _prev_ids]
+                _backup_nonoverlap.sort(key=_f6_sort_key, reverse=True)
+                _backup_overlap.sort(key=_f6_sort_key, reverse=True)
+                _backup_pool = _backup_nonoverlap + _backup_overlap
                 for _oi, _oh in sorted(_overlap_items[2:], key=lambda x: _f6_bfp(_selected[x[0]])):
                     if not _backup_pool:
                         break
@@ -7860,15 +7902,30 @@ def _f600_run_fast_path(
         except Exception as _dde:
             _log.warning("daily cross-day dedup failed (non-fatal): %s", _dde)
 
-    # iter41: patch selection_audit.meta.json with overlap fields
+    # iter41: overlap fields patched later (after all selection_audit rebuilds)
+
+    # iter69b: write daily_overlap.meta.json
     try:
-        _sa_path = _outputs / "selection_audit.meta.json"
-        if _sa_path.exists():
-            _sa_data = _f6_j.loads(_sa_path.read_text(encoding="utf-8"))
-            _sa_data["overlap_with_prev_daily"] = _overlap_count
-            _sa_data["replacements_made"] = _replacements_made
-            _sa_data["prev_daily_file_used"] = _prev_daily_file
-            _sa_path.write_text(_f6_j.dumps(_sa_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _do_meta = {
+            "run_id": _run_id,
+            "overlap_cap": _OVERLAP_CAP,
+            "prev_daily_ids_count": len(_oa_prev_ids),
+            "selected_overlap_count": _overlap_count,
+            "selected_overlap_ids": [],
+            "pass": (_overlap_count <= _OVERLAP_CAP),
+        }
+        if _is_daily:
+            _do_sel_overlap = []
+            for _sit in _selected:
+                _sh = _oa_item_hash(_sit)
+                if _sh and _sh in _oa_prev_ids:
+                    _do_sel_overlap.append(_sh)
+            _do_meta["selected_overlap_ids"] = _do_sel_overlap[:5]
+            _do_meta["selected_overlap_count"] = len(_do_sel_overlap)
+            _do_meta["pass"] = (len(_do_sel_overlap) <= _OVERLAP_CAP)
+        (_outputs / "daily_overlap.meta.json").write_text(
+            _f6_j.dumps(_do_meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     except Exception:
         pass
 
@@ -8258,6 +8315,20 @@ def _f600_run_fast_path(
             if _pdc_is_injected:
                 _sa_pdc_d["platform_cap_test_injected"] = True
             _sa_pdc.write_text(_f6_j.dumps(_sa_pdc_d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    # iter41+iter69b: patch selection_audit.meta.json with overlap fields (AFTER all rebuilds)
+    try:
+        _sa_ov = _outputs / "selection_audit.meta.json"
+        if _sa_ov.exists():
+            _sa_ov_d = _f6_j.loads(_sa_ov.read_text(encoding="utf-8"))
+            _sa_ov_d["overlap_with_prev_daily"] = _overlap_count
+            _sa_ov_d["overlap_cap"] = _OVERLAP_CAP
+            _sa_ov_d["overlap_cap_pass"] = (_overlap_count <= _OVERLAP_CAP)
+            _sa_ov_d["replacements_made"] = _replacements_made
+            _sa_ov_d["prev_daily_file_used"] = _prev_daily_file
+            _sa_ov.write_text(_f6_j.dumps(_sa_ov_d, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
 
