@@ -8113,6 +8113,7 @@ def _f600_run_fast_path(
     _f6_srcs = {_f6_src(it) for it in _selected}
     if len(_f6_srcs) < 3 and len(_selected) >= 3:
         _f6_repl_pool = [it for it in _f6_tier(300) if it not in _selected
+                         and not _f6_is_google_research_blog(it)
                          and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))]
         _f6_new_src_items = [it for it in _f6_repl_pool if _f6_src(it) not in _f6_srcs]
         _f6_src_counts = _F6Counter(_f6_src(it) for it in _selected)
@@ -8135,6 +8136,7 @@ def _f600_run_fast_path(
     if _is_daily and len(_selected) >= _max_events:
         # iter54: DAILY diversity backup must be bigtech+official_or_media (DAILY_BIGTECH_ONLY_HARD)
         _div_backup = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
+                       and not _f6_is_google_research_blog(it)
                        and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
         _div_backup.sort(key=lambda it: (int(getattr(it, "fulltext_len", 0) or 0), _f6_bfp(it)), reverse=True)
         for _div_round in range(30):
@@ -8249,6 +8251,7 @@ def _f600_run_fast_path(
             if it not in _selected
             and _f6_src_type(it) not in ("dev_forum",)
             and not _f6_is_dev_noise(it)
+            and not _f6_is_google_research_blog(it)
             and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
         ]
         _non_df_backup.sort(key=_f6_sort_key, reverse=True)
@@ -8841,12 +8844,15 @@ def _f600_run_fast_path(
         _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
         if _plat_in_sel > _PLATFORM_CAP:
             # Build non-platform replacement pool: BOMA first, then regular bigtech
+            # iter74: exclude google research blog from replacement pool
             _plat_repl_boma = [it for it in _f6_tier(300) if it not in _selected
                                and not _is_platform_domain(it)
+                               and not _f6_is_google_research_blog(it)
                                and _ct72b_is_bigtech_official_media_actionable(it)
                                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
             _plat_repl_other = [it for it in _f6_tier(300) if it not in _selected
                                 and not _is_platform_domain(it)
+                                and not _f6_is_google_research_blog(it)
                                 and _f6_is_bigtech(it)
                                 and not _ct72b_is_bigtech_official_media_actionable(it)
                                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
