@@ -5025,6 +5025,43 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
+# iter65: SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY — max_domain_count*3 <= selected_events
+#   Reads bigtech_diversity.meta.json for domain_share_cap_pass
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_dscMetaPath = Join-Path $repoRoot "outputs\bigtech_diversity.meta.json"
+    Write-Output "SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY:"
+    if (Test-Path $_dscMetaPath) {
+        try {
+            $_dscMeta = Get-Content $_dscMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_dscMaxDom    = if ($_dscMeta.PSObject.Properties['max_domain_count']) { [int]$_dscMeta.max_domain_count } else { 99 }
+            $_dscEvents    = if ($_dscMeta.PSObject.Properties['selected_events']) { [int]$_dscMeta.selected_events } else { 0 }
+            $_dscRatio     = if ($_dscMeta.PSObject.Properties['max_domain_share_ratio']) { $_dscMeta.max_domain_share_ratio } else { "N/A" }
+            $_dscPass      = if ($_dscMeta.PSObject.Properties['domain_share_cap_pass']) { $_dscMeta.domain_share_cap_pass } else { $false }
+            $_dscInjected  = if ($_dscMeta.PSObject.Properties['domain_share_cap_test_injected']) { $_dscMeta.domain_share_cap_test_injected } else { $false }
+            Write-Output ("  max_domain_count          : {0}" -f $_dscMaxDom)
+            Write-Output ("  selected_events           : {0}" -f $_dscEvents)
+            Write-Output ("  max_domain_share_ratio    : {0}" -f $_dscRatio)
+            Write-Output ("  domain_share_cap_pass     : {0}" -f $_dscPass)
+            if ($_dscInjected) {
+                Write-Output "  domain_share_cap_test_injected : True"
+            }
+            if (-not $_dscPass) {
+                $_dscFail = ("SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY_FAIL: max_domain={0} events={1} ratio={2}" -f $_dscMaxDom, $_dscEvents, $_dscRatio)
+                Write-Output ("  => FAIL: {0}" -f $_dscFail)
+                Invoke-VerifyOnlineFailFast -Gate "SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY" -Reason $_dscFail
+            }
+            Write-Output "  => SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY: WARN (bigtech_diversity.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # iter54: DAILY_BIGTECH_ONLY_HARD — all 7 must be bigtech_hit=true AND official_or_media=true
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {

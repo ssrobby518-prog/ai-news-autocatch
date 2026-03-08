@@ -7120,13 +7120,22 @@ def _f600_run_fast_path(
     _DIV_MIN_VENDORS = 4
     from collections import Counter as _DivCounter
 
+    # iter65: single-domain share cap — max_domain_count*3 <= selected_events_target
+    _DOMAIN_SHARE_CAP_MULTIPLIER = 3  # max_domain_count * 3 <= target
+
     def _div_can_add(it, sel_list):
-        """Check if adding it to sel_list would violate domain/vendor caps."""
+        """Check if adding it to sel_list would violate domain/vendor caps or share cap."""
         _dk = _f6_domain_key(it)
         _vk = _f6_vendor_key(it)
         _d_counts = _DivCounter(_f6_domain_key(s) for s in sel_list)
         _v_counts = _DivCounter(_f6_vendor_key(s) for s in sel_list)
-        return _d_counts[_dk] < _DIV_MAX_DOMAIN and _v_counts[_vk] < _DIV_MAX_VENDOR
+        if _d_counts[_dk] >= _DIV_MAX_DOMAIN or _v_counts[_vk] >= _DIV_MAX_VENDOR:
+            return False
+        # iter65: share cap — after adding, (new_count)*3 must <= target
+        _new_dk_count = _d_counts[_dk] + 1
+        if _new_dk_count * _DOMAIN_SHARE_CAP_MULTIPLIER > _max_events:
+            return False
+        return True
 
     _selected: list = []
     if _is_daily:
@@ -7734,6 +7743,22 @@ def _f600_run_fast_path(
         _log.info("INJECT_FORCE_VENDOR=%s INJECT_FORCE_DOMAIN=%s: diversity overridden to FAIL",
                   _div_inject_vendor, _div_inject_domain)
 
+    # --- iter65: SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY ---
+    _dsc_selected_events = len(_selected)
+    _dsc_max_domain_count = _div_max_domain
+    _dsc_inject_count = os.environ.get("INJECT_SINGLE_DOMAIN_COUNT", "")
+    _dsc_inject_name = os.environ.get("INJECT_SINGLE_DOMAIN_NAME", "")
+    _dsc_is_injected = bool(_dsc_inject_count)
+    if _dsc_is_injected:
+        try:
+            _dsc_max_domain_count = int(_dsc_inject_count)
+        except ValueError:
+            pass
+        _log.info("INJECT_SINGLE_DOMAIN_COUNT=%s INJECT_SINGLE_DOMAIN_NAME=%s: share cap overridden",
+                  _dsc_inject_count, _dsc_inject_name)
+    _dsc_share_ratio = round(_dsc_max_domain_count / _dsc_selected_events, 4) if _dsc_selected_events > 0 else 1.0
+    _dsc_pass = (_dsc_max_domain_count * _DOMAIN_SHARE_CAP_MULTIPLIER <= _dsc_selected_events)
+
     # Patch selection_audit.meta.json with diversity fields
     try:
         _sa_path2 = _outputs / "selection_audit.meta.json"
@@ -7752,6 +7777,15 @@ def _f600_run_fast_path(
             _sa2["diversity_pass"] = _div_pass
             if _div_is_injected:
                 _sa2["diversity_test_injected"] = True
+            # iter65: domain share cap fields
+            _sa2["domain_share_cap_pass"] = _dsc_pass
+            _sa2["domain_share_cap_rule"] = "max_domain_count*3 <= selected_events"
+            _sa2["domain_share_cap_max_domain_count"] = _dsc_max_domain_count
+            _sa2["domain_share_cap_ratio"] = _dsc_share_ratio
+            if _dsc_is_injected:
+                _sa2["domain_share_cap_test_injected"] = True
+                _sa2["domain_share_cap_injected_count"] = _dsc_inject_count
+                _sa2["domain_share_cap_injected_name"] = _dsc_inject_name
             _sa_path2.write_text(_f6_j.dumps(_sa2, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -7775,11 +7809,19 @@ def _f600_run_fast_path(
             "pass": _div_pass,
             "rejected_due_to_domain_cap": _div_rejected_domain,
             "rejected_due_to_vendor_cap": _div_rejected_vendor,
+            "max_domain_share_rule": "max_domain_count*3 <= selected_events",
+            "max_domain_share_ratio": _dsc_share_ratio,
+            "selected_events": _dsc_selected_events,
+            "domain_share_cap_pass": _dsc_pass,
         }
         if _div_is_injected:
             _bdm["test_injected"] = True
             _bdm["injected_vendor"] = _div_inject_vendor
             _bdm["injected_domain"] = _div_inject_domain
+        if _dsc_is_injected:
+            _bdm["domain_share_cap_test_injected"] = True
+            _bdm["domain_share_cap_injected_count"] = _dsc_inject_count
+            _bdm["domain_share_cap_injected_name"] = _dsc_inject_name
         _bdm_path.write_text(_f6_j.dumps(_bdm, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _bdm_exc:
         _log.warning("bigtech_diversity.meta.json write failed: %s", _bdm_exc)
@@ -7799,6 +7841,22 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("BIGTECH_DIVERSITY_HARD_DAILY", _div_fail_reason)
+
+    # iter65: SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY gate (DAILY only)
+    if _is_daily and not _dsc_pass:
+        _dsc_fail_reason = (f"SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY_FAIL: max_domain={_dsc_max_domain_count}"
+                            f" events={_dsc_selected_events} share={_dsc_share_ratio}")
+        if _dsc_is_injected:
+            _dsc_fail_reason += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY",
+            _dsc_fail_reason,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY", _dsc_fail_reason)
 
     # --- Step 4: build digest.md from card dicts ---
     stg["digest_write_start"] = time.time()
