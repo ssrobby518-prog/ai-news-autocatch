@@ -7082,6 +7082,27 @@ def _f600_run_fast_path(
     # iter66: research blog domains (lower priority — still selectable but not preferred)
     _RESEARCH_BLOG_DOMAINS = {"blog.research.google", "research.google", "arxiv.org", "ar5iv.labs.arxiv.org"}
 
+    # iter67: practical-signal scoring (regex/O(n)) — version/API/pricing/security/benchmark/deploy signals
+    import re as _pss_re
+    _PRACTICAL_SIGNAL_RE = _pss_re.compile(
+        r'\b(?:v\d+\.\d+|GA|RC|beta|preview|stable|LTS|'
+        r'API|SDK|pricing|price|cost|'
+        r'security|CVE-\d{4}|vulnerability|advisory|'
+        r'benchmark|perf(?:ormance)?|latency|throughput|'
+        r'release\s+notes?|changelog|what\'?s\s+new|'
+        r'compatibility|backward|deprecat(?:ed|ion)|migration|upgrade|'
+        r'hardware|spec(?:ification)?s?|deployment|deploy|rollout|'
+        r'enterprise|production|on[\-\s]?prem(?:ise)?|'
+        r'TFLOPS|TOPS|tok(?:en)?s?/s|context[\-\s]?window|'
+        r'fine[\-\s]?tun(?:ed|ing)|quantiz(?:ed|ation)|INT[48]|FP16|BF16)\b',
+        _pss_re.IGNORECASE,
+    )
+
+    def _practical_signal_score(it) -> int:
+        """Return count of practical/actionable signal hits in fulltext."""
+        _ft = str(getattr(it, "fulltext", "") or getattr(it, "body", "") or "")
+        return len(_PRACTICAL_SIGNAL_RE.findall(_ft))
+
     def _f6_is_research_blog(it) -> bool:
         _dk = _f6_domain_key(it)
         return _dk in _RESEARCH_BLOG_DOMAINS
@@ -7089,13 +7110,16 @@ def _f600_run_fast_path(
     def _f6_sort_key(it) -> tuple:
         """iter40: bigtech-first, official/media first, then by fulltext density.
         iter46: dev_forum penalty (-1e9 low, -50 high).
-        iter66: research blog deprioritized; density_score as secondary."""
+        iter66: research blog deprioritized; density_score as secondary.
+        iter67: practical_signal_score for actionable-content priority."""
         bt = 2 if _f6_is_bigtech(it) else 0
         st = _f6_src_type(it)
         om = 2 if st in ("official", "media") else 0
         dn = -2 if _f6_is_dev_noise(it) else 0
         # iter66: research blog penalty (still above dev_noise, below official)
         rb = -1 if _f6_is_research_blog(it) else 0
+        # iter67: practical signal score — prioritise actionable content
+        pss = _practical_signal_score(it)
         # iter46: dev_forum value penalty
         _dfv = _assess_dev_forum_value(it)
         if _dfv == "low":
@@ -7105,7 +7129,7 @@ def _f600_run_fast_path(
         else:
             df_penalty = 0
         ftl = int(getattr(it, "fulltext_len", 0) or 0)
-        return (bt, om, rb, dn, df_penalty, ftl, _f6_bfp(it))
+        return (bt, om, rb, dn, df_penalty, pss, ftl, _f6_bfp(it))
 
     def _f6_tier(min_len: int) -> list:
         return sorted(
@@ -7242,24 +7266,38 @@ def _f600_run_fast_path(
 
     _selected: list = []
     if _is_daily:
-        # iter54: DAILY must select only bigtech+official_or_media items
-        # Primary: fill from bt_om_pool with diversity caps
+        # iter67: two-phase DAILY selection — Phase-1: diversity skeleton, Phase-2: fill to target
+        # Phase-1: build skeleton with domains>=4 vendors>=4, strict cap enforcement
+        _ph1_seen_domains: dict = {}
+        _ph1_seen_vendors: dict = {}
         for it in _bt_om_pool:
             if len(_selected) >= _max_events:
                 break
-            if it not in _selected and _div_can_add(it, _selected):
+            if it in _selected:
+                continue
+            _dk = _f6_domain_key(it)
+            _vk = _f6_vendor_key(it)
+            # Phase-1 priority: items from unseen domains/vendors first
+            _ph1_seen_domains.setdefault(_dk, 0)
+            _ph1_seen_vendors.setdefault(_vk, 0)
+            if _div_can_add(it, _selected):
                 _selected.append(it)
-        # Fallback: relax diversity caps but still require bigtech+om
+                _ph1_seen_domains[_dk] = _ph1_seen_domains.get(_dk, 0) + 1
+                _ph1_seen_vendors[_vk] = _ph1_seen_vendors.get(_vk, 0) + 1
+        _log.info("iter67 Phase-1: skeleton=%d domains=%d vendors=%d",
+                  len(_selected), len(set(_f6_domain_key(s) for s in _selected)),
+                  len(set(_f6_vendor_key(s) for s in _selected) - {"other"}))
+        # Phase-2: fill to target (still cap-enforced, no relaxation)
         if len(_selected) < _max_events:
             for it in _bt_om_pool:
-                if it not in _selected:
+                if it not in _selected and _div_can_add(it, _selected):
                     _selected.append(it)
                     if len(_selected) >= _max_events:
                         break
-        # Last fallback: bigtech items (even non-official) to reach 7
+        # Last fallback: bigtech items (even non-official) — still cap-enforced
         if len(_selected) < _max_events:
             for it in _bt_pool:
-                if it not in _selected:
+                if it not in _selected and _div_can_add(it, _selected):
                     _selected.append(it)
                     if len(_selected) >= _max_events:
                         break
@@ -8013,6 +8051,31 @@ def _f600_run_fast_path(
     except Exception as _bdm_exc:
         _log.warning("bigtech_diversity.meta.json write failed: %s", _bdm_exc)
 
+    # iter67: domain_vendor_cap.meta.json — unified cap meta for all entrypoints
+    try:
+        _dvc_path = _outputs / "domain_vendor_cap.meta.json"
+        _dvc = {
+            "run_id": _run_id,
+            "selected_events": len(_selected),
+            "domain_counts": _div_domain_counts,
+            "vendor_counts": _div_vendor_counts,
+            "max_domain_count": _dsc_max_domain_count,
+            "max_vendor_count": _vsc_max_vendor_count,
+            "cap_rule": "max_count*3 <= selected_events",
+            "domain_cap_pass": _dsc_pass,
+            "vendor_cap_pass": _vsc_pass,
+            "cap_pass": _dsc_pass and _vsc_pass,
+        }
+        if _dsc_is_injected:
+            _dvc["domain_test_injected"] = True
+            _dvc["domain_injected_count"] = _dsc_inject_count
+        if _vsc_is_injected:
+            _dvc["vendor_test_injected"] = True
+            _dvc["vendor_injected_count"] = _vsc_inject_count
+        _dvc_path.write_text(_f6_j.dumps(_dvc, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as _dvc_exc:
+        _log.warning("domain_vendor_cap.meta.json write failed: %s", _dvc_exc)
+
     # iter53: BIGTECH_DIVERSITY gate (DAILY only)
     if _is_daily and not _div_pass:
         _div_fail_reason = (f"BIGTECH_DIVERSITY_UNSATISFIED: domains={_div_domains_distinct} vendors={_div_vendors_distinct}"
@@ -8029,8 +8092,8 @@ def _f600_run_fast_path(
         )
         _f6_fail("BIGTECH_DIVERSITY_HARD_DAILY", _div_fail_reason)
 
-    # iter65: SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY gate (DAILY only)
-    if _is_daily and not _dsc_pass:
+    # iter67: SINGLE_DOMAIN_SHARE_CAP_HARD — enforced for ALL entrypoints (iter65→67)
+    if not _dsc_pass:
         _dsc_fail_reason = (f"SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY_FAIL: max_domain={_dsc_max_domain_count}"
                             f" events={_dsc_selected_events} share={_dsc_share_ratio}")
         if _dsc_is_injected:
@@ -8045,8 +8108,8 @@ def _f600_run_fast_path(
         )
         _f6_fail("SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY", _dsc_fail_reason)
 
-    # iter56: SINGLE_VENDOR_SHARE_CAP_HARD_DAILY gate (DAILY only)
-    if _is_daily and not _vsc_pass:
+    # iter67: SINGLE_VENDOR_SHARE_CAP_HARD — enforced for ALL entrypoints (iter56→67)
+    if not _vsc_pass:
         _vsc_fail_reason = (f"SINGLE_VENDOR_SHARE_CAP_HARD_DAILY_FAIL: max_vendor={_vsc_max_vendor_count}"
                             f" events={_vsc_selected_events} share={_vsc_share_ratio}")
         if _vsc_is_injected:

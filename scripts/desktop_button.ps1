@@ -7,8 +7,8 @@
 # iter66: P0 fingerprint (RUN_ID, GIT_HEAD, ENTRYPOINT, DOMAIN_COUNTS, MAX_DOMAIN_SHARE, DENSITY_MULTIPLIER_TARGET)
 
 param(
-    [ValidateSet("manual","daily")]
-    [string]$Mode = "manual"
+    [ValidateSet("daily")]
+    [string]$Mode = "daily"
 )
 
 $ErrorActionPreference = "Continue"
