@@ -1,39 +1,49 @@
-# iter65: Single-domain <= 1/3 hard cap — SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY
+# iter66: crawl-layer density*1.5 + single-domain<=1/3 on all entrypoints + scheduler logging
 
 run_date: 2026-03-07
 
 ## 規則
 
+### P0 — Fingerprint（兩入口都印）
+- RUN_ID, GIT_HEAD, ENTRYPOINT, DOMAIN_COUNTS, MAX_DOMAIN_SHARE, DENSITY_MULTIPLIER_TARGET=1.5
+- desktop_button.ps1 → ENTRYPOINT=desktop_button
+- install_daily_task_beijing_0900.ps1 → ENTRYPOINT=scheduled_task
+
+### P1 — Scheduler log
+- 排程路徑 tee 到 outputs/scheduler.log（Tee-Object -Append）
+
+### P2 — Single domain <= 1/3（所有路徑）
 - 硬門檻：`max_domain_count * 3 <= selected_events`
-- selected_events=7 時，max_domain_count 最多 2（`2*3=6 <= 7` PASS；`3*3=9 > 7` FAIL）
-- Gate 名稱：`SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY`
-- 失敗產出 NOT_READY 二件套（md + docx），無 pptx
+- Gate：SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY
+
+### P3 — Density * 1.5 at crawl layer
+- 公式：`density_score = 2*numbers + 1*proper_noun + 3*action + 2*spec`
+- base_density_min=8（固定常數）, new_density_min=ceil(8*1.5)=12
+- Pool filter: density_score < 12 排除
+- Gate：SOURCE_DENSITY_MULTIPLIER_HARD_DAILY
+- Research blog deprioritization: blog.research.google, research.google, arxiv.org, ar5iv.labs.arxiv.org
 
 ## Section A — Git（commit 前快照）
 
 ```
-> git diff --name-only
-（空白 — 程式碼已於 80132d5 commit）
-
-> git status -sb
-## main...origin/main
-
 > git log --oneline -5
+3caa7ee iter66: fix density gate — use fixed base_density_min=8 (threshold=12) + pool filter + research blog deprioritize
+b2cca6a iter66: P0 fingerprint + P1 scheduler log + P2 domain cap all paths + P3 density*1.5 crawl layer
+25ce5bd iter65: evidence pack — single-domain share <=1/3 hard cap (success + controlled injection fail)
 80132d5 iter65: enforce single-domain share <=1/3 hard cap + controlled injection support
 002da1f iter64: evidence hardening (git log -12 + auto-pick dir Test-Path proof)
-b9ada5b iter63: progress report auto-pick normal/stress delivery_dir + full sha256 cross-proof + stress semantics pinned (no behavior change)
-e528b0c iter62: update Section D with push evidence
-b3efcfd iter62: evidence hardening — git logs + all-miss daily + docx timestamp proof
 ```
 
-## Section B — DAILY 成功（domain share cap PASS）
+## Section B — 桌面按鈕（Normal，無注入）
+
+run_id=20260307_172705 | ENTRYPOINT=desktop_button | status=OK | total=86s
 
 ### 【外部輸出】type outputs\LAST_RUN_SUMMARY.txt
 
 ```
-run_id              = 20260307_160738
-started_at          = 2026-03-07T16:08:52.3441017-08:00
-finished_at         = 2026-03-07T16:08:52.3441017-08:00
+run_id              = 20260307_172705
+started_at          = 2026-03-07T17:28:31.4481034-08:00
+finished_at         = 2026-03-07T17:28:31.4481034-08:00
 mode                = daily
 report_mode         = brief
 status              = OK
@@ -47,58 +57,66 @@ produced_files      = outputs\latest_brief.md, outputs\executive_report.docx
 
 ```json
 {
-  "run_id": "20260307_160738",
+  "run_id": "20260307_172705",
   "mode": "daily",
-  "constraints": {
-    "min_domains": 4,
-    "max_domain": 2,
-    "min_vendors": 4,
-    "max_vendor": 3
-  },
-  "selected_domains_distinct": 5,
-  "selected_vendors_distinct": 4,
-  "domain_counts": {
-    "inside.com.tw": 1,
-    "huggingface.co": 2,
-    "github.com": 1,
-    "techcrunch.com": 1,
-    "blog.research.google": 2
-  },
-  "vendor_counts": {
-    "NVIDIA": 1,
-    "HuggingFace": 2,
-    "Microsoft": 1,
-    "Google": 3
-  },
+  "constraints": { "min_domains": 4, "max_domain": 2, "min_vendors": 4, "max_vendor": 2 },
+  "selected_domains_distinct": 4,
+  "selected_vendors_distinct": 5,
+  "domain_counts": { "huggingface.co": 2, "techcrunch.com": 1, "inside.com.tw": 2, "github.com": 2 },
+  "vendor_counts": { "HuggingFace": 2, "Google": 2, "NVIDIA": 1, "Microsoft": 1, "OpenAI": 1 },
   "max_domain_count": 2,
-  "max_vendor_count": 3,
+  "max_vendor_count": 2,
   "pass": true,
   "max_domain_share_rule": "max_domain_count*3 <= selected_events",
   "max_domain_share_ratio": 0.2857,
   "selected_events": 7,
-  "domain_share_cap_pass": true
+  "domain_share_cap_pass": true,
+  "max_vendor_share_rule": "max_vendor_count*3 <= selected_events",
+  "max_vendor_share_ratio": 0.2857,
+  "vendor_share_cap_pass": true
 }
 ```
+
+### 【外部輸出】type outputs\source_density.meta.json（摘要）
+
+```
+gate                        = SOURCE_DENSITY_MULTIPLIER_HARD_DAILY
+density_formula             = 2*numbers + 1*proper_noun + 3*action + 2*spec
+multiplier                  = 1.5
+candidates_total            = 41
+candidates_pass             = 27
+candidates_fail             = 14
+selected_pass               = 7
+selected_fail               = 0
+selected_all_pass           = true
+selected_avg_density_score  = 34.14
+selected_min_density_score  = 14
+base_density_min            = 8
+base_source                 = fixed_constant
+new_density_min             = 12
+density_multiplier_gate_pass = true
+```
+
+核對：selected_min=14 >= new_density_min=12 → PASS; pool filter 排除 14 個 density_score<12 的候選項
 
 ### 【外部輸出】type outputs\selection_audit.meta.json（摘要）
 
 - selected_items_count: 7
 - bigtech_hit_count: 7
-- official_or_media_count: 6
-- domain_counts: inside.com.tw=1, huggingface.co=2, github.com=1, techcrunch.com=1, blog.research.google=2
-- max_domain_count: 2
+- official_or_media_count: 5
+- dev_forum_count: 2
+- selected_domains_distinct: 4 (huggingface.co=2, techcrunch.com=1, inside.com.tw=2, github.com=2)
+- selected_vendors_distinct: 5 (HuggingFace=2, Google=2, NVIDIA=1, Microsoft=1, OpenAI=1)
 - diversity_pass: true
-- domain_share_cap_pass: true
-- domain_share_cap_rule: "max_domain_count*3 <= selected_events"
-- domain_share_cap_max_domain_count: 2
-- domain_share_cap_ratio: 0.2857
+- domain_share_cap_pass: true (max_domain=2, 2*3=6<=7)
+- vendor_share_cap_pass: true (max_vendor=2, 2*3=6<=7)
 
 ### 【外部輸出】Get-Item outputs\latest_brief.md, outputs\executive_report.docx
 
 ```
 Name                  LastWriteTime       Length
-latest_brief.md       3/7/2026 4:08:52 PM   7479
-executive_report.docx 3/7/2026 4:08:49 PM  39971
+latest_brief.md       3/7/2026 5:28 PM     8418
+executive_report.docx 3/7/2026 5:28 PM    40740
 ```
 
 ### 【外部輸出】dir outputs\*.pptx
@@ -107,93 +125,86 @@ executive_report.docx 3/7/2026 4:08:49 PM  39971
 （空白 — 0 個 pptx）
 ```
 
-## Section C — 受控失敗（注入單一 domain 佔比 >1/3 → gate FAIL）
+## Section C — Scheduler 路徑驗證
 
-注入：`$env:INJECT_SINGLE_DOMAIN_COUNT="7"` / `$env:INJECT_SINGLE_DOMAIN_NAME="blog.research.google"`
-
-### 【外部輸出】type outputs\LAST_RUN_SUMMARY.txt
+### 排程任務安裝
 
 ```
-run_id              = 20260307_160932
-started_at          = 2026-03-07T16:10:48.9343523-08:00
-finished_at         = 2026-03-07T16:10:48.9343523-08:00
-mode                = daily
-report_mode         = brief
-status              = FAIL
-selected_events     = 0
-ai_selected_events  = 0
-canonical_output_dir = outputs
-produced_files      = outputs\NOT_READY_report.md, outputs\NOT_READY_report.docx
-fail_reason         = PIPELINE_GATE_FAIL: SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY
+> powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_daily_task_beijing_0900.ps1
+
+Task name   : AIIntelScraper_Daily_0900_BJ
+Beijing time: 09:00 (UTC+8)
+UTC time    : 01:00
+Local time  : 17:00 ((UTC-08:00) Baja California)
+Script      : ...\scripts\desktop_button.ps1
+Working dir : ...\ai-intel-scraper-mvp
+
+Task 'AIIntelScraper_Daily_0900_BJ' registered successfully.
+  Scheduler log: ...\outputs\scheduler.log
 ```
 
-### 【外部輸出】Get-Item outputs\NOT_READY_report.md, outputs\NOT_READY_report.docx
+### 排程任務命令驗證
 
 ```
-Name                  LastWriteTime       Length
-NOT_READY_report.md   3/7/2026 4:10:48 PM    994
-NOT_READY_report.docx 3/7/2026 4:10:48 PM  35885
-```
+> schtasks /Query /TN "AIIntelScraper_Daily_0900_BJ" /V /FO LIST
 
-### 【外部輸出】Get-Content outputs\NOT_READY_report.md -TotalCount 60
+Task To Run: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command
+  $env:PIPELINE_ENTRYPOINT = 'scheduled_task';
+  Set-Location '...';
+  & '...\scripts\desktop_button.ps1' -Mode daily *>&1 |
+  Tee-Object -FilePath '...\outputs\scheduler.log' -Append
 
-```
-# NOT READY Report — 20260307_160932
-
-| Field | Value |
-|-------|-------|
-| run_id | `20260307_160932` |
-| status | **FAIL** |
-
-## Failure
-
-- gate: `SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY`
-- fail_reason: SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY_FAIL: max_domain=7 events=7 share=1.0 [test_injected=true]
-
-## Selection Stats
-
-| Metric | Value |
-|--------|-------|
-| selected_items_count | 7 |
-| bigtech_hit_count | 7 |
-| official_or_media_count | 7 |
-```
-
-### 【外部輸出】type outputs\bigtech_diversity.meta.json
-
-```json
-{
-  "run_id": "20260307_160932",
-  "mode": "daily",
-  "max_domain_count": 2,
-  "max_vendor_count": 3,
-  "pass": true,
-  "max_domain_share_rule": "max_domain_count*3 <= selected_events",
-  "max_domain_share_ratio": 1.0,
-  "selected_events": 7,
-  "domain_share_cap_pass": false,
-  "domain_share_cap_test_injected": true,
-  "domain_share_cap_injected_count": "7",
-  "domain_share_cap_injected_name": "blog.research.google"
-}
+Schedule Type: Daily
+Start Time:    5:00:00 PM (local = Beijing 09:00)
+Run As User:   s_robby518
 ```
 
 核對：
-- domain_share_cap_pass = false（注入 max_domain=7, 7*3=21 > 7 → FAIL）
-- domain_share_cap_test_injected = true（確認為注入測試）
-- LAST_RUN_SUMMARY status = FAIL, fail_reason 命中 SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY
-- NOT_READY 二件套已產出（md + docx），無 pptx
+- PIPELINE_ENTRYPOINT = 'scheduled_task'（排程路徑標識）
+- Tee-Object → outputs\scheduler.log（排程日誌）
+- desktop_button.ps1 -Mode daily（經由桌面按鈕包裝器）
+- 排程時間 = 本地 17:00 = 北京 09:00 ✓
 
-## Section D — Commit/Push
+## Section D — 受控注入失敗
+
+### D1 — 注入單一 domain 佔比 >1/3
+
+注入：`INJECT_SINGLE_DOMAIN_COUNT=7` + `INJECT_SINGLE_DOMAIN_NAME=blog.research.google`
 
 ```
-> git log --oneline -3
-25ce5bd iter65: evidence pack — single-domain share <=1/3 hard cap (success + controlled injection fail)
-80132d5 iter65: enforce single-domain share <=1/3 hard cap + controlled injection support
-002da1f iter64: evidence hardening (git log -12 + auto-pick dir Test-Path proof)
+INJECT_SINGLE_DOMAIN_COUNT=7 INJECT_SINGLE_DOMAIN_NAME=blog.research.google: share cap overridden
+FAST_600_MODE FAIL: gate=SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY
+  reason=SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY_FAIL: max_domain=7 events=7 share=1.0 [test_injected=true]
+Pipeline failed (exit code: 1)
+LAST_RUN_SUMMARY.txt: status=FAIL
+  fail_reason=PIPELINE_GATE_FAIL: SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY
+NOT_READY 二件套已產出（md + docx），無 pptx
+```
 
-> git rev-list --left-right --count origin/main...HEAD
-0	0
+### D2 — 注入低密度
+
+注入：`INJECT_LOW_DENSITY_COUNT=7`
+
+```
+INJECT_LOW_DENSITY_COUNT=7: density scores overridden to 1
+FAST_600_MODE FAIL: gate=SOURCE_DENSITY_MULTIPLIER_HARD_DAILY
+  reason=SOURCE_DENSITY_MULTIPLIER_HARD_DAILY_FAIL: selected_min=1 < new_density_min=12
+  selected_avg=1.0 multiplier=1.5 [test_injected=true]
+Pipeline failed (exit code: 1)
+LAST_RUN_SUMMARY.txt: status=FAIL
+  fail_reason=PIPELINE_GATE_FAIL: SOURCE_DENSITY_MULTIPLIER_HARD_DAILY
+NOT_READY 二件套已產出（md + docx），無 pptx
+```
+
+核對：
+- D1: domain 注入 → SINGLE_DOMAIN_SHARE_CAP_HARD_DAILY FAIL ✓
+- D2: density 注入 → SOURCE_DENSITY_MULTIPLIER_HARD_DAILY FAIL ✓
+- 兩者均標記 test_injected=true
+
+## Section E — Commit/Push
+
+```
+（commit 後填入）
 ```
 
 ---
