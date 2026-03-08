@@ -5375,7 +5375,7 @@ if ($_fast300Daily) {
             Write-Output ("  buckets_distinct             : {0}" -f $_sbcDistinct)
             Write-Output ("  strategic_bucket_coverage_pass : {0}" -f $_sbcPass)
             if (-not $_sbcPass) {
-                $_sbcFail = ("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={0} < 3" -f $_sbcDistinct)
+                $_sbcFail = ("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={0} < 4" -f $_sbcDistinct)
                 Write-Output ("  => FAIL: {0}" -f $_sbcFail)
                 Invoke-VerifyOnlineFailFast -Gate "STRATEGIC_BUCKET_COVERAGE_HARD_DAILY" -Reason $_sbcFail
             }

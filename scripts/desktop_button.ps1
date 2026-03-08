@@ -27,10 +27,8 @@ $env:PIPELINE_SOFT_TARGET_SEC = "160"
 $env:PIPELINE_TIME_BUDGET_SEC = "200"
 # Enable bigtech gates for both manual and daily (bigtech>=5, official_or_media>=4)
 $env:BIGTECH_GATES_ENFORCE = "1"
-# iter66: entrypoint marker
-if (-not $env:PIPELINE_ENTRYPOINT) {
-    $env:PIPELINE_ENTRYPOINT = "desktop_button"
-}
+# iter72c: always force entrypoint (was conditional; child powershell needs explicit env)
+$env:PIPELINE_ENTRYPOINT = "desktop_button"
 
 # --- Log setup ---
 $logDir = Join-Path $repoRoot "outputs"

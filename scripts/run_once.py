@@ -7600,6 +7600,18 @@ def _f600_run_fast_path(
                   len(set(_f6_vendor_key(s) for s in _selected) - {"other"}))
 
         # Phase-2: fill to 6 — bigtech_official_media_actionable priority
+        # iter72c: missing-bucket-first pass before general fill
+        _p72c_cur_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
+        if len(_p72c_cur_buckets) < 4:
+            for it in _p72_pool_boma:
+                if len(_selected) >= 6:
+                    break
+                if it in _selected:
+                    continue
+                _p72c_ib = _ct72b_strategic_bucket(it)
+                if _p72c_ib not in _p72c_cur_buckets and _div_can_add(it, _selected):
+                    _sel_append(it)
+                    _p72c_cur_buckets.add(_p72c_ib)
         for it in _p72_pool_boma:
             if len(_selected) >= 6:
                 break
@@ -7627,12 +7639,20 @@ def _f600_run_fast_path(
         # Phase-4: fill remaining to 7 — BOMA preferred, then BTA, then rescue
         while len(_selected) < _max_events:
             _p72_filled = False
-            # 4a: try BOMA first
-            for it in _p72_pool_boma:
-                if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
-                    _sel_append(it)
-                    _p72_filled = True
-                    break
+            # 4a: try BOMA first — iter72c: prefer new-bucket candidates
+            _p4c_cur_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
+            if len(_p4c_cur_buckets) < 4:
+                for it in _p72_pool_boma:
+                    if it not in _selected and _ct72b_strategic_bucket(it) not in _p4c_cur_buckets and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                        _sel_append(it)
+                        _p72_filled = True
+                        break
+            if not _p72_filled:
+                for it in _p72_pool_boma:
+                    if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                        _sel_append(it)
+                        _p72_filled = True
+                        break
             if _p72_filled:
                 continue
             # 4b: try BTA (bigtech_actionable non-official/media)
@@ -7736,11 +7756,65 @@ def _f600_run_fast_path(
                         _log.info("iter72b Phase-5: 2-step swap success at idx=%d, selected=%d boma=%d", _si, len(_selected), _n_boma)
                         break
 
+        # Phase-6 (iter72c): bucket rescue swap — if buckets_distinct < 4, swap duplicate-bucket for new-bucket
+        _p6c_rescue_attempts = 0
+        _p6c_rescue_successes = 0
+        _p6c_cur_buckets_map = {}
+        for _p6i, _p6s in enumerate(_selected):
+            _p6b = _ct72b_strategic_bucket(_p6s)
+            _p6c_cur_buckets_map.setdefault(_p6b, []).append(_p6i)
+        _p6c_distinct = len(_p6c_cur_buckets_map)
+        if _p6c_distinct < 4:
+            _p6c_dup_buckets = [b for b, idxs in _p6c_cur_buckets_map.items() if len(idxs) >= 2]
+            _p6c_all_pools = _p72_pool_boma + _p72_pool_bta + _p72_pool_c
+            for _p6db in _p6c_dup_buckets:
+                if len(set(_ct72b_strategic_bucket(s) for s in _selected)) >= 4:
+                    break
+                _p6_dup_idxs = [i for i in range(len(_selected)) if _ct72b_strategic_bucket(_selected[i]) == _p6db]
+                for _p6_rm_idx in reversed(_p6_dup_idxs[1:]):
+                    _p6c_rescue_attempts += 1
+                    _p6_removed = _selected[_p6_rm_idx]
+                    _p6_test = [s for j, s in enumerate(_selected) if j != _p6_rm_idx]
+                    _p6_test_buckets = set(_ct72b_strategic_bucket(s) for s in _p6_test)
+                    _p6_found = False
+                    for _p6_cand in _p6c_all_pools:
+                        if _p6_cand in _p6_test or _p6_cand == _p6_removed:
+                            continue
+                        _p6cb = _ct72b_strategic_bucket(_p6_cand)
+                        if _p6cb in _p6_test_buckets:
+                            continue
+                        _p6_new = _p6_test + [_p6_cand]
+                        _p6_ndc = _DivCounter(_f6_domain_key(s) for s in _p6_new)
+                        _p6_nvc = _DivCounter(_f6_vendor_key(s) for s in _p6_new)
+                        _p6_n_plat = sum(1 for s in _p6_new if _is_platform_domain(s))
+                        _p6_n_rt = sum(1 for s in _p6_new if _ct71_is_research_tutorial(s))
+                        _p6_n_boma = sum(1 for s in _p6_new if _ct72b_is_bigtech_official_media_actionable(s))
+                        _p6_cur_boma = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
+                        if (_p6_ndc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                                and _p6_nvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                                and len(_p6_ndc) >= _DIV_MIN_DOMAINS
+                                and len(set(_f6_vendor_key(s) for s in _p6_new) - {"other"}) >= _DIV_MIN_VENDORS
+                                and _p6_n_plat <= _PLATFORM_CAP
+                                and _p6_n_rt <= 1
+                                and _p6_n_boma >= min(_p6_cur_boma, 6)
+                                and _hdf_all_scores.get(id(_p6_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
+                            _selected[:] = _p6_new
+                            _p6c_rescue_successes += 1
+                            _log.info("iter72c Phase-6 bucket rescue: swapped idx=%d bucket=%s for new_bucket=%s, distinct=%d",
+                                      _p6_rm_idx, _p6db, _p6cb, len(set(_ct72b_strategic_bucket(s) for s in _selected)))
+                            _p6_found = True
+                            break
+                    if _p6_found:
+                        break
+        if _p6c_rescue_attempts > 0:
+            _log.info("iter72c Phase-6 bucket rescue: attempts=%d successes=%d final_distinct=%d",
+                      _p6c_rescue_attempts, _p6c_rescue_successes, len(set(_ct72b_strategic_bucket(s) for s in _selected)))
+
         # Phase-5 FAIL check: if < 7 items, write shortfall and FAIL
         if len(_selected) < _max_events:
             _log.warning("iter72b Phase-5 FAIL: selected=%d < target=%d", len(_selected), _max_events)
 
-        _log.info("iter72b selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d buckets=%s",
+        _log.info("iter72c selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d buckets=%s",
                   len(_selected),
                   sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s)),
                   sum(1 for s in _selected if _ct71_is_bigtech_actionable(s)),
@@ -7751,6 +7825,8 @@ def _f600_run_fast_path(
         # Non-daily: no swap tracking needed
         _swap_attempts = 0
         _swap_successes = 0
+        _p6c_rescue_attempts = 0
+        _p6c_rescue_successes = 0
         # Non-daily: original pool priority
         for _pool in [_bt_pool, _om_pool, _other_pool]:
             if len(_selected) >= _max_events:
@@ -8947,7 +9023,7 @@ def _f600_run_fast_path(
     _cm72_bom_pass = (_cm72_bom_check >= 6)
     _cm71_plat_pass = (_cm71_plat_total_check <= _PLATFORM_CAP)
     _cm71_rt_pass = (_cm71_rt_total_check <= 1)
-    _cm72_bucket_pass = (_cm72_strategic_buckets_distinct >= 3)
+    _cm72_bucket_pass = (_cm72_strategic_buckets_distinct >= 4)
 
     try:
         _cm71_path = _outputs / "content_mix.meta.json"
@@ -8968,7 +9044,10 @@ def _f600_run_fast_path(
             "research_tutorial_cap_pass": _cm71_rt_pass,
             "selected_strategic_buckets": _cm72_strategic_buckets,
             "selected_strategic_buckets_distinct": _cm72_strategic_buckets_distinct,
+            "strategic_bucket_coverage_min": 4,
             "strategic_bucket_coverage_pass": _cm72_bucket_pass,
+            "bucket_rescue_attempts": _p6c_rescue_attempts if _is_daily else 0,
+            "bucket_rescue_successes": _p6c_rescue_successes if _is_daily else 0,
             "strategic_bucket_per_item": [_cm71_per_item[i]["strategic_bucket"] for i in range(len(_cm71_per_item))],
             "content_type_per_item": [_cm71_per_item[i]["content_type"] for i in range(len(_cm71_per_item))],
             "source_class_per_item": [_cm71_per_item[i]["source_class"] for i in range(len(_cm71_per_item))],
@@ -9030,9 +9109,9 @@ def _f600_run_fast_path(
         )
         _f6_fail("RESEARCH_TUTORIAL_CAP_HARD_DAILY", _cm71_rt_fail)
 
-    # iter72b: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY gate (B4) — min 3 distinct strategic buckets
+    # iter72c: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY gate (B4) — min 4 distinct strategic buckets
     if _is_daily and not _cm72_bucket_pass:
-        _cm72_bucket_fail = f"STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={_cm72_strategic_buckets_distinct} < 3"
+        _cm72_bucket_fail = f"STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={_cm72_strategic_buckets_distinct} < 4"
         _write_not_ready_report_md(
             "STRATEGIC_BUCKET_COVERAGE_HARD_DAILY",
             _cm72_bucket_fail,
