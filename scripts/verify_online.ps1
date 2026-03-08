@@ -5326,6 +5326,105 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
+# iter72b: BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY — bigtech_official_media_count >= 6
+#   Reads content_mix.meta.json
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_bomMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY:"
+    if (Test-Path $_bomMetaPath) {
+        try {
+            $_bomMeta = Get-Content $_bomMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_bomCount   = if ($_bomMeta.PSObject.Properties['bigtech_official_media_count']) { [int]$_bomMeta.bigtech_official_media_count } else { 0 }
+            $_bomPass    = if ($_bomMeta.PSObject.Properties['bigtech_official_media_min_pass']) { $_bomMeta.bigtech_official_media_min_pass } else { $false }
+            $_bomInjected = if ($_bomMeta.PSObject.Properties['bigtech_official_media_test_injected']) { $_bomMeta.bigtech_official_media_test_injected } else { $false }
+            Write-Output ("  bigtech_official_media_count : {0}" -f $_bomCount)
+            Write-Output ("  bigtech_official_media_pass  : {0}" -f $_bomPass)
+            if ($_bomInjected) {
+                Write-Output "  test_injected                : True"
+            }
+            if (-not $_bomPass) {
+                $_bomFail = ("BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY_FAIL: official_media={0} < 6" -f $_bomCount)
+                Write-Output ("  => FAIL: {0}" -f $_bomFail)
+                Invoke-VerifyOnlineFailFast -Gate "BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY" -Reason $_bomFail
+            }
+            Write-Output "  => BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter72b: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY — strategic_buckets_distinct >= 4
+#   Reads content_mix.meta.json
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_sbcMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "STRATEGIC_BUCKET_COVERAGE_HARD_DAILY:"
+    if (Test-Path $_sbcMetaPath) {
+        try {
+            $_sbcMeta = Get-Content $_sbcMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_sbcDistinct = if ($_sbcMeta.PSObject.Properties['selected_strategic_buckets_distinct']) { [int]$_sbcMeta.selected_strategic_buckets_distinct } else { 0 }
+            $_sbcBuckets  = if ($_sbcMeta.PSObject.Properties['selected_strategic_buckets']) { ($_sbcMeta.selected_strategic_buckets -join ", ") } else { "N/A" }
+            $_sbcPass     = if ($_sbcMeta.PSObject.Properties['strategic_bucket_coverage_pass']) { $_sbcMeta.strategic_bucket_coverage_pass } else { $false }
+            Write-Output ("  selected_strategic_buckets   : {0}" -f $_sbcBuckets)
+            Write-Output ("  buckets_distinct             : {0}" -f $_sbcDistinct)
+            Write-Output ("  strategic_bucket_coverage_pass : {0}" -f $_sbcPass)
+            if (-not $_sbcPass) {
+                $_sbcFail = ("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={0} < 4" -f $_sbcDistinct)
+                Write-Output ("  => FAIL: {0}" -f $_sbcFail)
+                Invoke-VerifyOnlineFailFast -Gate "STRATEGIC_BUCKET_COVERAGE_HARD_DAILY" -Reason $_sbcFail
+            }
+            Write-Output "  => STRATEGIC_BUCKET_COVERAGE_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  STRATEGIC_BUCKET_COVERAGE_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  STRATEGIC_BUCKET_COVERAGE_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter72b: STRATEGIC_DENSITY_1P5_HARD_DAILY — strategic_density_score avg >= 1.5x base, min >= 10
+#   Reads source_density.meta.json
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_sdgMetaPath = Join-Path $repoRoot "outputs\source_density.meta.json"
+    Write-Output "STRATEGIC_DENSITY_1P5_HARD_DAILY:"
+    if (Test-Path $_sdgMetaPath) {
+        try {
+            $_sdgMeta = Get-Content $_sdgMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_sdgAvg    = if ($_sdgMeta.PSObject.Properties['selected_avg_strategic_density_score']) { $_sdgMeta.selected_avg_strategic_density_score } else { 0 }
+            $_sdgMin    = if ($_sdgMeta.PSObject.Properties['selected_min_strategic_density_score']) { [int]$_sdgMeta.selected_min_strategic_density_score } else { 0 }
+            $_sdgTarget = if ($_sdgMeta.PSObject.Properties['target_avg_density_1p5']) { [int]$_sdgMeta.target_avg_density_1p5 } else { 0 }
+            $_sdgBase   = if ($_sdgMeta.PSObject.Properties['base_avg_density']) { $_sdgMeta.base_avg_density } else { 0 }
+            $_sdgPass   = if ($_sdgMeta.PSObject.Properties['strategic_density_gate_pass']) { $_sdgMeta.strategic_density_gate_pass } else { $false }
+            Write-Output ("  base_avg_density             : {0}" -f $_sdgBase)
+            Write-Output ("  target_avg_density_1p5       : {0}" -f $_sdgTarget)
+            Write-Output ("  selected_avg_strategic_density : {0:F1}" -f $_sdgAvg)
+            Write-Output ("  selected_min_strategic_density : {0}" -f $_sdgMin)
+            Write-Output ("  strategic_density_gate_pass  : {0}" -f $_sdgPass)
+            if (-not $_sdgPass) {
+                $_sdgFail = ("STRATEGIC_DENSITY_1P5_HARD_DAILY_FAIL: avg={0} target={1} min={2} floor=10" -f $_sdgAvg, $_sdgTarget, $_sdgMin)
+                Write-Output ("  => FAIL: {0}" -f $_sdgFail)
+                Invoke-VerifyOnlineFailFast -Gate "STRATEGIC_DENSITY_1P5_HARD_DAILY" -Reason $_sdgFail
+            }
+            Write-Output "  => STRATEGIC_DENSITY_1P5_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  STRATEGIC_DENSITY_1P5_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  STRATEGIC_DENSITY_1P5_HARD_DAILY: WARN (source_density.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # iter42b: PPTX_FORBIDDEN_HARD — three-layer defense: layer 3 (final gate)
 # Any *.pptx in outputs/ → FAIL (even if pipeline didn't generate them, e.g. stale files)
 # ---------------------------------------------------------------------------
@@ -5400,6 +5499,39 @@ foreach ($_dmaFile in @("gpu_load.meta.json", "delivery_consistency.meta.json", 
         Write-Output ("  [SKIP] not found: {0}" -f $_dmaFile)
     }
 }
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter72b: P0 FINGERPRINT (strategic gates summary) — unified for desktop/scheduler
+# ---------------------------------------------------------------------------
+Write-Output ""
+Write-Output "=== P0 STRATEGIC FINGERPRINT ==="
+Write-Output ("RUN_ID                          = {0}" -f $_voRunId)
+Write-Output ("GIT_HEAD                        = {0}" -f $_voGitHead)
+Write-Output ("MODE                            = {0}" -f $(if ($Mode) { $Mode } else { "default" }))
+Write-Output ("ENTRYPOINT                      = {0}" -f $_voEntrypoint)
+# Read strategic fields from meta files
+$_fpCmPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+$_fpSdPath = Join-Path $repoRoot "outputs\source_density.meta.json"
+if (Test-Path $_fpCmPath) {
+    try {
+        $_fpCm = Get-Content $_fpCmPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-Output ("bigtech_actionable_count        = {0}" -f $(if ($_fpCm.PSObject.Properties['bigtech_actionable_count']) { $_fpCm.bigtech_actionable_count } else { "N/A" }))
+        Write-Output ("bigtech_official_media_count     = {0}" -f $(if ($_fpCm.PSObject.Properties['bigtech_official_media_count']) { $_fpCm.bigtech_official_media_count } else { "N/A" }))
+        Write-Output ("platform_total                  = {0}" -f $(if ($_fpCm.PSObject.Properties['platform_total']) { $_fpCm.platform_total } else { "N/A" }))
+        Write-Output ("research_tutorial_total          = {0}" -f $(if ($_fpCm.PSObject.Properties['research_tutorial_total']) { $_fpCm.research_tutorial_total } else { "N/A" }))
+        Write-Output ("selected_strategic_buckets_distinct = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_strategic_buckets_distinct']) { $_fpCm.selected_strategic_buckets_distinct } else { "N/A" }))
+        Write-Output ("selected_events                 = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_events']) { $_fpCm.selected_events } else { "N/A" }))
+    } catch {}
+}
+if (Test-Path $_fpSdPath) {
+    try {
+        $_fpSd = Get-Content $_fpSdPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-Output ("strategic_density_target         = {0}" -f $(if ($_fpSd.PSObject.Properties['target_avg_density_1p5']) { $_fpSd.target_avg_density_1p5 } else { "N/A" }))
+        Write-Output ("selected_avg_strategic_density   = {0}" -f $(if ($_fpSd.PSObject.Properties['selected_avg_strategic_density_score']) { $_fpSd.selected_avg_strategic_density_score } else { "N/A" }))
+    } catch {}
+}
+Write-Output "=== END P0 STRATEGIC FINGERPRINT ==="
 Write-Output ""
 
 if ($pool85Degraded) {

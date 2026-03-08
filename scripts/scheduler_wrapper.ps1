@@ -39,6 +39,30 @@ $voScript = Join-Path $repoRoot "scripts\verify_online.ps1"
 
 $exitCode = $LASTEXITCODE
 
+# iter72b: strategic fingerprint
+$fpLines = @("", "[$((Get-Date -Format 'HH:mm:ss'))] === P0 STRATEGIC FINGERPRINT ===")
+$cmFp = Join-Path $repoRoot "outputs\content_mix.meta.json"
+$sdFp = Join-Path $repoRoot "outputs\source_density.meta.json"
+if (Test-Path $cmFp) {
+    try {
+        $cmD = Get-Content $cmFp -Raw -Encoding UTF8 | ConvertFrom-Json
+        $fpLines += "bigtech_actionable_count = $($cmD.bigtech_actionable_count)"
+        $fpLines += "bigtech_official_media_count = $($cmD.bigtech_official_media_count)"
+        $fpLines += "platform_total = $($cmD.platform_total)"
+        $fpLines += "research_tutorial_total = $($cmD.research_tutorial_total)"
+        $fpLines += "strategic_buckets_distinct = $($cmD.selected_strategic_buckets_distinct)"
+    } catch {}
+}
+if (Test-Path $sdFp) {
+    try {
+        $sdD = Get-Content $sdFp -Raw -Encoding UTF8 | ConvertFrom-Json
+        $fpLines += "strategic_density_target = $($sdD.target_avg_density_1p5)"
+        $fpLines += "selected_avg_strategic_density = $($sdD.selected_avg_strategic_density_score)"
+    } catch {}
+}
+$fpLines += "=== END P0 STRATEGIC FINGERPRINT ==="
+$fpLines | ForEach-Object { Add-Content -LiteralPath $logPath -Value $_ -Encoding utf8 }
+
 $footer = @(
     ""
     "[$((Get-Date -Format 'HH:mm:ss'))] === scheduler_wrapper.ps1 END (exit=$exitCode) ==="

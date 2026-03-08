@@ -154,6 +154,26 @@ if (Test-Path $sdmPath) {
 } else {
     Write-Log "DENSITY                 = (source_density.meta.json not found)"
 }
+
+# iter72b: strategic fields from content_mix.meta.json + source_density.meta.json
+$cmPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+if (Test-Path $cmPath) {
+    try {
+        $cmMeta = Get-Content $cmPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-Log "bigtech_actionable_count = $(if ($cmMeta.PSObject.Properties['bigtech_actionable_count']) { $cmMeta.bigtech_actionable_count } else { 'N/A' })"
+        Write-Log "bigtech_official_media_count = $(if ($cmMeta.PSObject.Properties['bigtech_official_media_count']) { $cmMeta.bigtech_official_media_count } else { 'N/A' })"
+        Write-Log "platform_total          = $(if ($cmMeta.PSObject.Properties['platform_total']) { $cmMeta.platform_total } else { 'N/A' })"
+        Write-Log "research_tutorial_total  = $(if ($cmMeta.PSObject.Properties['research_tutorial_total']) { $cmMeta.research_tutorial_total } else { 'N/A' })"
+        Write-Log "strategic_buckets_distinct = $(if ($cmMeta.PSObject.Properties['selected_strategic_buckets_distinct']) { $cmMeta.selected_strategic_buckets_distinct } else { 'N/A' })"
+    } catch {}
+}
+if (Test-Path $sdmPath) {
+    try {
+        $sdmMeta2 = Get-Content $sdmPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-Log "strategic_density_target = $(if ($sdmMeta2.PSObject.Properties['target_avg_density_1p5']) { $sdmMeta2.target_avg_density_1p5 } else { 'N/A' })"
+        Write-Log "selected_avg_strategic_density = $(if ($sdmMeta2.PSObject.Properties['selected_avg_strategic_density_score']) { $sdmMeta2.selected_avg_strategic_density_score } else { 'N/A' })"
+    } catch {}
+}
 Write-Log "=== END P0 FINGERPRINT ==="
 Write-Log ""
 
