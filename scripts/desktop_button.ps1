@@ -24,7 +24,7 @@ Set-Location $repoRoot
 
 # --- Environment: budget + gates + entrypoint ---
 $env:PIPELINE_SOFT_TARGET_SEC = "140"   # iter73: optimization target soft
-$env:PIPELINE_TIME_BUDGET_SEC = "190"   # iter73: optimization target hard
+$env:PIPELINE_TIME_BUDGET_SEC = "230"   # iter73b: align with verify_online DAILY default (10 items need ~200s all-miss)
 # Enable bigtech gates for both manual and daily (bigtech>=5, official_or_media>=4)
 $env:BIGTECH_GATES_ENFORCE = "1"
 # iter72c: always force entrypoint (was conditional; child powershell needs explicit env)

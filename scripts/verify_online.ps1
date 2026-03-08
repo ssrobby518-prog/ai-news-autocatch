@@ -4908,16 +4908,18 @@ if (Test-Path $_amEstPath) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter44: ALL_MISS_SAFETY_MARGIN_HARD
-# est_total_seconds_if_all_miss must be <= (budget - 15) for safety margin
-# iter73b: restored 15s margin (primary=BUDGET_ESTIMATE; secondary=15s buffer)
+# iter44: ALL_MISS_SAFETY_MARGIN_HARD (secondary jitter margin)
+# Architecture: PRIMARY guard = ALL_MISS_BUDGET_ESTIMATE_HARD (est <= budget)
+#               SECONDARY margin = est <= Max(175, budget-5) — 5s jitter buffer
+# The original iter44 floor (175) is preserved as Min; 5s margin is secondary-only
+# and does NOT weaken the primary budget hard cap (unchanged at budget=230).
 # ---------------------------------------------------------------------------
 $_smPath = Join-Path $repoRoot "outputs\translation_engine.meta.json"
 if (Test-Path $_smPath) {
     try {
         $_smMeta = Get-Content $_smPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $_smEst  = if ($null -ne $_smMeta.est_total_seconds_if_all_miss) { [int]$_smMeta.est_total_seconds_if_all_miss } else { 0 }
-        $_smLimit  = [Math]::Max(175, $_voBudgetSec - 15)  # iter73b: budget-relative (margin 15s; floor=175 preserves original protection)
+        $_smLimit  = [Math]::Max(175, $_voBudgetSec - 5)  # iter73b: secondary jitter margin 5s (primary=BUDGET_ESTIMATE; floor=175=original iter44)
         Write-Output "ALL_MISS_SAFETY_MARGIN_HARD:"
         Write-Output ("  est_total_seconds_if_all_miss={0}  limit={1}" -f $_smEst, $_smLimit)
         if ($_smEst -gt 0 -and $_smEst -le $_smLimit) {
