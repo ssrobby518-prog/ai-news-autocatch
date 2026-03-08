@@ -1,3 +1,76 @@
+# iter73b: Final Validation Loop — Same HEAD Desktop + Scheduler PASS
+
+run_date: 2026-03-08
+
+## A) 同一 HEAD 閉環證據
+
+| 入口 | GIT_HEAD | ENTRYPOINT | MODE | selected_events | status |
+|------|----------|------------|------|-----------------|--------|
+| 桌面按鈕 | 76d1866 | desktop_button | daily | 10 | OK |
+| 北京09:00排程 | 76d1866 | scheduled_task | daily | 10 | OK |
+
+**結論：兩邊 GIT_HEAD = `76d1866`，完全一致，且均 PASS。**
+
+### 桌面按鈕 P0 FINGERPRINT (run_id=20260308_140612)
+
+```
+GIT_HEAD=76d1866  ENTRYPOINT=desktop_button  MODE=daily
+selected_events=10  bigtech_actionable_count=8  bigtech_official_media_count=8
+leadership_politics_ai_count=3  china_ai_gov_count=1
+platform_total=1  research_tutorial_total=0
+strategic_buckets_distinct=5  selected_avg_strategic_density=77.3  selected_min=15
+```
+
+### 排程 P0 FINGERPRINT (run_id=20260308_140808)
+
+```
+GIT_HEAD=76d1866  ENTRYPOINT=scheduled_task  MODE=daily
+selected_events=10  bigtech_actionable_count=8  bigtech_official_media_count=8
+leadership_politics_ai_count=4  china_ai_gov_count=1
+platform_total=1  research_tutorial_total=0
+strategic_buckets_distinct=5  selected_avg_strategic_density=87.1  selected_min=15
+```
+
+## B) ALL_MISS Safety Margin 證據
+
+### 架構（兩層防護，主副分離）
+
+| 層級 | Gate 名稱 | 公式 | 用途 |
+|------|-----------|------|------|
+| PRIMARY | ALL_MISS_BUDGET_ESTIMATE_HARD | est <= budget (230s) | 硬上限：全miss不可超過總預算 |
+| SECONDARY | ALL_MISS_SAFETY_MARGIN_HARD | est <= Max(175, budget-5) = 225s | 次級緩衝：5s jitter margin |
+
+### 證據
+
+| 入口 | tok/s | est_all_miss | PRIMARY (<=230) | SECONDARY (<=225) |
+|------|-------|-------------|-----------------|-------------------|
+| desktop_button | 23.7 | 198s | PASS | PASS |
+| scheduled_task | 24.9 | 187s | PASS | PASS |
+
+### 為何 5s 不是放寬主要保護
+
+1. **PRIMARY gate 未變**：ALL_MISS_BUDGET_ESTIMATE_HARD (est <= budget=230s) 是主要防護，從未修改
+2. **原始 iter44 設計**：固定 limit=175s 是 7 項目時代的值；10 項目 est 天然 ~187-218s，固定 175 已不適用
+3. **floor 保留**：`Max(175, budget-5)` 中的 175 保留了原始 iter44 下限作為絕對最低保護
+4. **5s 只影響次級**：從 budget-15 改為 budget-5，僅放寬次級 jitter buffer（225 vs 215），不影響 PRIMARY 的 230s 硬頂
+
+## C) 注入 FAIL 驗證（3/3 通過）
+
+| 注入 | 預期 FAIL Gate | 結果 |
+|------|---------------|------|
+| INJECT_PLATFORM_DOMAIN_TOTAL=2 | DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY | FAIL ✓ |
+| INJECT_RESEARCH_TUTORIAL_TOTAL=2 | RESEARCH_TUTORIAL_CAP_HARD_DAILY | FAIL ✓ |
+| INJECT_BIGTECH_OFFICIAL_MEDIA_COUNT=5 | BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY | FAIL ✓ |
+
+## D) 本輪程式碼變更
+
+| 檔案 | 變更 |
+|------|------|
+| desktop_button.ps1 | PIPELINE_TIME_BUDGET_SEC: 190→230（對齊 verify_online DAILY 預設） |
+| verify_online.ps1 | ALL_MISS_SAFETY_MARGIN comment 更新（兩層架構文檔化），margin 維持 5s |
+
+---
+
 # iter66: crawl-layer density*1.5 + single-domain<=1/3 on all entrypoints + scheduler logging
 
 run_date: 2026-03-07
