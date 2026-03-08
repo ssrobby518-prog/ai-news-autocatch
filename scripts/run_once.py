@@ -8696,8 +8696,14 @@ def _f600_run_fast_path(
                     if not _backup_pool:
                         break
                     # iter68: pick replacement that respects diversity constraints
+                    # iter74: also check BOMA count doesn't drop below 7
                     _dedup_replaced = False
+                    _old_is_boma = _ct72b_is_bigtech_official_media_actionable(_selected[_oi])
+                    _cur_boma = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
                     for _bp_idx, _bp_cand in enumerate(_backup_pool):
+                        # iter74: if replacing a BOMA item, ensure replacement is also BOMA (or BOMA count stays >= 7)
+                        if _old_is_boma and not _ct72b_is_bigtech_official_media_actionable(_bp_cand) and _cur_boma <= 7:
+                            continue
                         _test_dd = [s if j != _oi else _bp_cand for j, s in enumerate(_selected)]
                         _test_dd_dc = _DivCounter(_f6_domain_key(s) for s in _test_dd)
                         _test_dd_vc = _DivCounter(_f6_vendor_key(s) for s in _test_dd)
@@ -8709,10 +8715,13 @@ def _f600_run_fast_path(
                             _dedup_replaced = True
                             break
                     if not _dedup_replaced:
-                        # Fall back to best candidate even if it breaks diversity (post-dedup swap will try to fix)
-                        _repl = _backup_pool.pop(0)
-                        _selected[_oi] = _repl
-                        _replacements_made += 1
+                        # iter74: skip fallback replacement if it would break BOMA count
+                        if _old_is_boma and _cur_boma <= 7 and _backup_pool and not _ct72b_is_bigtech_official_media_actionable(_backup_pool[0]):
+                            continue
+                        if _backup_pool:
+                            _repl = _backup_pool.pop(0)
+                            _selected[_oi] = _repl
+                            _replacements_made += 1
                 _cur_hashes = [_item_hash(it) for it in _selected]
                 _overlap_count = sum(1 for h in _cur_hashes if h and h in _prev_ids)
             if _overlap_count > 2:
