@@ -204,7 +204,15 @@ NOT_READY 二件套已產出（md + docx），無 pptx
 ## Section E — Commit/Push
 
 ```
-（commit 後填入）
+> git log --oneline -5
+0d64b91 iter66: evidence pack — density*1.5 + domain<=1/3 all entrypoints + scheduler + injection tests
+3caa7ee iter66: crawl-layer density*1.5 + domain<=1/3 enforced all entrypoints + scheduler logging
+b2cca6a iter66: crawl-layer density*1.5 + single-domain<=1/3 enforced on all entrypoints + scheduler logging (no gate relaxation)
+8ae576f iter56: high-density source floor + vendor share cap at source layer
+95fbf17 iter65: update Section D with push evidence
+
+> git rev-list --left-right --count origin/main...HEAD
+0	0
 ```
 
 ---
