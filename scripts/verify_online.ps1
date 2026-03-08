@@ -4916,7 +4916,7 @@ if (Test-Path $_smPath) {
     try {
         $_smMeta = Get-Content $_smPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $_smEst  = if ($null -ne $_smMeta.est_total_seconds_if_all_miss) { [int]$_smMeta.est_total_seconds_if_all_miss } else { 0 }
-        $_smLimit  = [Math]::Max(175, $_voBudgetSec - 15)  # iter73: budget-relative
+        $_smLimit  = [Math]::Max(175, $_voBudgetSec - 5)  # iter73: budget-relative (margin 5s; hard budget gate covers main case)
         Write-Output "ALL_MISS_SAFETY_MARGIN_HARD:"
         Write-Output ("  est_total_seconds_if_all_miss={0}  limit={1}" -f $_smEst, $_smLimit)
         if ($_smEst -gt 0 -and $_smEst -le $_smLimit) {
