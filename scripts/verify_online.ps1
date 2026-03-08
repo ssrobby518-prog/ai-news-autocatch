@@ -478,6 +478,12 @@ if (Test-Path $_doPreCleanPath) {
     Remove-Item -LiteralPath $_doPreCleanPath -Force -ErrorAction SilentlyContinue
     Write-Output "  [PRE-CLEAN] 已刪除 daily_overlap.meta.json"
 }
+# iter71: PRE-CLEAN content_mix.meta.json
+$_cmPreCleanPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+if (Test-Path $_cmPreCleanPath) {
+    Remove-Item -LiteralPath $_cmPreCleanPath -Force -ErrorAction SilentlyContinue
+    Write-Output "  [PRE-CLEAN] 已刪除 content_mix.meta.json"
+}
 # iter70: PRE-CLEAN selection_shortfall.meta.json
 $_sfPreCleanPath = Join-Path $repoRoot "outputs\selection_shortfall.meta.json"
 if (Test-Path $_sfPreCleanPath) {
@@ -5243,6 +5249,78 @@ if ($_fast300Daily) {
         }
     } else {
         Write-Output "  DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY: WARN (dev_platform_cap.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter71: BIGTECH_ACTIONABLE_MIN_HARD_DAILY — bigtech_actionable >= 6
+#   Reads content_mix.meta.json
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_cmMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "BIGTECH_ACTIONABLE_MIN_HARD_DAILY:"
+    if (Test-Path $_cmMetaPath) {
+        try {
+            $_cmMeta = Get-Content $_cmMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_cmBtAct     = if ($_cmMeta.PSObject.Properties['bigtech_actionable_count']) { [int]$_cmMeta.bigtech_actionable_count } else { 0 }
+            $_cmBtActPass = if ($_cmMeta.PSObject.Properties['bigtech_actionable_pass']) { $_cmMeta.bigtech_actionable_pass } else { $false }
+            $_cmPlatTotal = if ($_cmMeta.PSObject.Properties['platform_total']) { [int]$_cmMeta.platform_total } else { 0 }
+            $_cmPlatPass  = if ($_cmMeta.PSObject.Properties['platform_cap_pass']) { $_cmMeta.platform_cap_pass } else { $false }
+            $_cmRtTotal   = if ($_cmMeta.PSObject.Properties['research_tutorial_total']) { [int]$_cmMeta.research_tutorial_total } else { 0 }
+            $_cmRtPass    = if ($_cmMeta.PSObject.Properties['research_tutorial_cap_pass']) { $_cmMeta.research_tutorial_cap_pass } else { $false }
+            $_cmSelEvents = if ($_cmMeta.PSObject.Properties['selected_events']) { [int]$_cmMeta.selected_events } else { 0 }
+            Write-Output ("  selected_events             : {0}" -f $_cmSelEvents)
+            Write-Output ("  bigtech_actionable_count    : {0}" -f $_cmBtAct)
+            Write-Output ("  bigtech_actionable_pass     : {0}" -f $_cmBtActPass)
+            Write-Output ("  platform_total              : {0}" -f $_cmPlatTotal)
+            Write-Output ("  platform_cap_pass           : {0}" -f $_cmPlatPass)
+            Write-Output ("  research_tutorial_total     : {0}" -f $_cmRtTotal)
+            Write-Output ("  research_tutorial_cap_pass  : {0}" -f $_cmRtPass)
+            if (-not $_cmBtActPass) {
+                $_cmBtFail = ("BIGTECH_ACTIONABLE_MIN_HARD_DAILY_FAIL: actionable={0} < 6" -f $_cmBtAct)
+                Write-Output ("  => FAIL: {0}" -f $_cmBtFail)
+                Invoke-VerifyOnlineFailFast -Gate "BIGTECH_ACTIONABLE_MIN_HARD_DAILY" -Reason $_cmBtFail
+            }
+            Write-Output "  => BIGTECH_ACTIONABLE_MIN_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  BIGTECH_ACTIONABLE_MIN_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  BIGTECH_ACTIONABLE_MIN_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter71: RESEARCH_TUTORIAL_CAP_HARD_DAILY — research_tutorial_total <= 1
+#   Reads content_mix.meta.json
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_cmMetaPath2 = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "RESEARCH_TUTORIAL_CAP_HARD_DAILY:"
+    if (Test-Path $_cmMetaPath2) {
+        try {
+            $_cmMeta2 = Get-Content $_cmMetaPath2 -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_cmRtTotal2   = if ($_cmMeta2.PSObject.Properties['research_tutorial_total']) { [int]$_cmMeta2.research_tutorial_total } else { 0 }
+            $_cmRtPass2    = if ($_cmMeta2.PSObject.Properties['research_tutorial_cap_pass']) { $_cmMeta2.research_tutorial_cap_pass } else { $false }
+            $_cmRtInjected = if ($_cmMeta2.PSObject.Properties['research_tutorial_test_injected']) { $_cmMeta2.research_tutorial_test_injected } else { $false }
+            Write-Output ("  research_tutorial_total     : {0}" -f $_cmRtTotal2)
+            Write-Output ("  research_tutorial_cap_pass  : {0}" -f $_cmRtPass2)
+            if ($_cmRtInjected) {
+                Write-Output "  test_injected               : True"
+            }
+            if (-not $_cmRtPass2) {
+                $_cmRtFail2 = ("RESEARCH_TUTORIAL_CAP_HARD_DAILY_FAIL: research_tutorial_total={0} > 1" -f $_cmRtTotal2)
+                Write-Output ("  => FAIL: {0}" -f $_cmRtFail2)
+                Invoke-VerifyOnlineFailFast -Gate "RESEARCH_TUTORIAL_CAP_HARD_DAILY" -Reason $_cmRtFail2
+            }
+            Write-Output "  => RESEARCH_TUTORIAL_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  RESEARCH_TUTORIAL_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  RESEARCH_TUTORIAL_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
     }
 }
 Write-Output ""

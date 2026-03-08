@@ -7082,6 +7082,62 @@ def _f600_run_fast_path(
     # iter66: research blog domains (lower priority — still selectable but not preferred)
     _RESEARCH_BLOG_DOMAINS = {"blog.research.google", "research.google", "arxiv.org", "ar5iv.labs.arxiv.org"}
 
+    # iter71: content_type classification (regex/O(n)) — actionable vs restricted
+    import re as _ct71_re
+    _CT_ACTIONABLE_TYPES = frozenset({
+        "product_launch", "api_update", "sdk_update", "pricing", "benchmark",
+        "security_advisory", "release_notes", "compatibility_update", "migration",
+        "enterprise_rollout", "partnership", "acquisition",
+    })
+    _CT_RESTRICTED_TYPES = frozenset({
+        "research_blog", "tutorial", "how_to", "explainer", "opinion",
+    })
+    _CT_RULES = [
+        # actionable types (checked first — order matters)
+        (_ct71_re.compile(r'\b(?:acquir(?:ed|es|ing|ition)|merger|buyout)\b', _ct71_re.I), "acquisition"),
+        (_ct71_re.compile(r'\b(?:partnership|collaborat(?:ion|ed|ing)|alliance|joint\s+venture)\b', _ct71_re.I), "partnership"),
+        (_ct71_re.compile(r'\b(?:enterprise|on[\-\s]?prem(?:ise)?|rollout|general\s+availability|GA\b)', _ct71_re.I), "enterprise_rollout"),
+        (_ct71_re.compile(r'\b(?:security\s+(?:advisory|bulletin|patch|update)|CVE-\d{4}|vulnerability|zero[\-\s]?day)\b', _ct71_re.I), "security_advisory"),
+        (_ct71_re.compile(r'\b(?:migration|migrat(?:ed|ing)|upgrade\s+guide|breaking\s+change|deprecat(?:ed|ion))\b', _ct71_re.I), "migration"),
+        (_ct71_re.compile(r'\b(?:compatibility|backward|interop(?:erability)?)\b', _ct71_re.I), "compatibility_update"),
+        (_ct71_re.compile(r'\b(?:pricing|price\s+(?:cut|change|update|reduction)|cost\s+per|free\s+tier|pay[\-\s]?as[\-\s]?you[\-\s]?go)\b', _ct71_re.I), "pricing"),
+        (_ct71_re.compile(r'\b(?:benchmark|perf(?:ormance)?\s+(?:comparison|result|test)|MMLU|HumanEval|GPQA|leaderboard)\b', _ct71_re.I), "benchmark"),
+        (_ct71_re.compile(r'\b(?:SDK|client\s+library|(?:python|node|java|go|rust)\s+(?:SDK|client|package))\b', _ct71_re.I), "sdk_update"),
+        (_ct71_re.compile(r'\b(?:API\s+(?:update|v\d|change|endpoint|release|launch)|new\s+API|REST\s+API|GraphQL)\b', _ct71_re.I), "api_update"),
+        (_ct71_re.compile(r'\b(?:release\s+notes?|changelog|what\'?s\s+new|patch\s+notes?)\b', _ct71_re.I), "release_notes"),
+        (_ct71_re.compile(r'\b(?:launch(?:ed|es|ing)?|announc(?:ed|es|ement)|introduc(?:ed|es|ing)|now\s+available|unveil(?:ed|s)?|debut)\b', _ct71_re.I), "product_launch"),
+        # restricted types (checked second)
+        (_ct71_re.compile(r'\b(?:tutorial|step[\-\s]?by[\-\s]?step|how[\-\s]?to|getting\s+started|walkthrough|hands[\-\s]?on)\b', _ct71_re.I), "how_to"),
+        (_ct71_re.compile(r'\b(?:research\s+(?:paper|blog|post)|arxiv|preprint|we\s+propose|our\s+(?:method|approach)|ablation)\b', _ct71_re.I), "research_blog"),
+        (_ct71_re.compile(r'\b(?:explainer|explained|introduction\s+to|beginner|primer|overview\s+of|guide\s+to)\b', _ct71_re.I), "explainer"),
+        (_ct71_re.compile(r'\b(?:opinion|editorial|commentary|my\s+take|I\s+think|perspective\s+on)\b', _ct71_re.I), "opinion"),
+    ]
+
+    def _ct71_classify(it) -> str:
+        """Classify content_type via regex on title+snippet+fulltext. O(n), no network."""
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        _ft = str(getattr(it, "fulltext", "") or getattr(it, "body", "") or "")
+        _blob = _title + " " + _snippet + " " + _ft[:3000]
+        for _rx, _ctype in _CT_RULES:
+            if _rx.search(_blob):
+                return _ctype
+        return "product_launch"  # default: actionable
+
+    def _ct71_is_actionable(it) -> bool:
+        return _ct71_classify(it) in _CT_ACTIONABLE_TYPES
+
+    def _ct71_is_research_tutorial(it) -> bool:
+        return _ct71_classify(it) in {"research_blog", "tutorial", "how_to", "explainer"}
+
+    # iter71: BIGTECH_ACTIONABLE vendor set
+    _CT71_BIGTECH_VENDORS = frozenset({
+        "Google", "Microsoft", "OpenAI", "NVIDIA", "Amazon", "Anthropic", "Meta", "Apple", "Samsung",
+    })
+
+    def _ct71_is_bigtech_actionable(it) -> bool:
+        return _f6_vendor_key(it) in _CT71_BIGTECH_VENDORS and _ct71_is_actionable(it)
+
     # iter67: practical-signal scoring (regex/O(n)) — version/API/pricing/security/benchmark/deploy signals
     import re as _pss_re
     # iter70: expanded practical signal patterns for short official updates
@@ -7123,6 +7179,8 @@ def _f600_run_fast_path(
         dn = -2 if _f6_is_dev_noise(it) else 0
         # iter66: research blog penalty (still above dev_noise, below official)
         rb = -1 if _f6_is_research_blog(it) else 0
+        # iter71: actionable-type bonus — actionable items sort above research/tutorial
+        _act71 = 3 if _ct71_is_actionable(it) else (-2 if _ct71_is_research_tutorial(it) else 0)
         # iter67: practical signal score — prioritise actionable content
         pss = _practical_signal_score(it)
         # iter46: dev_forum value penalty
@@ -7134,7 +7192,7 @@ def _f600_run_fast_path(
         else:
             df_penalty = 0
         ftl = int(getattr(it, "fulltext_len", 0) or 0)
-        return (bt, om, rb, dn, df_penalty, pss, ftl, _f6_bfp(it))
+        return (bt, om, _act71, rb, dn, df_penalty, pss, ftl, _f6_bfp(it))
 
     def _f6_tier(min_len: int) -> list:
         return sorted(
@@ -7218,6 +7276,10 @@ def _f600_run_fast_path(
                     },
                     "density_score": _hdf_all_scores[id(it)]["density_score"],
                     "pass": _hdf_all_scores[id(it)]["pass"],
+                    "vendor": _f6_vendor_key(it),
+                    "source_domain": _f6_domain_key(it),
+                    "content_type": _ct71_classify(it),
+                    "actionable_pass": _ct71_is_actionable(it),
                 }
                 for it in raw_items
             ],
@@ -7325,76 +7387,112 @@ def _f600_run_fast_path(
             return _non_ov + _ov
         _bt_om_pool_sorted = _oa_partition(_bt_om_pool)
         _bt_pool_sorted = _oa_partition(_bt_pool)
-        # iter68: three-phase DAILY selection — non-platform first, then <=1 platform, then fill
-        _bt_om_nonplat = [it for it in _bt_om_pool_sorted if not _is_platform_domain(it)]
-        _bt_om_plat = [it for it in _bt_om_pool_sorted if _is_platform_domain(it)]
-        # Phase-1: fill non-platform bigtech+om items first
-        for it in _bt_om_nonplat:
+
+        # iter71: actionable-aware pool partitions
+        # Pool A: bigtech_actionable + non-platform + non-research/tutorial (primary)
+        _p71_pool_a = _oa_partition([
+            it for it in _bt_om_pool_sorted
+            if not _is_platform_domain(it)
+            and _ct71_is_bigtech_actionable(it)
+            and not _ct71_is_research_tutorial(it)
+        ])
+        # Pool B: bigtech_actionable + non-platform (broader — includes any actionable bt)
+        _p71_pool_b = _oa_partition([
+            it for it in _bt_pool_sorted
+            if not _is_platform_domain(it)
+            and _ct71_is_bigtech_actionable(it)
+            and not _ct71_is_research_tutorial(it)
+            and it not in _p71_pool_a
+        ])
+        # Pool C: bigtech + non-platform + density-pass (rescue — may include non-actionable)
+        _p71_pool_c = _oa_partition([
+            it for it in _pool_300
+            if not _is_platform_domain(it)
+            and _f6_is_bigtech(it)
+            and not _f6_is_dev_noise(it)
+            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+            and it not in _p71_pool_a and it not in _p71_pool_b
+        ])
+        # Pool D: platform items (cap=1)
+        _p71_pool_plat = _oa_partition([
+            it for it in _bt_om_pool_sorted if _is_platform_domain(it)
+        ])
+        # Pool E: research/tutorial (cap=1)
+        _p71_pool_rt = _oa_partition([
+            it for it in _pool_300
+            if _ct71_is_research_tutorial(it)
+            and _f6_is_bigtech(it)
+            and not _f6_is_dev_noise(it)
+            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+        ])
+
+        # Phase-1: fill at least 6 bigtech_actionable + non-platform + non-research/tutorial
+        _p71_actionable_target = min(6, _max_events)
+        for it in _p71_pool_a:
             if len(_selected) >= _max_events:
                 break
             if it not in _selected and _div_can_add(it, _selected):
                 _sel_append(it)
-        _log.info("iter68 Phase-1 (non-platform): skeleton=%d domains=%d vendors=%d",
-                  len(_selected), len(set(_f6_domain_key(s) for s in _selected)),
-                  len(set(_f6_vendor_key(s) for s in _selected) - {"other"}))
-        # Phase-2: allow platform items (hard limit to _PLATFORM_CAP)
-        if len(_selected) < _max_events:
-            _plat_added = 0
-            for it in _bt_om_plat:
-                if _plat_added >= _PLATFORM_CAP:
+        # Phase-1b: broader actionable pool
+        if len(_selected) < _p71_actionable_target:
+            for it in _p71_pool_b:
+                if len(_selected) >= _max_events:
                     break
                 if it not in _selected and _div_can_add(it, _selected):
                     _sel_append(it)
-                    _plat_added += 1
-                    if len(_selected) >= _max_events:
-                        break
-        # Phase-3: fill remaining from any bigtech (non-platform first, then platform up to cap)
-        if len(_selected) < _max_events:
-            _bt_nonplat = [it for it in _bt_pool_sorted if not _is_platform_domain(it)]
-            for it in _bt_nonplat:
+        # Phase-1c: rescue non-platform bigtech (even non-actionable) to reach 6
+        if len(_selected) < _p71_actionable_target:
+            for it in _p71_pool_c:
+                if len(_selected) >= _p71_actionable_target:
+                    break
                 if it not in _selected and _div_can_add(it, _selected):
                     _sel_append(it)
-                    if len(_selected) >= _max_events:
-                        break
+        _p71_actionable_count = sum(1 for s in _selected if _ct71_is_bigtech_actionable(s))
+        _log.info("iter71 Phase-1 (actionable-first): skeleton=%d actionable=%d domains=%d vendors=%d",
+                  len(_selected), _p71_actionable_count,
+                  len(set(_f6_domain_key(s) for s in _selected)),
+                  len(set(_f6_vendor_key(s) for s in _selected) - {"other"}))
+
+        # Phase-2: 7th slot — prefer non-platform actionable, then allow 1 platform or 1 research/tutorial
         if len(_selected) < _max_events:
-            _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
-            for it in _bt_pool_sorted:
-                if _is_platform_domain(it) and _plat_in_sel >= _PLATFORM_CAP:
-                    continue
-                if it not in _selected and _div_can_add(it, _selected):
+            _p71_filled = False
+            # Try non-platform actionable first
+            for it in (_p71_pool_a + _p71_pool_b + _p71_pool_c):
+                if _p71_filled:
+                    break
+                if it not in _selected and _div_can_add(it, _selected) and _ct71_is_bigtech_actionable(it):
                     _sel_append(it)
-                    if _is_platform_domain(it):
-                        _plat_in_sel += 1
-                    if len(_selected) >= _max_events:
+                    _p71_filled = True
+            # If still need slot, try platform (cap=1)
+            if not _p71_filled:
+                _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
+                if _plat_in_sel < _PLATFORM_CAP:
+                    for it in _p71_pool_plat:
+                        if it not in _selected and _div_can_add(it, _selected):
+                            _sel_append(it)
+                            _p71_filled = True
+                            break
+            # If still need slot, try research/tutorial (cap=1)
+            if not _p71_filled:
+                _rt_in_sel = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
+                if _rt_in_sel < 1:
+                    for it in _p71_pool_rt:
+                        if it not in _selected and _div_can_add(it, _selected):
+                            _sel_append(it)
+                            _p71_filled = True
+                            break
+            # Last resort: any non-platform bigtech with density pass
+            if not _p71_filled:
+                for it in _p71_pool_c:
+                    if it not in _selected and _div_can_add(it, _selected):
+                        _sel_append(it)
+                        _p71_filled = True
                         break
-        # iter70 Phase-4: supply rescue — try broader pool (bigtech items that are
-        # code_release or non-bt official/media, if density passes and not platform-capped)
-        if len(_selected) < _max_events:
-            _rescue_pool = _oa_partition([
-                it for it in _pool_300
-                if it not in _selected
-                and not _f6_is_dev_noise(it)
-                and _f6_is_bigtech(it)
-                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
-            ])
-            _plat_in_sel_r = sum(1 for s in _selected if _is_platform_domain(s))
-            for it in _rescue_pool:
-                if _is_platform_domain(it) and _plat_in_sel_r >= _PLATFORM_CAP:
-                    continue
-                if _div_can_add(it, _selected):
-                    _sel_append(it)
-                    if _is_platform_domain(it):
-                        _plat_in_sel_r += 1
-                    if len(_selected) >= _max_events:
-                        break
-            _log.info("iter70 Phase-4 supply rescue: selected=%d after rescue", len(_selected))
-        # iter70 Phase-5: 2-step swap — if at 6, try swapping an existing item with a pair
-        # that produces a net +1 (swap 1 out, add 2 back) while keeping all gates valid
+
+        # Phase-3: 2-step swap (iter70 legacy — if at 6, try swap 1 for 2)
         _swap_attempts = 0
         _swap_successes = 0
         if len(_selected) < _max_events and len(_selected) >= _max_events - 1:
-            # We're at 6, need 7. Try removing each selected item and seeing if we can
-            # add 2 items from the pool that satisfy all diversity constraints
             _swap_pool = _oa_partition([
                 it for it in _pool_300
                 if it not in _selected
@@ -7408,7 +7506,6 @@ def _f600_run_fast_path(
                 _swap_attempts += 1
                 _removed = _selected[_si]
                 _test_sel = [s for j, s in enumerate(_selected) if j != _si]
-                # Try to find 2 items that fit the slot left by removing _removed
                 _add_pair = []
                 _plat_test = sum(1 for s in _test_sel if _is_platform_domain(s))
                 for _sc in _swap_pool:
@@ -7427,20 +7524,28 @@ def _f600_run_fast_path(
                         if len(_add_pair) >= 2:
                             break
                 if len(_add_pair) == 2:
-                    # Verify the full set passes all constraints
                     _new_sel = _test_sel + _add_pair
                     _ndc = _DivCounter(_f6_domain_key(s) for s in _new_sel)
                     _nvc = _DivCounter(_f6_vendor_key(s) for s in _new_sel)
                     _n_plat = sum(1 for s in _new_sel if _is_platform_domain(s))
+                    # iter71: also verify actionable count >= 6 after swap
+                    _n_act = sum(1 for s in _new_sel if _ct71_is_bigtech_actionable(s))
+                    _n_rt = sum(1 for s in _new_sel if _ct71_is_research_tutorial(s))
                     if (_ndc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
                             and _nvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
                             and len(_ndc) >= _DIV_MIN_DOMAINS
                             and len(set(_f6_vendor_key(s) for s in _new_sel) - {"other"}) >= _DIV_MIN_VENDORS
-                            and _n_plat <= _PLATFORM_CAP):
+                            and _n_plat <= _PLATFORM_CAP
+                            and _n_rt <= 1):
                         _selected[:] = _new_sel
                         _swap_successes += 1
-                        _log.info("iter70 Phase-5: 2-step swap success at idx=%d, selected=%d", _si, len(_selected))
+                        _log.info("iter71 Phase-3: 2-step swap success at idx=%d, selected=%d actionable=%d", _si, len(_selected), _n_act)
                         break
+        _log.info("iter71 selection done: selected=%d actionable=%d plat=%d rt=%d",
+                  len(_selected),
+                  sum(1 for s in _selected if _ct71_is_bigtech_actionable(s)),
+                  sum(1 for s in _selected if _is_platform_domain(s)),
+                  sum(1 for s in _selected if _ct71_is_research_tutorial(s)))
     else:
         # Non-daily: no swap tracking needed
         _swap_attempts = 0
@@ -8496,6 +8601,93 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY", _pdc_fail_reason)
+
+    # --- iter71: content_mix.meta.json + BIGTECH_ACTIONABLE_MIN + RESEARCH_TUTORIAL_CAP gates ---
+    _cm71_bt_actionable = sum(1 for s in _selected if _ct71_is_bigtech_actionable(s))
+    _cm71_rt_total = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
+    _cm71_per_item = []
+    for _cm71_s in _selected:
+        _cm71_per_item.append({
+            "title": str(getattr(_cm71_s, "title", "") or "")[:120],
+            "url": str(getattr(_cm71_s, "url", "") or getattr(_cm71_s, "link", "") or "")[:200],
+            "vendor": _f6_vendor_key(_cm71_s),
+            "domain": _f6_domain_key(_cm71_s),
+            "content_type": _ct71_classify(_cm71_s),
+            "bigtech_actionable": _ct71_is_bigtech_actionable(_cm71_s),
+            "is_platform": _is_platform_domain(_cm71_s),
+            "is_research_tutorial": _ct71_is_research_tutorial(_cm71_s),
+        })
+
+    # injection support
+    _cm71_inject_plat = os.environ.get("INJECT_PLATFORM_DOMAIN_TOTAL", "")
+    _cm71_inject_rt = os.environ.get("INJECT_RESEARCH_TUTORIAL_TOTAL", "")
+    _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
+    _cm71_rt_total_check = _cm71_rt_total
+    _cm71_rt_is_injected = bool(_cm71_inject_rt)
+    if _cm71_rt_is_injected:
+        try:
+            _cm71_rt_total_check = int(_cm71_inject_rt)
+        except ValueError:
+            pass
+        _log.info("INJECT_RESEARCH_TUTORIAL_TOTAL=%s: research_tutorial_total overridden", _cm71_inject_rt)
+
+    _cm71_bt_act_pass = (_cm71_bt_actionable >= 6)
+    _cm71_plat_pass = (_cm71_plat_total_check <= _PLATFORM_CAP)
+    _cm71_rt_pass = (_cm71_rt_total_check <= 1)
+
+    try:
+        _cm71_path = _outputs / "content_mix.meta.json"
+        _cm71_meta = {
+            "run_id": _run_id,
+            "selected_events": len(_selected),
+            "bigtech_actionable_count": _cm71_bt_actionable,
+            "bigtech_actionable_min": 6,
+            "bigtech_actionable_pass": _cm71_bt_act_pass,
+            "platform_total": _cm71_plat_total_check,
+            "platform_cap": _PLATFORM_CAP,
+            "platform_cap_pass": _cm71_plat_pass,
+            "research_tutorial_total": _cm71_rt_total_check,
+            "research_tutorial_cap": 1,
+            "research_tutorial_cap_pass": _cm71_rt_pass,
+            "selected_content_types": _cm71_per_item,
+        }
+        if _cm71_rt_is_injected:
+            _cm71_meta["research_tutorial_test_injected"] = True
+            _cm71_meta["injected_research_tutorial_total"] = _cm71_inject_rt
+        if _pdc_is_injected:
+            _cm71_meta["platform_test_injected"] = True
+            _cm71_meta["injected_platform_total"] = _pdc_inject
+        _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as _cm71_exc:
+        _log.warning("content_mix.meta.json write failed: %s", _cm71_exc)
+
+    # BIGTECH_ACTIONABLE_MIN_HARD_DAILY gate
+    if _is_daily and not _cm71_bt_act_pass:
+        _cm71_bt_fail = f"BIGTECH_ACTIONABLE_MIN_HARD_DAILY_FAIL: actionable={_cm71_bt_actionable} < 6"
+        _write_not_ready_report_md(
+            "BIGTECH_ACTIONABLE_MIN_HARD_DAILY",
+            _cm71_bt_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("BIGTECH_ACTIONABLE_MIN_HARD_DAILY", _cm71_bt_fail)
+
+    # RESEARCH_TUTORIAL_CAP_HARD_DAILY gate
+    if _is_daily and not _cm71_rt_pass:
+        _cm71_rt_fail = f"RESEARCH_TUTORIAL_CAP_HARD_DAILY_FAIL: research_tutorial_total={_cm71_rt_total_check} > 1"
+        if _cm71_rt_is_injected:
+            _cm71_rt_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "RESEARCH_TUTORIAL_CAP_HARD_DAILY",
+            _cm71_rt_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("RESEARCH_TUTORIAL_CAP_HARD_DAILY", _cm71_rt_fail)
 
     # iter53: BIGTECH_DIVERSITY gate (DAILY only)
     if _is_daily and not _div_pass:
