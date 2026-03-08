@@ -7524,22 +7524,22 @@ def _f600_run_fast_path(
             return _sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0) >= _SD72_MIN
 
         # Pool BOMA: bigtech_official_media_actionable + non-platform + non-rt + density pass
+        # iter72b: use _pool_300 — source_class has broader official/media detection than legacy _f6_src_type
+        # Note: strategic_density_score >= 10 enforced by post-selection gate, not pool filter
         _p72_pool_boma = _oa_partition([
-            it for it in _bt_om_pool_sorted
+            it for it in _pool_300
             if not _is_platform_domain(it)
             and _ct72b_is_bigtech_official_media_actionable(it)
             and not _ct71_is_research_tutorial(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
-            and _sd72_pass(it)
         ])
         # Pool BTA: bigtech_actionable (non-official/media) + non-platform + non-rt
         _p72_pool_bta = _oa_partition([
-            it for it in _bt_pool_sorted
+            it for it in _pool_300
             if not _is_platform_domain(it)
             and _ct71_is_bigtech_actionable(it)
             and not _ct71_is_research_tutorial(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
-            and _sd72_pass(it)
             and not _ct72b_is_bigtech_official_media_actionable(it)
         ])
         # Pool C: bigtech + non-platform + density-pass (rescue — may include non-actionable)
@@ -7564,13 +7564,13 @@ def _f600_run_fast_path(
         ])
 
         # Phase-1: fill 4 bigtech_official_media_actionable with strategic_bucket diversity
-        _p72_target_buckets = {"product", "distribution", "ecosystem"}
-        _p72_need_one_of = {"economics", "leadership", "governance"}
         _p72_used_buckets = set()
-        # Try to cover required buckets first
-        for _req_bucket in list(_p72_target_buckets) + list(_p72_need_one_of):
+        # 1a: try to pick one from each target bucket first (best-effort diversity)
+        for _req_bucket in ["product", "distribution", "ecosystem", "economics", "leadership", "governance"]:
             if len(_selected) >= 4:
                 break
+            if _req_bucket in _p72_used_buckets:
+                continue
             for it in _p72_pool_boma:
                 if it in _selected:
                     continue
@@ -7578,7 +7578,7 @@ def _f600_run_fast_path(
                     _sel_append(it)
                     _p72_used_buckets.add(_req_bucket)
                     break
-        # Fill remaining to 4 from BOMA pool
+        # 1b: fill remaining to 4 from BOMA pool (any bucket)
         for it in _p72_pool_boma:
             if len(_selected) >= 4:
                 break
@@ -7586,6 +7586,9 @@ def _f600_run_fast_path(
                 _sel_append(it)
                 _p72_used_buckets.add(_ct72b_strategic_bucket(it))
 
+        _log.info("iter72b pools: boma=%d bta=%d pool_c=%d plat=%d rt=%d",
+                  len(_p72_pool_boma), len(_p72_pool_bta), len(_p72_pool_c),
+                  len(_p72_pool_plat), len(_p72_pool_rt))
         _log.info("iter72b Phase-1 (CEO skeleton): selected=%d buckets=%s domains=%d vendors=%d",
                   len(_selected), sorted(_p72_used_buckets),
                   len(set(_f6_domain_key(s) for s in _selected)),
