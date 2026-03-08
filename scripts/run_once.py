@@ -7921,41 +7921,85 @@ def _f600_run_fast_path(
     if _is_daily and len(_selected) >= _max_events:
         _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
         if _plat_in_sel > _PLATFORM_CAP:
-            # Build non-platform replacement pool (bigtech+om, not already selected)
+            # Build non-platform replacement pool: must have density >= threshold to avoid density gate fail
             _plat_repl_pool = [it for it in _f6_tier(300) if it not in _selected
                                and not _is_platform_domain(it)
-                               and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
-            # Also allow non-official bigtech as fallback
-            _plat_repl_pool2 = [it for it in _f6_tier(300) if it not in _selected
-                                and not _is_platform_domain(it)
-                                and _f6_is_bigtech(it) and it not in _plat_repl_pool]
-            _plat_repl_all = _plat_repl_pool + _plat_repl_pool2
+                               and _f6_is_bigtech(it)
+                               and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
             for _plat_swap_round in range(20):
                 _plat_count = sum(1 for s in _selected if _is_platform_domain(s))
                 if _plat_count <= _PLATFORM_CAP:
                     break
-                if not _plat_repl_all:
+                if not _plat_repl_pool:
                     break
                 # Find worst platform item to replace (lowest sort key)
                 _plat_items = [(i, s) for i, s in enumerate(_selected) if _is_platform_domain(s)]
                 _plat_worst_idx, _plat_worst = min(_plat_items, key=lambda x: _f6_sort_key(x[1]))
                 # Find best replacement that doesn't break diversity
                 _plat_swapped = False
-                for _ri, _rcand in enumerate(_plat_repl_all):
+                for _ri, _rcand in enumerate(_plat_repl_pool):
                     _test_sel = [s for j, s in enumerate(_selected) if j != _plat_worst_idx] + [_rcand]
                     _test_dc = _DivCounter(_f6_domain_key(s) for s in _test_sel)
                     _test_vc = _DivCounter(_f6_vendor_key(s) for s in _test_sel)
                     _test_max_dc = _test_dc.most_common(1)[0][1]
                     _test_max_vc = _test_vc.most_common(1)[0][1]
                     if _test_max_dc <= _DIV_MAX_DOMAIN and _test_max_vc <= _DIV_MAX_VENDOR:
-                        _log.info("iter68 platform swap: replaced idx=%d (%s) with (%s/%s)",
-                                  _plat_worst_idx, _f6_domain_key(_plat_worst), _f6_domain_key(_rcand), _f6_vendor_key(_rcand))
+                        _log.info("iter68 platform swap: replaced idx=%d (%s/%s) with (%s/%s)",
+                                  _plat_worst_idx, _f6_domain_key(_plat_worst), _f6_vendor_key(_plat_worst),
+                                  _f6_domain_key(_rcand), _f6_vendor_key(_rcand))
                         _selected[_plat_worst_idx] = _rcand
-                        _plat_repl_all.pop(_ri)
+                        _plat_repl_pool.pop(_ri)
                         _plat_swapped = True
                         break
                 if not _plat_swapped:
-                    break
+                    # Two-step swap: free vendor slot by replacing a non-platform item, then replace platform
+                    _freed = False
+                    for _pi, _ps in _plat_items:
+                        _plat_vk = _f6_vendor_key(_ps)
+                        _cur_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
+                        # Find a non-platform selected item whose vendor slot we can free
+                        for _ni, _ns in enumerate(_selected):
+                            if _is_platform_domain(_ns) or _ni == _pi:
+                                continue
+                            _ns_vk = _f6_vendor_key(_ns)
+                            # Try replacing _ns with a different-vendor candidate, then _ps with a same-vendor-as-_ns candidate
+                            for _r2i, _r2 in enumerate(_plat_repl_pool):
+                                _r2_vk = _f6_vendor_key(_r2)
+                                if _r2_vk == _ns_vk:
+                                    continue  # same vendor doesn't help
+                                _test2 = list(_selected)
+                                _test2[_ni] = _r2
+                                _test2_dc = _DivCounter(_f6_domain_key(s) for s in _test2)
+                                _test2_vc = _DivCounter(_f6_vendor_key(s) for s in _test2)
+                                if _test2_dc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN and _test2_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR:
+                                    # Now try to replace platform item _ps
+                                    for _r3i, _r3 in enumerate(_plat_repl_pool):
+                                        if _r3i == _r2i:
+                                            continue
+                                        _test3 = list(_test2)
+                                        _test3[_pi] = _r3
+                                        _test3_dc = _DivCounter(_f6_domain_key(s) for s in _test3)
+                                        _test3_vc = _DivCounter(_f6_vendor_key(s) for s in _test3)
+                                        _test3_plat = sum(1 for s in _test3 if _is_platform_domain(s))
+                                        if (_test3_dc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                                                and _test3_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                                                and _test3_plat < _plat_count):
+                                            _log.info("iter68 platform two-step swap: step1 idx=%d→(%s/%s) step2 idx=%d→(%s/%s)",
+                                                      _ni, _f6_domain_key(_r2), _f6_vendor_key(_r2),
+                                                      _pi, _f6_domain_key(_r3), _f6_vendor_key(_r3))
+                                            _selected[_ni] = _r2
+                                            _selected[_pi] = _r3
+                                            _plat_repl_pool = [x for x in _plat_repl_pool if x is not _r2 and x is not _r3]
+                                            _freed = True
+                                            break
+                                    if _freed:
+                                        break
+                            if _freed:
+                                break
+                        if _freed:
+                            break
+                    if not _freed:
+                        break
             _plat_final = sum(1 for s in _selected if _is_platform_domain(s))
             _log.info("iter68 platform swap: final platform_count=%d (cap=%d)", _plat_final, _PLATFORM_CAP)
             if _plat_final != _plat_in_sel:
