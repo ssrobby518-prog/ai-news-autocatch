@@ -53,6 +53,7 @@ if (Test-Path $cmFp) {
         $fpLines += "china_ai_gov_count = $($cmD.china_ai_gov_count)"
         $fpLines += "platform_total = $($cmD.platform_total)"
         $fpLines += "research_tutorial_total = $($cmD.research_tutorial_total)"
+        $fpLines += "google_research_total = $($cmD.google_research_total)"
         $fpLines += "strategic_buckets_distinct = $($cmD.selected_strategic_buckets_distinct)"
     } catch {}
 }

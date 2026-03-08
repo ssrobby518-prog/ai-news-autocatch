@@ -5329,7 +5329,7 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter72b: BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY — bigtech_official_media_count >= 6
+# iter74: BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY — bigtech_official_media_count >= 7 (was 6)
 #   Reads content_mix.meta.json
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
@@ -5347,7 +5347,7 @@ if ($_fast300Daily) {
                 Write-Output "  test_injected                : True"
             }
             if (-not $_bomPass) {
-                $_bomFail = ("BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY_FAIL: official_media={0} < 6" -f $_bomCount)
+                $_bomFail = ("BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY_FAIL: official_media={0} < 7" -f $_bomCount)
                 Write-Output ("  => FAIL: {0}" -f $_bomFail)
                 Invoke-VerifyOnlineFailFast -Gate "BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY" -Reason $_bomFail
             }
@@ -5357,6 +5357,38 @@ if ($_fast300Daily) {
         }
     } else {
         Write-Output "  BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter74: GOOGLE_RESEARCH_CAP_HARD_DAILY — google_research_total <= 1
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_grtMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "GOOGLE_RESEARCH_CAP_HARD_DAILY:"
+    if (Test-Path $_grtMetaPath) {
+        try {
+            $_grtMeta = Get-Content $_grtMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_grtCount  = if ($_grtMeta.PSObject.Properties['google_research_total']) { [int]$_grtMeta.google_research_total } else { 0 }
+            $_grtPass   = if ($_grtMeta.PSObject.Properties['google_research_cap_pass']) { $_grtMeta.google_research_cap_pass } else { $false }
+            $_grtInjected = if ($_grtMeta.PSObject.Properties['google_research_test_injected']) { $_grtMeta.google_research_test_injected } else { $false }
+            Write-Output ("  google_research_total : {0}" -f $_grtCount)
+            Write-Output ("  google_research_pass  : {0}" -f $_grtPass)
+            if ($_grtInjected) {
+                Write-Output "  test_injected          : True"
+            }
+            if (-not $_grtPass) {
+                $_grtFail = ("GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: google_research_total={0} > 1" -f $_grtCount)
+                Write-Output ("  => FAIL: {0}" -f $_grtFail)
+                Invoke-VerifyOnlineFailFast -Gate "GOOGLE_RESEARCH_CAP_HARD_DAILY" -Reason $_grtFail
+            }
+            Write-Output "  => GOOGLE_RESEARCH_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  GOOGLE_RESEARCH_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  GOOGLE_RESEARCH_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
     }
 }
 Write-Output ""
@@ -5652,6 +5684,7 @@ if (Test-Path $_fpCmPath) {
         Write-Output ("china_ai_gov_count              = {0}" -f $(if ($_fpCm.PSObject.Properties['china_ai_gov_count']) { $_fpCm.china_ai_gov_count } else { "N/A" }))
         Write-Output ("platform_total                  = {0}" -f $(if ($_fpCm.PSObject.Properties['platform_total']) { $_fpCm.platform_total } else { "N/A" }))
         Write-Output ("research_tutorial_total          = {0}" -f $(if ($_fpCm.PSObject.Properties['research_tutorial_total']) { $_fpCm.research_tutorial_total } else { "N/A" }))
+        Write-Output ("google_research_total            = {0}" -f $(if ($_fpCm.PSObject.Properties['google_research_total']) { $_fpCm.google_research_total } else { "N/A" }))
         Write-Output ("selected_strategic_buckets_distinct = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_strategic_buckets_distinct']) { $_fpCm.selected_strategic_buckets_distinct } else { "N/A" }))
     } catch {}
 }

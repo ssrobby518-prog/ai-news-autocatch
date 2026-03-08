@@ -165,6 +165,7 @@ if (Test-Path $cmPath) {
         Write-Log "china_ai_gov_count      = $(if ($cmMeta.PSObject.Properties['china_ai_gov_count']) { $cmMeta.china_ai_gov_count } else { 'N/A' })"
         Write-Log "platform_total          = $(if ($cmMeta.PSObject.Properties['platform_total']) { $cmMeta.platform_total } else { 'N/A' })"
         Write-Log "research_tutorial_total  = $(if ($cmMeta.PSObject.Properties['research_tutorial_total']) { $cmMeta.research_tutorial_total } else { 'N/A' })"
+        Write-Log "google_research_total    = $(if ($cmMeta.PSObject.Properties['google_research_total']) { $cmMeta.google_research_total } else { 'N/A' })"
         Write-Log "strategic_buckets_distinct = $(if ($cmMeta.PSObject.Properties['selected_strategic_buckets_distinct']) { $cmMeta.selected_strategic_buckets_distinct } else { 'N/A' })"
     } catch {}
 }

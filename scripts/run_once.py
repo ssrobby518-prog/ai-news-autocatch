@@ -7081,6 +7081,8 @@ def _f600_run_fast_path(
 
     # iter66: research blog domains (lower priority — still selectable but not preferred)
     _RESEARCH_BLOG_DOMAINS = {"blog.research.google", "research.google", "arxiv.org", "ar5iv.labs.arxiv.org"}
+    # iter74: Google Research Blog domain (hard cap <=1 in daily)
+    _GOOGLE_RESEARCH_BLOG_DOMAIN = "blog.research.google"
 
     # iter71→72b: content_type classification (regex/O(n)) — actionable vs restricted
     import re as _ct71_re
@@ -7412,6 +7414,10 @@ def _f600_run_fast_path(
         _dk = _f6_domain_key(it)
         return _dk in _RESEARCH_BLOG_DOMAINS
 
+    def _f6_is_google_research_blog(it) -> bool:
+        """iter74: True if domain is blog.research.google (hard cap <=1)."""
+        return _f6_domain_key(it) == _GOOGLE_RESEARCH_BLOG_DOMAIN
+
     def _f6_sort_key(it) -> tuple:
         """iter40→72b: bigtech-first, official/media first, strategic density, then fulltext.
         iter72b: bigtech_official_media_actionable priority + strategic_density_score."""
@@ -7419,7 +7425,7 @@ def _f600_run_fast_path(
         st = _f6_src_type(it)
         om = 2 if st in ("official", "media") else 0
         dn = -2 if _f6_is_dev_noise(it) else 0
-        rb = -1 if _f6_is_research_blog(it) else 0
+        rb = -3 if _f6_is_research_blog(it) else 0  # iter74: stronger penalty (was -1)
         # iter71→72b: actionable-type bonus
         _act71 = 3 if _ct71_is_actionable(it) else (-2 if _ct71_is_research_tutorial(it) else 0)
         # iter72b: bigtech_official_media_actionable super-priority
@@ -7644,21 +7650,24 @@ def _f600_run_fast_path(
         def _sd73_key(it):
             return -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0)
 
-        # Pool BOMA: bigtech_official_media_actionable + non-platform + non-rt + density pass
-        # Sorted by strategic_density_score DESC to prefer high-density items
+        # Pool BOMA: bigtech_official_media_actionable + non-platform + non-rt + non-google-research + density pass
+        # iter74: exclude blog.research.google from BOMA (demoted to Pool C/backup)
         _p72_pool_boma = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _ct72b_is_bigtech_official_media_actionable(it)
             and not _ct71_is_research_tutorial(it)
+            and not _f6_is_google_research_blog(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
-        # Pool BTA: bigtech_actionable (non-official/media) + non-platform + non-rt
+        # Pool BTA: bigtech_actionable (non-official/media) + non-platform + non-rt + non-google-research
+        # iter74: exclude blog.research.google
         _p72_pool_bta = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _ct71_is_bigtech_actionable(it)
             and not _ct71_is_research_tutorial(it)
+            and not _f6_is_google_research_blog(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             and not _ct72b_is_bigtech_official_media_actionable(it)
         ], key=_sd73_key))
@@ -7822,14 +7831,14 @@ def _f600_run_fast_path(
                     break
         _log.info("iter73 Phase-3 (china): selected=%d china_count=%d", len(_selected), _p73_china_count)
 
-        # Phase-4: fill bigtech_actionable_count >= 7 + BOMA >= 6
-        # Prefer BOMA (official/media), then BTA
+        # Phase-4: fill bigtech_actionable_count >= 7 + BOMA >= 7
+        # iter74: BOMA threshold raised from 6 to 7
         _p73_boma = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
         _p73_bta = sum(1 for s in _selected if _ct71_is_bigtech_actionable(s))
-        while (_p73_boma < 6 or _p73_bta < 7) and len(_selected) < _max_events:
+        while (_p73_boma < 7 or _p73_bta < 7) and len(_selected) < _max_events:
             _p73_f4 = False
             # prefer BOMA first
-            if _p73_boma < 6:
+            if _p73_boma < 7:
                 for it in _p72_pool_boma:
                     if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
                         _sel_append(it)
@@ -7951,7 +7960,8 @@ def _f600_run_fast_path(
                             and _p6nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
                             and sum(1 for s in _p6n if _is_platform_domain(s)) <= _PLATFORM_CAP
                             and sum(1 for s in _p6n if _ct71_is_research_tutorial(s)) <= 1
-                            and sum(1 for s in _p6n if _ct72b_is_bigtech_official_media_actionable(s)) >= 6
+                            and sum(1 for s in _p6n if _f6_is_google_research_blog(s)) <= 1  # iter74
+                            and sum(1 for s in _p6n if _ct72b_is_bigtech_official_media_actionable(s)) >= 7  # iter74
                             and _hdf_all_scores.get(id(_p6c), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and _sd73_pass(_p6c)):
                         _p6_best = (_p6i, _p6c)
@@ -8016,15 +8026,52 @@ def _f600_run_fast_path(
                         _log.info("iter73 Phase-7: 2-step swap at idx=%d, selected=%d", _p7_si, len(_selected))
                         break
 
+        # Phase-8 (iter74): google_research swap rescue — enforce <=1 google research blog
+        _p74_grt_count = sum(1 for s in _selected if _f6_is_google_research_blog(s))
+        while _p74_grt_count > 1:
+            _p74_swapped = False
+            for _p74_ri in range(len(_selected)):
+                if not _f6_is_google_research_blog(_selected[_p74_ri]):
+                    continue  # only swap out google research items
+                _p74_test = [s for j, s in enumerate(_selected) if j != _p74_ri]
+                for _p74_cand in _p73_all_pools:
+                    if _p74_cand in _p74_test or _f6_is_google_research_blog(_p74_cand):
+                        continue
+                    if _is_platform_domain(_p74_cand):
+                        if sum(1 for s in _p74_test if _is_platform_domain(s)) >= _PLATFORM_CAP:
+                            continue
+                    if _ct71_is_research_tutorial(_p74_cand):
+                        if sum(1 for s in _p74_test if _ct71_is_research_tutorial(s)) >= 1:
+                            continue
+                    _p74_n = _p74_test + [_p74_cand]
+                    _p74_nd = _DivCounter(_f6_domain_key(s) for s in _p74_n)
+                    _p74_nv = _DivCounter(_f6_vendor_key(s) for s in _p74_n)
+                    if (_p74_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p74_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _hdf_all_scores.get(id(_p74_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                            and sum(1 for s in _p74_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 7):
+                        _selected[_p74_ri] = _p74_cand
+                        _p74_grt_count = sum(1 for s in _selected if _f6_is_google_research_blog(s))
+                        _swap_successes += 1
+                        _log.info("iter74 Phase-8 google_research swap: idx=%d, grt_count=%d", _p74_ri, _p74_grt_count)
+                        _p74_swapped = True
+                        break
+                if _p74_swapped:
+                    break
+            if not _p74_swapped:
+                _log.warning("iter74 Phase-8: unable to reduce google_research_total below %d", _p74_grt_count)
+                break
+
         if len(_selected) < _max_events:
             _log.warning("iter73 FAIL: selected=%d < target=%d", len(_selected), _max_events)
 
-        _log.info("iter73 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d lp=%d china=%d buckets=%s",
+        _log.info("iter74 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d grt=%d lp=%d china=%d buckets=%s",
                   len(_selected),
                   sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s)),
                   sum(1 for s in _selected if _ct71_is_bigtech_actionable(s)),
                   sum(1 for s in _selected if _is_platform_domain(s)),
                   sum(1 for s in _selected if _ct71_is_research_tutorial(s)),
+                  sum(1 for s in _selected if _f6_is_google_research_blog(s)),
                   sum(1 for s in _selected if _is_leadership_politics_ai(s)),
                   sum(1 for s in _selected if _is_china_ai_gov(s)),
                   sorted(set(_ct72b_strategic_bucket(s) for s in _selected)))
@@ -9255,6 +9302,7 @@ def _f600_run_fast_path(
     _cm71_rt_total = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
     _cm73_lp_count = sum(1 for s in _selected if _is_leadership_politics_ai(s))
     _cm73_china_count = sum(1 for s in _selected if _is_china_ai_gov(s))
+    _cm74_google_research_total = sum(1 for s in _selected if _f6_is_google_research_blog(s))  # iter74
     _cm72_strategic_buckets = sorted(set(_ct72b_strategic_bucket(s) for s in _selected))
     _cm72_strategic_buckets_distinct = len(_cm72_strategic_buckets)
     _cm71_per_item = []
@@ -9275,6 +9323,7 @@ def _f600_run_fast_path(
             "china_ai_gov": _is_china_ai_gov(_cm71_s),
             "is_platform": _is_platform_domain(_cm71_s),
             "is_research_tutorial": _ct71_is_research_tutorial(_cm71_s),
+            "is_google_research_blog": _f6_is_google_research_blog(_cm71_s),
             "strategic_density_score": _sd_item.get("strategic_density_score", 0),
             "strategic_density_floor_pass": _sd_item.get("strategic_density_score", 0) >= _cm73_sd_floor,
         })
@@ -9285,15 +9334,18 @@ def _f600_run_fast_path(
     _cm72_inject_bom = os.environ.get("INJECT_BIGTECH_OFFICIAL_MEDIA_COUNT", "")
     _cm73_inject_lp = os.environ.get("INJECT_LEADERSHIP_POLITICS_AI_COUNT", "")
     _cm73_inject_china = os.environ.get("INJECT_CHINA_AI_GOV_COUNT", "")
+    _cm74_inject_grt = os.environ.get("INJECT_GOOGLE_RESEARCH_TOTAL", "")  # iter74
     _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
     _cm71_rt_total_check = _cm71_rt_total
     _cm72_bom_check = _cm72_bt_om_actionable
     _cm73_lp_check = _cm73_lp_count
     _cm73_china_check = _cm73_china_count
+    _cm74_grt_check = _cm74_google_research_total
     _cm71_rt_is_injected = bool(_cm71_inject_rt)
     _cm72_bom_is_injected = bool(_cm72_inject_bom)
     _cm73_lp_is_injected = bool(_cm73_inject_lp)
     _cm73_china_is_injected = bool(_cm73_inject_china)
+    _cm74_grt_is_injected = bool(_cm74_inject_grt)
     if _cm71_rt_is_injected:
         try:
             _cm71_rt_total_check = int(_cm71_inject_rt)
@@ -9318,14 +9370,21 @@ def _f600_run_fast_path(
         except ValueError:
             pass
         _log.info("INJECT_CHINA_AI_GOV_COUNT=%s: china_ai_gov_count overridden", _cm73_inject_china)
+    if _cm74_grt_is_injected:
+        try:
+            _cm74_grt_check = int(_cm74_inject_grt)
+        except ValueError:
+            pass
+        _log.info("INJECT_GOOGLE_RESEARCH_TOTAL=%s: google_research_total overridden", _cm74_inject_grt)
 
     _cm71_bt_act_pass = (_cm71_bt_actionable >= 7)  # iter73: was 6
-    _cm72_bom_pass = (_cm72_bom_check >= 6)
+    _cm72_bom_pass = (_cm72_bom_check >= 7)  # iter74: raised from 6 to 7
     _cm71_plat_pass = (_cm71_plat_total_check <= _PLATFORM_CAP)
     _cm71_rt_pass = (_cm71_rt_total_check <= 1)
     _cm72_bucket_pass = (_cm72_strategic_buckets_distinct >= 5)  # iter73: was 4
     _cm73_lp_pass = (_cm73_lp_check >= 2)  # iter73: new
     _cm73_china_pass = (_cm73_china_check >= 1)  # iter73: new
+    _cm74_grt_pass = (_cm74_grt_check <= 1)  # iter74: google research blog <= 1
     _cm73_total_pass = (len(_selected) >= 10)  # iter73: new
 
     try:
@@ -9339,7 +9398,7 @@ def _f600_run_fast_path(
             "bigtech_actionable_min": 7,
             "bigtech_actionable_min_pass": _cm71_bt_act_pass,
             "bigtech_official_media_count": _cm72_bom_check,
-            "bigtech_official_media_min": 6,
+            "bigtech_official_media_min": 7,  # iter74: raised from 6
             "bigtech_official_media_min_pass": _cm72_bom_pass,
             "leadership_politics_ai_count": _cm73_lp_check,
             "leadership_politics_ai_min": 2,
@@ -9353,6 +9412,9 @@ def _f600_run_fast_path(
             "research_tutorial_total": _cm71_rt_total_check,
             "research_tutorial_cap": 1,
             "research_tutorial_cap_pass": _cm71_rt_pass,
+            "google_research_total": _cm74_grt_check,
+            "google_research_cap": 1,
+            "google_research_cap_pass": _cm74_grt_pass,
             "selected_strategic_buckets": _cm72_strategic_buckets,
             "selected_strategic_buckets_distinct": _cm72_strategic_buckets_distinct,
             "strategic_bucket_coverage_min": 5,
@@ -9383,6 +9445,9 @@ def _f600_run_fast_path(
         if _cm73_china_is_injected:
             _cm71_meta["china_ai_gov_test_injected"] = True
             _cm71_meta["injected_china_ai_gov_count"] = _cm73_inject_china
+        if _cm74_grt_is_injected:
+            _cm71_meta["google_research_test_injected"] = True
+            _cm71_meta["injected_google_research_total"] = _cm74_inject_grt
         _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _cm71_exc:
         _log.warning("content_mix.meta.json write failed: %s", _cm71_exc)
@@ -9415,7 +9480,7 @@ def _f600_run_fast_path(
 
     # iter72b: BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY gate (B2)
     if _is_daily and not _cm72_bom_pass:
-        _cm72_bom_fail = f"BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY_FAIL: official_media={_cm72_bom_check} < 6"
+        _cm72_bom_fail = f"BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY_FAIL: official_media={_cm72_bom_check} < 7"
         if _cm72_bom_is_injected:
             _cm72_bom_fail += " [test_injected=true]"
         _write_not_ready_report_md(
@@ -9485,6 +9550,21 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("CHINA_AI_GOV_MIN_HARD_DAILY", _cm73_china_fail)
+
+    # iter74: GOOGLE_RESEARCH_CAP_HARD_DAILY gate (B7b) — google research blog <= 1
+    if _is_daily and not _cm74_grt_pass:
+        _cm74_grt_fail = f"GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: google_research_total={_cm74_grt_check} > 1"
+        if _cm74_grt_is_injected:
+            _cm74_grt_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "GOOGLE_RESEARCH_CAP_HARD_DAILY",
+            _cm74_grt_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("GOOGLE_RESEARCH_CAP_HARD_DAILY", _cm74_grt_fail)
 
     # iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY gate (B7) — each item >= 15
     if _is_daily and not _cm73_per_item_sd_pass:
