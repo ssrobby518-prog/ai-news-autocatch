@@ -7242,6 +7242,7 @@ def _f600_run_fast_path(
     # iter71→72b: BIGTECH_ACTIONABLE vendor set (expanded iter72b: +Adobe +Figma)
     _CT71_BIGTECH_VENDORS = frozenset({
         "Google", "Microsoft", "OpenAI", "NVIDIA", "Amazon", "Anthropic", "Meta", "Apple", "Samsung", "Adobe", "Figma",
+        "Mistral", "DeepSeek", "Baidu", "Alibaba", "xAI",  # iter77: major AI cos for CEO-grade coverage
     })
 
     def _ct71_is_bigtech_actionable(it) -> bool:
@@ -7418,6 +7419,55 @@ def _f600_run_fast_path(
         """iter74: True if domain is blog.research.google (hard cap <=1)."""
         return _f6_domain_key(it) == _GOOGLE_RESEARCH_BLOG_DOMAIN
 
+    # iter77: forum_discussion classification
+    _FORUM_DOMAINS = frozenset({"discuss.huggingface.co", "forum.huggingface.co"})
+    _FORUM_TITLE_RE = _ct71_re.compile(
+        r'(?:'
+        r'\bforum\b|\bdiscuss(?:ion)?\b|\bthread\b|\bcommunity\s+discussion\b'
+        r'|\blong\s+sessions?\b|\bprompt\s+drift\b|\banyone\s+else\s+seeing\b'
+        r'|\bworkaround\b|\bdiscourse\b|\buser\s+post\b'
+        r')', _ct71_re.I)
+
+    def _is_forum_discussion(it) -> bool:
+        _dk = _f6_domain_key(it)
+        if _dk in _FORUM_DOMAINS:
+            return True
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        if _FORUM_TITLE_RE.search(_title + " " + _snippet):
+            if _ct72b_source_class(it) in ("official", "media"):
+                return False
+            return True
+        return False
+
+    # iter77: tutorial_explainer classification
+    _TUTORIAL_TITLE_RE = _ct71_re.compile(
+        r'(?:'
+        r'\bhow\s+to\b|\btutorial\b|\bguide\b|\bwalkthrough\b'
+        r'|\bdeep\s+dive\b|\bbeginner\b|\bgetting\s+started\b'
+        r'|\bintroduction\s+to\b|\bdeploying?\b|\bdeployment\b'
+        r'|\bon\s+Jetson\b|\bdeploying\s+open\s+source\b'
+        r')', _ct71_re.I)
+    _TUTORIAL_ZH_RE = _ct71_re.compile(r'(?:教學|指南|入門|部署|教你|如何使用)')
+
+    # iter77: tutorial/explainer/how-to content types (NOT research_blog — research is OK up to rt_cap=1)
+    _TUTORIAL_CONTENT_TYPES = frozenset({"tutorial", "how_to", "explainer"})
+
+    def _is_tutorial_explainer(it) -> bool:
+        # iter77: official/media exemption (bigtech official blogs are CEO-grade intel)
+        _sc = _ct72b_source_class(it)
+        if _sc in ("official", "media"):
+            return False
+        # catch tutorial/how_to/explainer content types (NOT research_blog)
+        if _ct71_classify(it) in _TUTORIAL_CONTENT_TYPES:
+            return True
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        _blob = _title + " " + _snippet
+        if _TUTORIAL_TITLE_RE.search(_blob) or _TUTORIAL_ZH_RE.search(_blob):
+            return True
+        return False
+
     # iter75: developer_release / indie_dev_tone classification
     # NOTE: github.com is already handled by _PLATFORM_DOMAINS (platform cap).
     # This classifier targets repo-release-style items from ANY domain.
@@ -7489,9 +7539,12 @@ def _f600_run_fast_path(
         om = 2 if st in ("official", "media") else 0
         dn = -2 if _f6_is_dev_noise(it) else 0
         rb = -3 if _f6_is_research_blog(it) else 0  # iter74: stronger penalty (was -1)
-        # iter75: developer_release / indie_dev_tone penalty
+        # iter75→77: developer_release / indie_dev_tone / forum / tutorial / google_research penalty
         _devrel_p = -5 if _is_developer_release(it) else 0
         _indie_p = -4 if _is_indie_dev_tone(it) else 0
+        _forum_p = -6 if _is_forum_discussion(it) else 0
+        _tutorial_p = -5 if _is_tutorial_explainer(it) else 0
+        _gresearch_p = -4 if _f6_is_google_research_blog(it) else 0
         # iter71→72b: actionable-type bonus
         _act71 = 3 if _ct71_is_actionable(it) else (-2 if _ct71_is_research_tutorial(it) else 0)
         # iter72b: bigtech_official_media_actionable super-priority
@@ -7507,7 +7560,7 @@ def _f600_run_fast_path(
         else:
             df_penalty = 0
         ftl = int(getattr(it, "fulltext_len", 0) or 0)
-        return (bt, om, _boma, _act71, rb, _devrel_p, _indie_p, dn, df_penalty, _sds, pss, ftl, _f6_bfp(it))
+        return (bt, om, _boma, _act71, rb, _forum_p, _devrel_p, _indie_p, _tutorial_p, _gresearch_p, dn, df_penalty, _sds, pss, ftl, _f6_bfp(it))
 
     def _f6_tier(min_len: int) -> list:
         return sorted(
@@ -7722,36 +7775,37 @@ def _f600_run_fast_path(
         def _sd73_key(it):
             return -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0)
 
-        # iter75: exclusion helper — developer_release or indie_dev_tone
+        # iter75→77: exclusion helper — all CEO-prohibited item types
         def _is_devrel_or_indie(it) -> bool:
             return _is_developer_release(it) or _is_indie_dev_tone(it)
 
-        # Pool BOMA: bigtech_official_media_actionable + non-platform + non-rt + non-google-research + density pass
-        # iter74: exclude blog.research.google from BOMA (demoted to Pool C/backup)
-        # iter75: exclude developer_release / indie_dev_tone
+        def _is_ceo_prohibited(it) -> bool:
+            """iter77: True if item is any type that must not enter CEO daily brief."""
+            return (_is_developer_release(it) or _is_indie_dev_tone(it)
+                    or _is_forum_discussion(it) or _is_tutorial_explainer(it)
+                    or _f6_is_google_research_blog(it))
+
+        # Pool BOMA: bigtech_official_media_actionable + non-platform + non-prohibited + density pass
+        # iter77: unified _is_ceo_prohibited filter (forum/tutorial/devrel/indie/google_research)
         _p72_pool_boma = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _ct72b_is_bigtech_official_media_actionable(it)
-            and not _ct71_is_research_tutorial(it)
-            and not _f6_is_google_research_blog(it)
-            and not _is_devrel_or_indie(it)
+            and not _is_ceo_prohibited(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
-        # Pool BTA: bigtech_actionable (non-official/media) + non-platform + non-rt + non-google-research
-        # iter74: exclude blog.research.google; iter75: exclude devrel/indie
+        # Pool BTA: bigtech_actionable (non-official/media) — iter77: exclude all ceo-prohibited
         _p72_pool_bta = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _ct71_is_bigtech_actionable(it)
-            and not _ct71_is_research_tutorial(it)
-            and not _f6_is_google_research_blog(it)
-            and not _is_devrel_or_indie(it)
+            and not _is_ceo_prohibited(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             and not _ct72b_is_bigtech_official_media_actionable(it)
         ], key=_sd73_key))
-        # Pool C: bigtech + non-platform + density-pass (rescue — may include non-actionable)
-        # iter75: exclude developer_release / indie_dev_tone
+        # Pool C: bigtech + non-platform + density-pass (rescue pool — permissive; prohibited items
+        # get cleaned by Phase-8/9 swap rescue and final gates)
+        # iter77: keep _is_devrel_or_indie only (NOT _is_ceo_prohibited — pool_c needs breadth)
         _p72_pool_c = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
@@ -7760,11 +7814,11 @@ def _f600_run_fast_path(
             and not _is_devrel_or_indie(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
-        # Pool PLAT: platform items (cap=1) — sorted by strategic density
+        # Pool PLAT: platform items (cap=1) — iter77: exclude all ceo-prohibited
         _p72_pool_plat = _oa_partition(sorted([
-            it for it in _bt_om_pool_sorted if _is_platform_domain(it) and not _is_devrel_or_indie(it)
+            it for it in _bt_om_pool_sorted if _is_platform_domain(it) and not _is_ceo_prohibited(it)
         ], key=_sd73_key))
-        # Pool RT: research/tutorial (cap=1)
+        # Pool RT: research/tutorial (cap=1) — iter77: excluded by _is_ceo_prohibited in other pools
         _p72_pool_rt = _oa_partition(sorted([
             it for it in _pool_300
             if _ct71_is_research_tutorial(it)
@@ -7773,22 +7827,22 @@ def _f600_run_fast_path(
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
 
-        # iter73: Pool LEADER — leadership/politics items; iter75: exclude devrel/indie
+        # iter73→77: Pool LEADER — leadership/politics; exclude all ceo-prohibited
         _p73_pool_leader = _oa_partition(sorted([
             it for it in _pool_300
             if _is_leadership_politics_ai(it)
             and not _is_platform_domain(it)
             and not _f6_is_dev_noise(it)
-            and not _is_devrel_or_indie(it)
+            and not _is_ceo_prohibited(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
-        # iter73: Pool CHINA — china_ai_gov items; iter75: exclude devrel/indie
+        # iter73→77: Pool CHINA — china_ai_gov; exclude all ceo-prohibited
         _p73_pool_china = _oa_partition(sorted([
             it for it in _pool_300
             if _is_china_ai_gov(it)
             and not _is_platform_domain(it)
             and not _f6_is_dev_noise(it)
-            and not _is_devrel_or_indie(it)
+            and not _is_ceo_prohibited(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
 
@@ -7916,7 +7970,8 @@ def _f600_run_fast_path(
         _log.info("iter73 Phase-3 (china): selected=%d china_count=%d", len(_selected), _p73_china_count)
 
         # Phase-4: fill bigtech_actionable_count >= 7 + BOMA >= 7
-        # iter74: BOMA threshold raised from 6 to 7
+        # iter77: keep Phase-4 BOMA target at 7; Phase-8/9 swap rescue pushes to 8
+        # (reserving 1 BOMA item in pool for swap candidates)
         _p73_boma = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
         _p73_bta = sum(1 for s in _selected if _ct71_is_bigtech_actionable(s))
         while (_p73_boma < 7 or _p73_bta < 7) and len(_selected) < _max_events:
@@ -7997,7 +8052,7 @@ def _f600_run_fast_path(
                         break
             if not _p73_f5:
                 # penultimate resort — bigtech items from _pool_300 with density + strategic density pass
-                # iter75: exclude devrel/indie
+                # iter75: exclude devrel/indie; Phase-8/9 will clean remaining prohibited items
                 for it in _pool_300:
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
@@ -8010,7 +8065,7 @@ def _f600_run_fast_path(
                         break
             if not _p73_f5:
                 # absolute last resort — bigtech items without strategic density pass (gate will check later)
-                # iter75: exclude devrel/indie
+                # iter75: exclude devrel/indie; Phase-8/9 will clean remaining prohibited items
                 for it in _pool_300:
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
@@ -8024,7 +8079,8 @@ def _f600_run_fast_path(
                 break
 
         # Phase-6: bucket rescue swap — if buckets_distinct < 5, try swaps
-        _p73_all_pools = _p72_pool_boma + _p72_pool_bta + _p72_pool_c
+        # iter77: include leader+china pools in rescue pool for broader swap candidates
+        _p73_all_pools = _p72_pool_boma + _p72_pool_bta + _p72_pool_c + _p73_pool_leader + _p73_pool_china
         while len(set(_ct72b_strategic_bucket(s) for s in _selected)) < 5:
             _p6c_cur = set(_ct72b_strategic_bucket(s) for s in _selected)
             _p6_best = None
@@ -8051,7 +8107,7 @@ def _f600_run_fast_path(
                             and sum(1 for s in _p6n if _f6_is_google_research_blog(s)) <= 1  # iter74
                             and sum(1 for s in _p6n if _is_developer_release(s)) == 0  # iter75
                             and sum(1 for s in _p6n if _is_indie_dev_tone(s)) == 0  # iter75
-                            and sum(1 for s in _p6n if _ct72b_is_bigtech_official_media_actionable(s)) >= 7  # iter74
+                            and sum(1 for s in _p6n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8  # iter77
                             and _hdf_all_scores.get(id(_p6c), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and _sd73_pass(_p6c)):
                         _p6_best = (_p6i, _p6c)
@@ -8112,15 +8168,15 @@ def _f600_run_fast_path(
                             and _p7_nvc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
                             and _p7_n_plat <= _PLATFORM_CAP
                             and _p7_n_rt <= 1
-                            and _p7_n_boma >= min(_p7_cur_boma, 6)):
+                            and _p7_n_boma >= min(_p7_cur_boma, 8)):  # iter77: boma floor raised to 8
                         _selected[:] = _p7_new
                         _swap_successes += 1
                         _log.info("iter73 Phase-7: 2-step swap at idx=%d, selected=%d", _p7_si, len(_selected))
                         break
 
-        # Phase-8 (iter74): google_research swap rescue — enforce <=1 google research blog
+        # Phase-8 (iter74→77): google_research swap rescue — enforce =0 (was <=1)
         _p74_grt_count = sum(1 for s in _selected if _f6_is_google_research_blog(s))
-        while _p74_grt_count > 1:
+        while _p74_grt_count > 0:
             _p74_swapped = False
             for _p74_ri in range(len(_selected)):
                 if not _f6_is_google_research_blog(_selected[_p74_ri]):
@@ -8141,7 +8197,7 @@ def _f600_run_fast_path(
                     if (_p74_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
                             and _p74_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
                             and _hdf_all_scores.get(id(_p74_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
-                            and sum(1 for s in _p74_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 7):
+                            and sum(1 for s in _p74_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8):
                         _selected[_p74_ri] = _p74_cand
                         _p74_grt_count = sum(1 for s in _selected if _f6_is_google_research_blog(s))
                         _swap_successes += 1
@@ -8151,54 +8207,54 @@ def _f600_run_fast_path(
                 if _p74_swapped:
                     break
             if not _p74_swapped:
-                _log.warning("iter74 Phase-8: unable to reduce google_research_total below %d", _p74_grt_count)
+                # iter77: debug why swap failed
+                _p74_dbg_total = len(_p73_all_pools)
+                _p74_dbg_sel = sum(1 for c in _p73_all_pools if c in _p74_test)
+                _p74_dbg_grt = sum(1 for c in _p73_all_pools if _f6_is_google_research_blog(c))
+                _p74_dbg_plat = sum(1 for c in _p73_all_pools if c not in _p74_test and not _f6_is_google_research_blog(c) and _is_platform_domain(c))
+                _p74_dbg_ok = sum(1 for c in _p73_all_pools if c not in _p74_test and not _f6_is_google_research_blog(c))
+                _log.warning("iter74 Phase-8: unable to reduce google_research_total below %d (pool=%d already_sel=%d grt=%d non_sel_non_grt=%d plat=%d)",
+                             _p74_grt_count, _p74_dbg_total, _p74_dbg_sel, _p74_dbg_grt, _p74_dbg_ok, _p74_dbg_plat)
                 break
 
-        # Phase-9 (iter75): developer_release / indie_dev_tone swap rescue — enforce =0
-        _p75_devrel_count = sum(1 for s in _selected if _is_developer_release(s))
-        _p75_indie_count = sum(1 for s in _selected if _is_indie_dev_tone(s))
-        while _p75_devrel_count > 0 or _p75_indie_count > 0:
-            _p75_swapped = False
-            for _p75_ri in range(len(_selected)):
-                if not (_is_developer_release(_selected[_p75_ri]) or _is_indie_dev_tone(_selected[_p75_ri])):
-                    continue  # only swap out devrel/indie items
-                _p75_test = [s for j, s in enumerate(_selected) if j != _p75_ri]
-                for _p75_cand in _p73_all_pools:
-                    if _p75_cand in _p75_test or _is_devrel_or_indie(_p75_cand):
+        # Phase-9 (iter75→77): unified CEO-prohibited swap rescue — enforce all prohibited types =0
+        # Covers: forum_discussion, developer_release, indie_dev_tone, tutorial_explainer, google_research
+        _p77_prohibited_count = sum(1 for s in _selected if _is_ceo_prohibited(s))
+        while _p77_prohibited_count > 0:
+            _p77_swapped = False
+            for _p77_ri in range(len(_selected)):
+                if not _is_ceo_prohibited(_selected[_p77_ri]):
+                    continue
+                _p77_test = [s for j, s in enumerate(_selected) if j != _p77_ri]
+                for _p77_cand in _p73_all_pools:
+                    if _p77_cand in _p77_test or _is_ceo_prohibited(_p77_cand):
                         continue
-                    if _is_platform_domain(_p75_cand):
-                        if sum(1 for s in _p75_test if _is_platform_domain(s)) >= _PLATFORM_CAP:
+                    if _is_platform_domain(_p77_cand):
+                        if sum(1 for s in _p77_test if _is_platform_domain(s)) >= _PLATFORM_CAP:
                             continue
-                    if _ct71_is_research_tutorial(_p75_cand):
-                        if sum(1 for s in _p75_test if _ct71_is_research_tutorial(s)) >= 1:
-                            continue
-                    if _f6_is_google_research_blog(_p75_cand):
-                        if sum(1 for s in _p75_test if _f6_is_google_research_blog(s)) >= 1:
-                            continue
-                    _p75_n = _p75_test + [_p75_cand]
-                    _p75_nd = _DivCounter(_f6_domain_key(s) for s in _p75_n)
-                    _p75_nv = _DivCounter(_f6_vendor_key(s) for s in _p75_n)
-                    if (_p75_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                            and _p75_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
-                            and _hdf_all_scores.get(id(_p75_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
-                            and sum(1 for s in _p75_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 7):
-                        _selected[_p75_ri] = _p75_cand
-                        _p75_devrel_count = sum(1 for s in _selected if _is_developer_release(s))
-                        _p75_indie_count = sum(1 for s in _selected if _is_indie_dev_tone(s))
+                    _p77_n = _p77_test + [_p77_cand]
+                    _p77_nd = _DivCounter(_f6_domain_key(s) for s in _p77_n)
+                    _p77_nv = _DivCounter(_f6_vendor_key(s) for s in _p77_n)
+                    if (_p77_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p77_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _hdf_all_scores.get(id(_p77_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                            and sum(1 for s in _p77_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8):
+                        _selected[_p77_ri] = _p77_cand
+                        _p77_prohibited_count = sum(1 for s in _selected if _is_ceo_prohibited(s))
                         _swap_successes += 1
-                        _log.info("iter75 Phase-9 devrel/indie swap: idx=%d, devrel=%d indie=%d", _p75_ri, _p75_devrel_count, _p75_indie_count)
-                        _p75_swapped = True
+                        _log.info("iter77 Phase-9 prohibited swap: idx=%d, remaining=%d", _p77_ri, _p77_prohibited_count)
+                        _p77_swapped = True
                         break
-                if _p75_swapped:
+                if _p77_swapped:
                     break
-            if not _p75_swapped:
-                _log.warning("iter75 Phase-9: unable to eliminate devrel/indie (devrel=%d indie=%d)", _p75_devrel_count, _p75_indie_count)
+            if not _p77_swapped:
+                _log.warning("iter77 Phase-9: unable to eliminate all prohibited items (remaining=%d)", _p77_prohibited_count)
                 break
 
         if len(_selected) < _max_events:
             _log.warning("iter73 FAIL: selected=%d < target=%d", len(_selected), _max_events)
 
-        _log.info("iter75 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d grt=%d devrel=%d indie=%d lp=%d china=%d buckets=%s",
+        _log.info("iter77 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d grt=%d devrel=%d indie=%d forum=%d tutorial=%d lp=%d china=%d buckets=%s",
                   len(_selected),
                   sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s)),
                   sum(1 for s in _selected if _ct71_is_bigtech_actionable(s)),
@@ -8207,6 +8263,8 @@ def _f600_run_fast_path(
                   sum(1 for s in _selected if _f6_is_google_research_blog(s)),
                   sum(1 for s in _selected if _is_developer_release(s)),
                   sum(1 for s in _selected if _is_indie_dev_tone(s)),
+                  sum(1 for s in _selected if _is_forum_discussion(s)),
+                  sum(1 for s in _selected if _is_tutorial_explainer(s)),
                   sum(1 for s in _selected if _is_leadership_politics_ai(s)),
                   sum(1 for s in _selected if _is_china_ai_gov(s)),
                   sorted(set(_ct72b_strategic_bucket(s) for s in _selected)))
@@ -9438,6 +9496,8 @@ def _f600_run_fast_path(
             # iter70: swap stats
             _sa_ov_d["swap_attempts"] = _swap_attempts if _is_daily else 0
             _sa_ov_d["swap_successes"] = _swap_successes if _is_daily else 0
+            _sa_ov_d["rescue_attempts"] = _p6c_rescue_attempts if _is_daily else 0
+            _sa_ov_d["rescue_successes"] = _p6c_rescue_successes if _is_daily else 0
             _sa_ov.write_text(_f6_j.dumps(_sa_ov_d, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -9466,6 +9526,25 @@ def _f600_run_fast_path(
     _cm74_google_research_total = sum(1 for s in _selected if _f6_is_google_research_blog(s))  # iter74
     _cm75_devrel_total = sum(1 for s in _selected if _is_developer_release(s))  # iter75
     _cm75_indie_total = sum(1 for s in _selected if _is_indie_dev_tone(s))  # iter75
+    _cm77_forum_total = sum(1 for s in _selected if _is_forum_discussion(s))  # iter77
+    _cm77_tutorial_total = sum(1 for s in _selected if _is_tutorial_explainer(s))  # iter77
+    _cm77_official_media_count = sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media"))  # iter77
+
+    # iter77: patch selection_audit.meta.json with prohibited-type totals (AFTER counts are computed)
+    try:
+        _sa77 = _outputs / "selection_audit.meta.json"
+        if _sa77.exists():
+            _sa77_d = _f6_j.loads(_sa77.read_text(encoding="utf-8"))
+            _sa77_d["forum_discussion_total"] = _cm77_forum_total
+            _sa77_d["developer_release_total"] = _cm75_devrel_total
+            _sa77_d["indie_dev_tone_total"] = _cm75_indie_total
+            _sa77_d["tutorial_explainer_total"] = _cm77_tutorial_total
+            _sa77_d["google_research_total"] = _cm74_google_research_total
+            _sa77_d["official_media_count"] = _cm77_official_media_count
+            _sa77.write_text(_f6_j.dumps(_sa77_d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
     _cm72_strategic_buckets = sorted(set(_ct72b_strategic_bucket(s) for s in _selected))
     _cm72_strategic_buckets_distinct = len(_cm72_strategic_buckets)
     _cm71_per_item = []
@@ -9487,8 +9566,11 @@ def _f600_run_fast_path(
             "is_platform": _is_platform_domain(_cm71_s),
             "is_research_tutorial": _ct71_is_research_tutorial(_cm71_s),
             "is_google_research_blog": _f6_is_google_research_blog(_cm71_s),
+            "google_research_item": _f6_is_google_research_blog(_cm71_s),  # iter77: alias
             "developer_release_item": _is_developer_release(_cm71_s),  # iter75
             "indie_dev_tone_item": _is_indie_dev_tone(_cm71_s),  # iter75
+            "forum_discussion_item": _is_forum_discussion(_cm71_s),  # iter77
+            "tutorial_explainer_item": _is_tutorial_explainer(_cm71_s),  # iter77
             "strategic_density_score": _sd_item.get("strategic_density_score", 0),
             "strategic_density_floor_pass": _sd_item.get("strategic_density_score", 0) >= _cm73_sd_floor,
         })
@@ -9502,6 +9584,8 @@ def _f600_run_fast_path(
     _cm74_inject_grt = os.environ.get("INJECT_GOOGLE_RESEARCH_TOTAL", "")  # iter74
     _cm75_inject_devrel = os.environ.get("INJECT_DEVELOPER_RELEASE_TOTAL", "")  # iter75
     _cm75_inject_indie = os.environ.get("INJECT_INDIE_DEV_TONE_TOTAL", "")  # iter75
+    _cm77_inject_forum = os.environ.get("INJECT_FORUM_DISCUSSION_TOTAL", "")  # iter77
+    _cm77_inject_tutorial = os.environ.get("INJECT_TUTORIAL_EXPLAINER_TOTAL", "")  # iter77
     _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
     _cm71_rt_total_check = _cm71_rt_total
     _cm72_bom_check = _cm72_bt_om_actionable
@@ -9510,6 +9594,8 @@ def _f600_run_fast_path(
     _cm74_grt_check = _cm74_google_research_total
     _cm75_devrel_check = _cm75_devrel_total
     _cm75_indie_check = _cm75_indie_total
+    _cm77_forum_check = _cm77_forum_total
+    _cm77_tutorial_check = _cm77_tutorial_total
     _cm71_rt_is_injected = bool(_cm71_inject_rt)
     _cm72_bom_is_injected = bool(_cm72_inject_bom)
     _cm73_lp_is_injected = bool(_cm73_inject_lp)
@@ -9517,6 +9603,8 @@ def _f600_run_fast_path(
     _cm74_grt_is_injected = bool(_cm74_inject_grt)
     _cm75_devrel_is_injected = bool(_cm75_inject_devrel)
     _cm75_indie_is_injected = bool(_cm75_inject_indie)
+    _cm77_forum_is_injected = bool(_cm77_inject_forum)
+    _cm77_tutorial_is_injected = bool(_cm77_inject_tutorial)
     if _cm75_devrel_is_injected:
         try:
             _cm75_devrel_check = int(_cm75_inject_devrel)
@@ -9529,6 +9617,18 @@ def _f600_run_fast_path(
         except ValueError:
             pass
         _log.info("INJECT_INDIE_DEV_TONE_TOTAL=%s: indie_dev_tone_total overridden", _cm75_inject_indie)
+    if _cm77_forum_is_injected:
+        try:
+            _cm77_forum_check = int(_cm77_inject_forum)
+        except ValueError:
+            pass
+        _log.info("INJECT_FORUM_DISCUSSION_TOTAL=%s: forum_discussion_total overridden", _cm77_inject_forum)
+    if _cm77_tutorial_is_injected:
+        try:
+            _cm77_tutorial_check = int(_cm77_inject_tutorial)
+        except ValueError:
+            pass
+        _log.info("INJECT_TUTORIAL_EXPLAINER_TOTAL=%s: tutorial_explainer_total overridden", _cm77_inject_tutorial)
     if _cm71_rt_is_injected:
         try:
             _cm71_rt_total_check = int(_cm71_inject_rt)
@@ -9561,15 +9661,17 @@ def _f600_run_fast_path(
         _log.info("INJECT_GOOGLE_RESEARCH_TOTAL=%s: google_research_total overridden", _cm74_inject_grt)
 
     _cm71_bt_act_pass = (_cm71_bt_actionable >= 7)  # iter73: was 6
-    _cm72_bom_pass = (_cm72_bom_check >= 7)  # iter74: raised from 6 to 7
+    _cm72_bom_pass = (_cm72_bom_check >= 8)  # iter77: raised from 7 to 8
     _cm71_plat_pass = (_cm71_plat_total_check <= _PLATFORM_CAP)
     _cm71_rt_pass = (_cm71_rt_total_check <= 1)
     _cm72_bucket_pass = (_cm72_strategic_buckets_distinct >= 5)  # iter73: was 4
     _cm73_lp_pass = (_cm73_lp_check >= 2)  # iter73: new
     _cm73_china_pass = (_cm73_china_check >= 1)  # iter73: new
-    _cm74_grt_pass = (_cm74_grt_check <= 1)  # iter74: google research blog <= 1
+    _cm74_grt_pass = (_cm74_grt_check <= 0)  # iter77: google research blog = 0 (was <=1)
     _cm75_devrel_pass = (_cm75_devrel_check <= 0)  # iter75: developer_release = 0
     _cm75_indie_pass = (_cm75_indie_check <= 0)  # iter75: indie_dev_tone = 0
+    _cm77_forum_pass = (_cm77_forum_check <= 0)  # iter77: forum_discussion = 0
+    _cm77_tutorial_pass = (_cm77_tutorial_check <= 0)  # iter77: tutorial_explainer = 0
     _cm73_total_pass = (len(_selected) >= 10)  # iter73: new
 
     try:
@@ -9583,7 +9685,7 @@ def _f600_run_fast_path(
             "bigtech_actionable_min": 7,
             "bigtech_actionable_min_pass": _cm71_bt_act_pass,
             "bigtech_official_media_count": _cm72_bom_check,
-            "bigtech_official_media_min": 7,  # iter74: raised from 6
+            "bigtech_official_media_min": 8,  # iter77: raised from 7
             "bigtech_official_media_min_pass": _cm72_bom_pass,
             "leadership_politics_ai_count": _cm73_lp_check,
             "leadership_politics_ai_min": 2,
@@ -9598,7 +9700,7 @@ def _f600_run_fast_path(
             "research_tutorial_cap": 1,
             "research_tutorial_cap_pass": _cm71_rt_pass,
             "google_research_total": _cm74_grt_check,
-            "google_research_cap": 1,
+            "google_research_cap": 0,  # iter77: tightened from 1
             "google_research_cap_pass": _cm74_grt_pass,
             "developer_release_total": _cm75_devrel_check,  # iter75
             "developer_release_cap": 0,
@@ -9606,6 +9708,13 @@ def _f600_run_fast_path(
             "indie_dev_tone_total": _cm75_indie_check,  # iter75
             "indie_dev_tone_cap": 0,
             "indie_dev_tone_cap_pass": _cm75_indie_pass,
+            "forum_discussion_total": _cm77_forum_check,  # iter77
+            "forum_discussion_cap": 0,
+            "forum_discussion_cap_pass": _cm77_forum_pass,
+            "tutorial_explainer_total": _cm77_tutorial_check,  # iter77
+            "tutorial_explainer_cap": 0,
+            "tutorial_explainer_cap_pass": _cm77_tutorial_pass,
+            "official_media_count": _cm77_official_media_count,  # iter77
             "selected_strategic_buckets": _cm72_strategic_buckets,
             "selected_strategic_buckets_distinct": _cm72_strategic_buckets_distinct,
             "strategic_bucket_coverage_min": 5,
@@ -9645,6 +9754,12 @@ def _f600_run_fast_path(
         if _cm75_indie_is_injected:
             _cm71_meta["indie_dev_tone_test_injected"] = True
             _cm71_meta["injected_indie_dev_tone_total"] = _cm75_inject_indie
+        if _cm77_forum_is_injected:
+            _cm71_meta["forum_discussion_test_injected"] = True
+            _cm71_meta["injected_forum_discussion_total"] = _cm77_inject_forum
+        if _cm77_tutorial_is_injected:
+            _cm71_meta["tutorial_explainer_test_injected"] = True
+            _cm71_meta["injected_tutorial_explainer_total"] = _cm77_inject_tutorial
         _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _cm71_exc:
         _log.warning("content_mix.meta.json write failed: %s", _cm71_exc)
@@ -9677,7 +9792,7 @@ def _f600_run_fast_path(
 
     # iter72b: BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY gate (B2)
     if _is_daily and not _cm72_bom_pass:
-        _cm72_bom_fail = f"BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY_FAIL: official_media={_cm72_bom_check} < 7"
+        _cm72_bom_fail = f"BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY_FAIL: official_media={_cm72_bom_check} < 8"
         if _cm72_bom_is_injected:
             _cm72_bom_fail += " [test_injected=true]"
         _write_not_ready_report_md(
@@ -9748,9 +9863,9 @@ def _f600_run_fast_path(
         )
         _f6_fail("CHINA_AI_GOV_MIN_HARD_DAILY", _cm73_china_fail)
 
-    # iter74: GOOGLE_RESEARCH_CAP_HARD_DAILY gate (B7b) — google research blog <= 1
+    # iter77: GOOGLE_RESEARCH_CAP_HARD_DAILY gate (B7b) — google research blog = 0 (tightened from <=1)
     if _is_daily and not _cm74_grt_pass:
-        _cm74_grt_fail = f"GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: google_research_total={_cm74_grt_check} > 1"
+        _cm74_grt_fail = f"GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: google_research_total={_cm74_grt_check} > 0"
         if _cm74_grt_is_injected:
             _cm74_grt_fail += " [test_injected=true]"
         _write_not_ready_report_md(
@@ -9792,6 +9907,36 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("INDIE_DEV_TONE_CAP_HARD_DAILY", _cm75_indie_fail)
+
+    # iter77: HUGGINGFACE_FORUM_CAP_HARD_DAILY gate (B10) — forum_discussion_total = 0
+    if _is_daily and not _cm77_forum_pass:
+        _cm77_forum_fail = f"HUGGINGFACE_FORUM_CAP_HARD_DAILY_FAIL: forum_discussion_total={_cm77_forum_check} > 0"
+        if _cm77_forum_is_injected:
+            _cm77_forum_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "HUGGINGFACE_FORUM_CAP_HARD_DAILY",
+            _cm77_forum_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("HUGGINGFACE_FORUM_CAP_HARD_DAILY", _cm77_forum_fail)
+
+    # iter77: TUTORIAL_EXPLAINER_CAP_HARD_DAILY gate (B11) — tutorial_explainer_total = 0
+    if _is_daily and not _cm77_tutorial_pass:
+        _cm77_tutorial_fail = f"TUTORIAL_EXPLAINER_CAP_HARD_DAILY_FAIL: tutorial_explainer_total={_cm77_tutorial_check} > 0"
+        if _cm77_tutorial_is_injected:
+            _cm77_tutorial_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "TUTORIAL_EXPLAINER_CAP_HARD_DAILY",
+            _cm77_tutorial_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("TUTORIAL_EXPLAINER_CAP_HARD_DAILY", _cm77_tutorial_fail)
 
     # iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY gate (B7) — each item >= 15
     if _is_daily and not _cm73_per_item_sd_pass:

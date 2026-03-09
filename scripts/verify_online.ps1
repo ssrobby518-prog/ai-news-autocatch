@@ -5329,7 +5329,7 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter74: BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY — bigtech_official_media_count >= 7 (was 6)
+# iter77: BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY — bigtech_official_media_count >= 8 (was 7)
 #   Reads content_mix.meta.json
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
@@ -5347,7 +5347,7 @@ if ($_fast300Daily) {
                 Write-Output "  test_injected                : True"
             }
             if (-not $_bomPass) {
-                $_bomFail = ("BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY_FAIL: official_media={0} < 7" -f $_bomCount)
+                $_bomFail = ("BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY_FAIL: official_media={0} < 8" -f $_bomCount)
                 Write-Output ("  => FAIL: {0}" -f $_bomFail)
                 Invoke-VerifyOnlineFailFast -Gate "BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY" -Reason $_bomFail
             }
@@ -5362,7 +5362,7 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter74: GOOGLE_RESEARCH_CAP_HARD_DAILY — google_research_total <= 1
+# iter77: GOOGLE_RESEARCH_CAP_HARD_DAILY — google_research_total = 0 (tightened from <=1)
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
     $_grtMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
@@ -5379,7 +5379,7 @@ if ($_fast300Daily) {
                 Write-Output "  test_injected          : True"
             }
             if (-not $_grtPass) {
-                $_grtFail = ("GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: google_research_total={0} > 1" -f $_grtCount)
+                $_grtFail = ("GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: google_research_total={0} > 0" -f $_grtCount)
                 Write-Output ("  => FAIL: {0}" -f $_grtFail)
                 Invoke-VerifyOnlineFailFast -Gate "GOOGLE_RESEARCH_CAP_HARD_DAILY" -Reason $_grtFail
             }
@@ -5453,6 +5453,70 @@ if ($_fast300Daily) {
         }
     } else {
         Write-Output "  INDIE_DEV_TONE_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter77: HUGGINGFACE_FORUM_CAP_HARD_DAILY — forum_discussion_total = 0
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_forumMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "HUGGINGFACE_FORUM_CAP_HARD_DAILY:"
+    if (Test-Path $_forumMetaPath) {
+        try {
+            $_forumMeta = Get-Content $_forumMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_forumCount  = if ($_forumMeta.PSObject.Properties['forum_discussion_total']) { [int]$_forumMeta.forum_discussion_total } else { 0 }
+            $_forumPass   = if ($_forumMeta.PSObject.Properties['forum_discussion_cap_pass']) { $_forumMeta.forum_discussion_cap_pass } else { $false }
+            $_forumInjected = if ($_forumMeta.PSObject.Properties['forum_discussion_test_injected']) { $_forumMeta.forum_discussion_test_injected } else { $false }
+            Write-Output ("  forum_discussion_total : {0}" -f $_forumCount)
+            Write-Output ("  forum_discussion_pass  : {0}" -f $_forumPass)
+            if ($_forumInjected) {
+                Write-Output "  test_injected           : True"
+            }
+            if (-not $_forumPass) {
+                $_forumFail = ("HUGGINGFACE_FORUM_CAP_HARD_DAILY_FAIL: forum_discussion_total={0} > 0" -f $_forumCount)
+                Write-Output ("  => FAIL: {0}" -f $_forumFail)
+                Invoke-VerifyOnlineFailFast -Gate "HUGGINGFACE_FORUM_CAP_HARD_DAILY" -Reason $_forumFail
+            }
+            Write-Output "  => HUGGINGFACE_FORUM_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  HUGGINGFACE_FORUM_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  HUGGINGFACE_FORUM_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter77: TUTORIAL_EXPLAINER_CAP_HARD_DAILY — tutorial_explainer_total = 0
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_tutMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "TUTORIAL_EXPLAINER_CAP_HARD_DAILY:"
+    if (Test-Path $_tutMetaPath) {
+        try {
+            $_tutMeta = Get-Content $_tutMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_tutCount  = if ($_tutMeta.PSObject.Properties['tutorial_explainer_total']) { [int]$_tutMeta.tutorial_explainer_total } else { 0 }
+            $_tutPass   = if ($_tutMeta.PSObject.Properties['tutorial_explainer_cap_pass']) { $_tutMeta.tutorial_explainer_cap_pass } else { $false }
+            $_tutInjected = if ($_tutMeta.PSObject.Properties['tutorial_explainer_test_injected']) { $_tutMeta.tutorial_explainer_test_injected } else { $false }
+            Write-Output ("  tutorial_explainer_total : {0}" -f $_tutCount)
+            Write-Output ("  tutorial_explainer_pass  : {0}" -f $_tutPass)
+            if ($_tutInjected) {
+                Write-Output "  test_injected             : True"
+            }
+            if (-not $_tutPass) {
+                $_tutFail = ("TUTORIAL_EXPLAINER_CAP_HARD_DAILY_FAIL: tutorial_explainer_total={0} > 0" -f $_tutCount)
+                Write-Output ("  => FAIL: {0}" -f $_tutFail)
+                Invoke-VerifyOnlineFailFast -Gate "TUTORIAL_EXPLAINER_CAP_HARD_DAILY" -Reason $_tutFail
+            }
+            Write-Output "  => TUTORIAL_EXPLAINER_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  TUTORIAL_EXPLAINER_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  TUTORIAL_EXPLAINER_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
     }
 }
 Write-Output ""
@@ -5751,6 +5815,9 @@ if (Test-Path $_fpCmPath) {
         Write-Output ("google_research_total            = {0}" -f $(if ($_fpCm.PSObject.Properties['google_research_total']) { $_fpCm.google_research_total } else { "N/A" }))
         Write-Output ("developer_release_total          = {0}" -f $(if ($_fpCm.PSObject.Properties['developer_release_total']) { $_fpCm.developer_release_total } else { "N/A" }))
         Write-Output ("indie_dev_tone_total             = {0}" -f $(if ($_fpCm.PSObject.Properties['indie_dev_tone_total']) { $_fpCm.indie_dev_tone_total } else { "N/A" }))
+        Write-Output ("forum_discussion_total           = {0}" -f $(if ($_fpCm.PSObject.Properties['forum_discussion_total']) { $_fpCm.forum_discussion_total } else { "N/A" }))
+        Write-Output ("tutorial_explainer_total         = {0}" -f $(if ($_fpCm.PSObject.Properties['tutorial_explainer_total']) { $_fpCm.tutorial_explainer_total } else { "N/A" }))
+        Write-Output ("official_media_count             = {0}" -f $(if ($_fpCm.PSObject.Properties['official_media_count']) { $_fpCm.official_media_count } else { "N/A" }))
         Write-Output ("selected_strategic_buckets_distinct = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_strategic_buckets_distinct']) { $_fpCm.selected_strategic_buckets_distinct } else { "N/A" }))
     } catch {}
 }
