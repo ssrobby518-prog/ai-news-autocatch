@@ -178,6 +178,17 @@ if (Test-Path $sdmPath) {
         Write-Log "selected_min_strategic_density = $(if ($sdmMeta2.PSObject.Properties['selected_min_strategic_density_score']) { $sdmMeta2.selected_min_strategic_density_score } else { 'N/A' })"
     } catch {}
 }
+# iter76: overlap policy fields
+$saPath = Join-Path $repoRoot "outputs\selection_audit.meta.json"
+if (Test-Path $saPath) {
+    try {
+        $saMeta = Get-Content $saPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-Log "OVERLAP_POLICY          = $(if ($saMeta.PSObject.Properties['overlap_policy']) { $saMeta.overlap_policy } else { 'N/A' })"
+        Write-Log "DAILY_DUP_GATE_ENABLED  = $(if ($saMeta.PSObject.Properties['daily_dup_gate_enabled']) { $saMeta.daily_dup_gate_enabled } else { 'N/A' })"
+        Write-Log "DAILY_LAST_IDS_READ     = $(if ($saMeta.PSObject.Properties['daily_last_ids_read']) { $saMeta.daily_last_ids_read } else { 'N/A' })"
+        Write-Log "DAILY_LAST_IDS_WRITTEN  = $(if ($saMeta.PSObject.Properties['daily_dup_gate_enabled'] -and $saMeta.daily_dup_gate_enabled -eq $true -and $status -eq 'OK') { 'true' } else { 'false' })"
+    } catch {}
+}
 Write-Log "=== END P0 FINGERPRINT ==="
 Write-Log ""
 

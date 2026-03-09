@@ -7649,18 +7649,24 @@ def _f600_run_fast_path(
     _DOMAIN_SHARE_CAP_MULTIPLIER = 3  # max_domain_count * 3 <= target
 
     # iter69b: overlap-aware selection — load prev daily IDs BEFORE selection
+    # iter76: overlap policy split — desktop_button allows duplicates, scheduled_task enforces daily uniqueness
     import hashlib as _oa_hash
     _OVERLAP_CAP = 2  # must match gate threshold
     _oa_state_dir = _outputs / "state"
     _oa_state_dir.mkdir(parents=True, exist_ok=True)
     _oa_prev_file = _oa_state_dir / "daily_last_ids.json"
+    _oa_entrypoint = os.environ.get("PIPELINE_ENTRYPOINT", "direct")
+    _oa_overlap_policy = "allow_duplicates" if _oa_entrypoint == "desktop_button" else "daily_unique_only"
+    _oa_dup_gate_enabled = (_oa_overlap_policy == "daily_unique_only")
     _oa_prev_ids: set = set()
-    if _is_daily and _oa_prev_file.exists():
+    if _is_daily and _oa_dup_gate_enabled and _oa_prev_file.exists():
         try:
             _oa_prev_data = _f6_j.loads(_oa_prev_file.read_text(encoding="utf-8"))
             _oa_prev_ids = set(_oa_prev_data.get("ids", []))
         except Exception:
             pass
+    _log.info("iter76 overlap_policy=%s dup_gate_enabled=%s entrypoint=%s prev_ids=%d",
+              _oa_overlap_policy, _oa_dup_gate_enabled, _oa_entrypoint, len(_oa_prev_ids))
     _oa_overlap_tracker = [0]  # [count] — incremented by _sel_append
 
     def _oa_item_hash(it) -> str:
@@ -8792,6 +8798,7 @@ def _f600_run_fast_path(
     _overlap_count = 0
     _replacements_made = 0
     _prev_daily_file = ""
+    _oa_deferred_ids = None  # iter76: set inside dedup block, written at exit(0)
     if _is_daily:
         try:
             import hashlib as _dd_hash
@@ -8852,14 +8859,18 @@ def _f600_run_fast_path(
                             _replacements_made += 1
                 _cur_hashes = [_item_hash(it) for it in _selected]
                 _overlap_count = sum(1 for h in _cur_hashes if h and h in _prev_ids)
-            if _overlap_count > 2:
+            # iter76: only fail on overlap if dup gate is enabled (scheduled_task only)
+            if _overlap_count > 2 and _oa_dup_gate_enabled:
                 _f6_fail("DAILY_DUP_OVER_CAP", f"overlap_with_prev_daily={_overlap_count} > 2")
-            # Save current IDs for next daily run
-            _cur_ids = [h for h in _cur_hashes if h]
-            _prev_file.write_text(
-                _f6_j.dumps({"run_id": _run_id, "ids": _cur_ids}, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            elif _overlap_count > 2:
+                _log.info("iter76: overlap_with_prev_daily=%d > 2 but dup_gate DISABLED (entrypoint=%s) — skipping FAIL",
+                          _overlap_count, _oa_entrypoint)
+            # iter76: defer state write to after all gates pass (only scheduled_task, only on success)
+            # _oa_deferred_ids set here, written at Step 18 (before sys.exit(0))
+            if _oa_dup_gate_enabled:
+                _oa_deferred_ids = [h for h in _cur_hashes if h]
+            else:
+                _oa_deferred_ids = None
             # Rebuild card_dicts after possible replacements
             if _replacements_made > 0:
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
@@ -9417,9 +9428,13 @@ def _f600_run_fast_path(
             _sa_ov_d = _f6_j.loads(_sa_ov.read_text(encoding="utf-8"))
             _sa_ov_d["overlap_with_prev_daily"] = _overlap_count
             _sa_ov_d["overlap_cap"] = _OVERLAP_CAP
-            _sa_ov_d["overlap_cap_pass"] = (_overlap_count <= _OVERLAP_CAP)
+            _sa_ov_d["overlap_cap_pass"] = (_overlap_count <= _OVERLAP_CAP) if _oa_dup_gate_enabled else True
             _sa_ov_d["replacements_made"] = _replacements_made
             _sa_ov_d["prev_daily_file_used"] = _prev_daily_file
+            # iter76: overlap policy fields
+            _sa_ov_d["overlap_policy"] = _oa_overlap_policy
+            _sa_ov_d["daily_dup_gate_enabled"] = _oa_dup_gate_enabled
+            _sa_ov_d["daily_last_ids_read"] = bool(_oa_prev_ids) if _oa_dup_gate_enabled else False
             # iter70: swap stats
             _sa_ov_d["swap_attempts"] = _swap_attempts if _is_daily else 0
             _sa_ov_d["swap_successes"] = _swap_successes if _is_daily else 0
@@ -10213,9 +10228,22 @@ def _f600_run_fast_path(
     except Exception as _lrse:
         _log.warning("FAST_600_MODE: LAST_RUN_SUMMARY write failed (non-fatal): %s", _lrse)
 
+    # iter76: deferred daily_last_ids write — only on success, only for scheduled_task
+    _oa_ids_written = False
+    try:
+        if _is_daily and _oa_deferred_ids is not None:
+            _oa_prev_file.write_text(
+                _f6_j.dumps({"run_id": _run_id, "ids": _oa_deferred_ids}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _oa_ids_written = True
+            _log.info("iter76: daily_last_ids.json written (entrypoint=%s ids=%d)", _oa_entrypoint, len(_oa_deferred_ids))
+    except Exception as _oa_we:
+        _log.warning("iter76: daily_last_ids write failed (non-fatal): %s", _oa_we)
+
     _log.info(
-        "FAST_600_MODE: complete — selected=%d distinct_sources=%d bigtech=%d pool_status=%s",
-        len(_selected), _f6_distinct, _f6_bigtech, _pool_status,
+        "FAST_600_MODE: complete — selected=%d distinct_sources=%d bigtech=%d pool_status=%s overlap_policy=%s ids_written=%s",
+        len(_selected), _f6_distinct, _f6_bigtech, _pool_status, _oa_overlap_policy, _oa_ids_written,
     )
     sys.exit(0)
 

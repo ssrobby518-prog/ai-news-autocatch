@@ -5763,6 +5763,18 @@ if (Test-Path $_fpSdPath) {
         Write-Output ("selected_min_strategic_density   = {0}" -f $(if ($_fpSd.PSObject.Properties['selected_min_strategic_density_score']) { $_fpSd.selected_min_strategic_density_score } else { "N/A" }))
     } catch {}
 }
+# iter76: overlap policy fields from selection_audit.meta.json
+$_fpSaPath = Join-Path $repoRoot "outputs\selection_audit.meta.json"
+if (Test-Path $_fpSaPath) {
+    try {
+        $_fpSa = Get-Content $_fpSaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-Output ("overlap_policy                  = {0}" -f $(if ($_fpSa.PSObject.Properties['overlap_policy']) { $_fpSa.overlap_policy } else { "N/A" }))
+        Write-Output ("daily_dup_gate_enabled           = {0}" -f $(if ($_fpSa.PSObject.Properties['daily_dup_gate_enabled']) { $_fpSa.daily_dup_gate_enabled } else { "N/A" }))
+        Write-Output ("daily_last_ids_read              = {0}" -f $(if ($_fpSa.PSObject.Properties['daily_last_ids_read']) { $_fpSa.daily_last_ids_read } else { "N/A" }))
+        $_fpDupEnabled = if ($_fpSa.PSObject.Properties['daily_dup_gate_enabled']) { $_fpSa.daily_dup_gate_enabled } else { $false }
+        Write-Output ("daily_last_ids_written            = {0}" -f $(if ($_fpDupEnabled -eq $true) { "true (deferred to success)" } else { "false" }))
+    } catch {}
+}
 Write-Output "=== END P0 STRATEGIC FINGERPRINT ==="
 Write-Output ""
 
