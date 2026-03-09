@@ -10624,19 +10624,6 @@ def _f600_run_fast_path(
         )
         _f6_fail("RESEARCH_TUTORIAL_CAP_HARD_DAILY", _cm71_rt_fail)
 
-    # iter73: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY gate (B4) — min 5 distinct strategic buckets
-    if _is_daily and not _cm72_bucket_pass:
-        _cm72_bucket_fail = f"STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={_cm72_strategic_buckets_distinct} < 5"
-        _write_not_ready_report_md(
-            "STRATEGIC_BUCKET_COVERAGE_HARD_DAILY",
-            _cm72_bucket_fail,
-            run_id=_run_id, selected_items_count=len(_selected),
-            selected_sources_distinct=_f6_distinct,
-            bigtech_hit_count=_f6_bigtech,
-            official_or_media_count=_f6_om,
-        )
-        _f6_fail("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY", _cm72_bucket_fail)
-
     # iter73: LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY gate (B5) — min 2
     if _is_daily and not _cm73_lp_pass:
         _cm73_lp_fail = f"LEADERSHIP_POLITICS_AI_MIN_HARD_DAILY_FAIL: leadership_politics_ai={_cm73_lp_check} < 2"
@@ -10802,6 +10789,20 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("US_CHINA_POLICY_MIN_HARD_DAILY", _cm78_usp_cnp_fail)
+
+    # iter73→79: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY gate — min 5 distinct strategic buckets
+    # (moved after concentration caps in iter79 for correct fail-fast ordering)
+    if _is_daily and not _cm72_bucket_pass:
+        _cm72_bucket_fail = f"STRATEGIC_BUCKET_COVERAGE_HARD_DAILY_FAIL: buckets={_cm72_strategic_buckets_distinct} < 5"
+        _write_not_ready_report_md(
+            "STRATEGIC_BUCKET_COVERAGE_HARD_DAILY",
+            _cm72_bucket_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY", _cm72_bucket_fail)
 
     # iter79: TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY gate — combined <= 5
     if _is_daily and not _cm79_tc_gr_pass:
