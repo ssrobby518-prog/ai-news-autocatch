@@ -7605,10 +7605,30 @@ def _f600_run_fast_path(
             return True
         return False
 
-    # iter78: caps
+    # iter78→79: caps
     _GOOGLE_RESEARCH_CAP = 3
-    _TECHCRUNCH_CAP = 4
+    _TECHCRUNCH_CAP = 3  # iter79: tightened from 4 to 3
     _HF_BLOG_EXPLAINER_CAP = 0
+    _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP = 5  # iter79: new combined cap
+    _ROLE_DIVERSITY_MIN = 4  # iter79: minimum distinct role axes
+
+    # iter79: role axis mapping from strategic_bucket
+    _ROLE_AXIS_MAP = {
+        "leadership": "leadership_politics",
+        "product": "product",
+        "distribution": "distribution_ecosystem",
+        "ecosystem": "distribution_ecosystem",
+        "economics": "economics_governance",
+        "governance": "economics_governance",
+    }
+
+    def _role_axis(it):
+        """Map an item's strategic bucket to one of the 5 role axes."""
+        bkt = _ct72b_strategic_bucket(it)
+        ax = _ROLE_AXIS_MAP.get(bkt, bkt)
+        if _is_china_ai_gov(it):
+            return "china_ai"
+        return ax
 
     def _f6_sort_key(it) -> tuple:
         """iter40→72b: bigtech-first, official/media first, strategic density, then fulltext.
@@ -8382,7 +8402,7 @@ def _f600_run_fast_path(
                 _log.warning("iter77 Phase-9: unable to eliminate all prohibited items (remaining=%d)", _p77_prohibited_count)
                 break
 
-        # Phase-9b (iter78): TechCrunch cap enforcement — swap out TechCrunch if > 4
+        # Phase-9b (iter78→79): TechCrunch cap enforcement — swap out TechCrunch if > 3
         _p78_tc_count = sum(1 for s in _selected if _is_techcrunch(s))
         while _p78_tc_count > _TECHCRUNCH_CAP:
             _p78_tc_swapped = False
@@ -8456,10 +8476,106 @@ def _f600_run_fast_path(
                 _log.warning("iter78 Phase-9d: target_player_distinct=%d < 6, no swap candidates", _p78_tp_distinct)
                 break
 
+        # Phase-9c (iter79): combined TechCrunch + Google Research cap enforcement — combined <= 5
+        _p79_tc_gr_count = sum(1 for s in _selected if _is_techcrunch(s) or _f6_is_google_research_blog(s))
+        while _p79_tc_gr_count > _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP:
+            _p79_comb_swapped = False
+            # prefer swapping whichever source has more items
+            _p79_tc_n = sum(1 for s in _selected if _is_techcrunch(s))
+            _p79_gr_n = sum(1 for s in _selected if _f6_is_google_research_blog(s))
+            _p79_swap_tc_first = (_p79_tc_n >= _p79_gr_n)
+            for _p79_ri in range(len(_selected)):
+                _p79_is_tc = _is_techcrunch(_selected[_p79_ri])
+                _p79_is_gr = _f6_is_google_research_blog(_selected[_p79_ri])
+                if not (_p79_is_tc or _p79_is_gr):
+                    continue
+                if _p79_swap_tc_first and not _p79_is_tc:
+                    continue
+                if not _p79_swap_tc_first and not _p79_is_gr:
+                    continue
+                _p79_test = [s for j, s in enumerate(_selected) if j != _p79_ri]
+                for _p79_cand in _p73_all_pools:
+                    if _p79_cand in _p79_test or _is_ceo_prohibited(_p79_cand):
+                        continue
+                    if _is_techcrunch(_p79_cand) or _f6_is_google_research_blog(_p79_cand):
+                        continue
+                    if _is_platform_domain(_p79_cand):
+                        if sum(1 for s in _p79_test if _is_platform_domain(s)) >= _PLATFORM_CAP:
+                            continue
+                    _p79_n = _p79_test + [_p79_cand]
+                    _p79_nd = _DivCounter(_f6_domain_key(s) for s in _p79_n)
+                    _p79_nv = _DivCounter(_f6_vendor_key(s) for s in _p79_n)
+                    if (_p79_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p79_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _hdf_all_scores.get(id(_p79_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                            and sum(1 for s in _p79_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8):
+                        _selected[_p79_ri] = _p79_cand
+                        _p79_tc_gr_count = sum(1 for s in _selected if _is_techcrunch(s) or _f6_is_google_research_blog(s))
+                        _swap_successes += 1
+                        _log.info("iter79 Phase-9c combined swap: idx=%d, combined_count=%d", _p79_ri, _p79_tc_gr_count)
+                        _p79_comb_swapped = True
+                        break
+                if _p79_comb_swapped:
+                    break
+            if not _p79_comb_swapped:
+                _log.warning("iter79 Phase-9c: unable to reduce combined tc+gr below %d (cap=%d)", _p79_tc_gr_count, _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP)
+                break
+
+        # Phase-9e (iter79): role diversity enforcement — ensure >= 4 distinct role axes
+        _p79_role_axes = set(_role_axis(s) for s in _selected)
+        _p79_role_attempts = 0
+        while len(_p79_role_axes) < _ROLE_DIVERSITY_MIN and _p79_role_attempts < 10:
+            _p79_role_attempts += 1
+            _p79_role_swapped = False
+            # find an item whose role axis is duplicated
+            _p79_axis_counts = {}
+            for s in _selected:
+                ax = _role_axis(s)
+                _p79_axis_counts[ax] = _p79_axis_counts.get(ax, 0) + 1
+            # swap out items from the most over-represented axis
+            _p79_dup_axis = max(_p79_axis_counts, key=_p79_axis_counts.get)
+            for _p79_ri in range(len(_selected)):
+                if _role_axis(_selected[_p79_ri]) != _p79_dup_axis:
+                    continue
+                if _p79_axis_counts[_p79_dup_axis] <= 1:
+                    break  # don't remove the last item of any axis
+                _p79_test = [s for j, s in enumerate(_selected) if j != _p79_ri]
+                _p79_test_axes = set(_role_axis(s) for s in _p79_test)
+                for _p79_cand in _p73_all_pools:
+                    if _p79_cand in _p79_test or _is_ceo_prohibited(_p79_cand):
+                        continue
+                    _p79_cax = _role_axis(_p79_cand)
+                    if _p79_cax in _p79_test_axes:
+                        continue  # we need a NEW axis
+                    if _is_platform_domain(_p79_cand):
+                        if sum(1 for s in _p79_test if _is_platform_domain(s)) >= _PLATFORM_CAP:
+                            continue
+                    _p79_n = _p79_test + [_p79_cand]
+                    _p79_nd = _DivCounter(_f6_domain_key(s) for s in _p79_n)
+                    _p79_nv = _DivCounter(_f6_vendor_key(s) for s in _p79_n)
+                    if (_p79_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p79_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _hdf_all_scores.get(id(_p79_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                            and sum(1 for s in _p79_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8
+                            and sum(1 for s in _p79_n if _is_techcrunch(s)) <= _TECHCRUNCH_CAP
+                            and sum(1 for s in _p79_n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
+                            and sum(1 for s in _p79_n if _is_techcrunch(s) or _f6_is_google_research_blog(s)) <= _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP):
+                        _selected[_p79_ri] = _p79_cand
+                        _p79_role_axes = set(_role_axis(s) for s in _selected)
+                        _swap_successes += 1
+                        _log.info("iter79 Phase-9e role_diversity swap: idx=%d new_axis=%s, axes_distinct=%d", _p79_ri, _p79_cax, len(_p79_role_axes))
+                        _p79_role_swapped = True
+                        break
+                if _p79_role_swapped:
+                    break
+            if not _p79_role_swapped:
+                _log.warning("iter79 Phase-9e: role_axes_distinct=%d < %d, no swap candidates", len(_p79_role_axes), _ROLE_DIVERSITY_MIN)
+                break
+
         if len(_selected) < _max_events:
             _log.warning("iter73 FAIL: selected=%d < target=%d", len(_selected), _max_events)
 
-        _log.info("iter78 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d grt=%d tc=%d devrel=%d indie=%d forum=%d tutorial=%d hfbe=%d lp=%d china=%d tp_distinct=%d buckets=%s",
+        _log.info("iter79 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d grt=%d tc=%d tc_gr_combined=%d devrel=%d indie=%d forum=%d tutorial=%d hfbe=%d lp=%d china=%d tp_distinct=%d role_axes=%d buckets=%s",
                   len(_selected),
                   sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s)),
                   sum(1 for s in _selected if _ct71_is_bigtech_actionable(s)),
@@ -8467,6 +8583,7 @@ def _f600_run_fast_path(
                   sum(1 for s in _selected if _ct71_is_research_tutorial(s)),
                   sum(1 for s in _selected if _f6_is_google_research_blog(s)),
                   sum(1 for s in _selected if _is_techcrunch(s)),
+                  sum(1 for s in _selected if _is_techcrunch(s) or _f6_is_google_research_blog(s)),
                   sum(1 for s in _selected if _is_developer_release(s)),
                   sum(1 for s in _selected if _is_indie_dev_tone(s)),
                   sum(1 for s in _selected if _is_forum_discussion(s)),
@@ -8475,6 +8592,7 @@ def _f600_run_fast_path(
                   sum(1 for s in _selected if _is_leadership_politics_ai(s)),
                   sum(1 for s in _selected if _is_china_ai_gov(s)),
                   len(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))),
+                  len(set(_role_axis(s) for s in _selected)),
                   sorted(set(_ct72b_strategic_bucket(s) for s in _selected)))
     else:
         # Non-daily: no swap tracking needed
@@ -10085,6 +10203,9 @@ def _f600_run_fast_path(
     _cm78_target_player_distinct = len(_cm78_target_players)  # iter78
     _cm78_us_policy_count = sum(1 for s in _selected if _is_us_policy(s))  # iter78
     _cm78_china_policy_count = sum(1 for s in _selected if _is_china_policy(s))  # iter78
+    _cm79_tc_gr_combined = _cm78_tc_total + _cm74_google_research_total  # iter79: combined TC+GR
+    _cm79_role_axes = sorted(set(_role_axis(s) for s in _selected))  # iter79: role axes
+    _cm79_role_axes_distinct = len(_cm79_role_axes)  # iter79
 
     # iter77: patch selection_audit.meta.json with prohibited-type totals (AFTER counts are computed)
     try:
@@ -10103,6 +10224,8 @@ def _f600_run_fast_path(
             _sa77_d["target_players"] = _cm78_target_players  # iter78
             _sa77_d["us_policy_count"] = _cm78_us_policy_count  # iter78
             _sa77_d["china_policy_count"] = _cm78_china_policy_count  # iter78
+            _sa77_d["techcrunch_google_research_total"] = _cm79_tc_gr_combined  # iter79
+            _sa77_d["selected_role_axes_distinct"] = _cm79_role_axes_distinct  # iter79
             _sa77.write_text(_f6_j.dumps(_sa77_d, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -10138,6 +10261,7 @@ def _f600_run_fast_path(
             "target_player_item": _is_target_player(_cm71_s),  # iter78
             "us_policy_item": _is_us_policy(_cm71_s),  # iter78
             "china_policy_item": _is_china_policy(_cm71_s),  # iter78
+            "role_axis": _role_axis(_cm71_s),  # iter79
             "strategic_density_score": _sd_item.get("strategic_density_score", 0),
             "strategic_density_floor_pass": _sd_item.get("strategic_density_score", 0) >= _cm73_sd_floor,
         })
@@ -10158,6 +10282,8 @@ def _f600_run_fast_path(
     _cm78_inject_tp = os.environ.get("INJECT_TARGET_PLAYER_DISTINCT", "")  # iter78
     _cm78_inject_usp = os.environ.get("INJECT_US_POLICY_COUNT", "")  # iter78
     _cm78_inject_cnp = os.environ.get("INJECT_CHINA_POLICY_COUNT", "")  # iter78
+    _cm79_inject_tc_gr = os.environ.get("INJECT_TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_TOTAL", "")  # iter79
+    _cm79_inject_role = os.environ.get("INJECT_ROLE_AXES_DISTINCT", "")  # iter79
     _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
     _cm71_rt_total_check = _cm71_rt_total
     _cm72_bom_check = _cm72_bt_om_actionable
@@ -10173,6 +10299,8 @@ def _f600_run_fast_path(
     _cm78_tp_check = _cm78_target_player_distinct
     _cm78_usp_check = _cm78_us_policy_count
     _cm78_cnp_check = _cm78_china_policy_count
+    _cm79_tc_gr_check = _cm79_tc_gr_combined  # iter79
+    _cm79_role_check = _cm79_role_axes_distinct  # iter79
     _cm71_rt_is_injected = bool(_cm71_inject_rt)
     _cm72_bom_is_injected = bool(_cm72_inject_bom)
     _cm73_lp_is_injected = bool(_cm73_inject_lp)
@@ -10187,6 +10315,8 @@ def _f600_run_fast_path(
     _cm78_tp_is_injected = bool(_cm78_inject_tp)
     _cm78_usp_is_injected = bool(_cm78_inject_usp)
     _cm78_cnp_is_injected = bool(_cm78_inject_cnp)
+    _cm79_tc_gr_is_injected = bool(_cm79_inject_tc_gr)  # iter79
+    _cm79_role_is_injected = bool(_cm79_inject_role)  # iter79
     if _cm78_tc_is_injected:
         try:
             _cm78_tc_check = int(_cm78_inject_tc)
@@ -10217,6 +10347,18 @@ def _f600_run_fast_path(
         except ValueError:
             pass
         _log.info("INJECT_CHINA_POLICY_COUNT=%s: china_policy_count overridden", _cm78_inject_cnp)
+    if _cm79_tc_gr_is_injected:
+        try:
+            _cm79_tc_gr_check = int(_cm79_inject_tc_gr)
+        except ValueError:
+            pass
+        _log.info("INJECT_TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_TOTAL=%s: combined overridden", _cm79_inject_tc_gr)
+    if _cm79_role_is_injected:
+        try:
+            _cm79_role_check = int(_cm79_inject_role)
+        except ValueError:
+            pass
+        _log.info("INJECT_ROLE_AXES_DISTINCT=%s: role_axes_distinct overridden", _cm79_inject_role)
     if _cm75_devrel_is_injected:
         try:
             _cm75_devrel_check = int(_cm75_inject_devrel)
@@ -10284,8 +10426,10 @@ def _f600_run_fast_path(
     _cm75_indie_pass = (_cm75_indie_check <= 0)  # iter75: indie_dev_tone = 0
     _cm77_forum_pass = (_cm77_forum_check <= 0)  # iter77: forum_discussion = 0
     _cm77_tutorial_pass = (_cm77_tutorial_check <= 0)  # iter77: tutorial_explainer = 0
-    _cm78_tc_pass = (_cm78_tc_check <= _TECHCRUNCH_CAP)  # iter78: techcrunch <= 4
+    _cm78_tc_pass = (_cm78_tc_check <= _TECHCRUNCH_CAP)  # iter79: techcrunch <= 3 (was 4)
     _cm78_hfbe_pass = (_cm78_hfbe_check <= _HF_BLOG_EXPLAINER_CAP)  # iter78: hf_blog_explainer = 0
+    _cm79_tc_gr_pass = (_cm79_tc_gr_check <= _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP)  # iter79: combined <= 5
+    _cm79_role_pass = (_cm79_role_check >= _ROLE_DIVERSITY_MIN)  # iter79: role_axes >= 4
     _cm78_tp_pass = (_cm78_tp_check >= 6)  # iter78: target_player_distinct >= 6
     _cm78_usp_cnp_pass = ((_cm78_usp_check + _cm78_cnp_check) >= 2 and _cm78_cnp_check >= 1)  # iter78
     _cm73_total_pass = (len(_selected) >= 10)  # iter73: new
@@ -10335,6 +10479,9 @@ def _f600_run_fast_path(
             "techcrunch_total": _cm78_tc_check,  # iter78
             "techcrunch_cap": _TECHCRUNCH_CAP,
             "techcrunch_cap_pass": _cm78_tc_pass,
+            "techcrunch_google_research_total": _cm79_tc_gr_check,  # iter79
+            "techcrunch_google_research_combined_cap": _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP,
+            "techcrunch_google_research_combined_cap_pass": _cm79_tc_gr_pass,
             "hf_blog_explainer_total": _cm78_hfbe_check,  # iter78
             "hf_blog_explainer_cap": _HF_BLOG_EXPLAINER_CAP,
             "hf_blog_explainer_cap_pass": _cm78_hfbe_pass,
@@ -10354,6 +10501,10 @@ def _f600_run_fast_path(
             "per_item_strategic_density_floor": _cm73_sd_floor,
             "per_item_strategic_density_pass": _cm73_per_item_sd_pass,
             "per_item_strategic_density_failures": _cm73_per_item_sd_failures,
+            "selected_role_axes": _cm79_role_axes if not _cm79_role_is_injected else _cm79_role_axes,  # iter79
+            "selected_role_axes_distinct": _cm79_role_check,  # iter79
+            "role_diversity_min": _ROLE_DIVERSITY_MIN,
+            "role_diversity_pass": _cm79_role_pass,
             "bucket_rescue_attempts": _p6c_rescue_attempts if _is_daily else 0,
             "bucket_rescue_successes": _p6c_rescue_successes if _is_daily else 0,
             "strategic_bucket_per_item": [_cm71_per_item[i]["strategic_bucket"] for i in range(len(_cm71_per_item))],
@@ -10407,6 +10558,12 @@ def _f600_run_fast_path(
         if _cm78_cnp_is_injected:
             _cm71_meta["china_policy_test_injected"] = True
             _cm71_meta["injected_china_policy_count"] = _cm78_inject_cnp
+        if _cm79_tc_gr_is_injected:
+            _cm71_meta["techcrunch_google_research_combined_test_injected"] = True
+            _cm71_meta["injected_techcrunch_google_research_combined_total"] = _cm79_inject_tc_gr
+        if _cm79_role_is_injected:
+            _cm71_meta["role_diversity_test_injected"] = True
+            _cm71_meta["injected_role_axes_distinct"] = _cm79_inject_role
         _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _cm71_exc:
         _log.warning("content_mix.meta.json write failed: %s", _cm71_exc)
@@ -10585,7 +10742,7 @@ def _f600_run_fast_path(
         )
         _f6_fail("TUTORIAL_EXPLAINER_CAP_HARD_DAILY", _cm77_tutorial_fail)
 
-    # iter78: TECHCRUNCH_CAP_HARD_DAILY gate — techcrunch_total <= 4
+    # iter79: TECHCRUNCH_CAP_HARD_DAILY gate — techcrunch_total <= 3 (was 4 in iter78)
     if _is_daily and not _cm78_tc_pass:
         _cm78_tc_fail = f"TECHCRUNCH_CAP_HARD_DAILY_FAIL: techcrunch_total={_cm78_tc_check} > {_TECHCRUNCH_CAP}"
         if _cm78_tc_is_injected:
@@ -10645,6 +10802,36 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("US_CHINA_POLICY_MIN_HARD_DAILY", _cm78_usp_cnp_fail)
+
+    # iter79: TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY gate — combined <= 5
+    if _is_daily and not _cm79_tc_gr_pass:
+        _cm79_tc_gr_fail = f"TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY_FAIL: combined_total={_cm79_tc_gr_check} > {_TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP}"
+        if _cm79_tc_gr_is_injected:
+            _cm79_tc_gr_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY",
+            _cm79_tc_gr_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY", _cm79_tc_gr_fail)
+
+    # iter79: ROLE_DIVERSITY_MIN_HARD_DAILY gate — role_axes_distinct >= 4
+    if _is_daily and not _cm79_role_pass:
+        _cm79_role_fail = f"ROLE_DIVERSITY_MIN_HARD_DAILY_FAIL: role_axes={_cm79_role_check} < {_ROLE_DIVERSITY_MIN}"
+        if _cm79_role_is_injected:
+            _cm79_role_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "ROLE_DIVERSITY_MIN_HARD_DAILY",
+            _cm79_role_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("ROLE_DIVERSITY_MIN_HARD_DAILY", _cm79_role_fail)
 
     # iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY gate (B7) — each item >= 15
     if _is_daily and not _cm73_per_item_sd_pass:

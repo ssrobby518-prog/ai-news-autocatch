@@ -5534,7 +5534,7 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter78: TECHCRUNCH_CAP_HARD_DAILY — techcrunch_total <= 4
+# iter79: TECHCRUNCH_CAP_HARD_DAILY — techcrunch_total <= 3 (was 4 in iter78)
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
     $_tcMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
@@ -5551,7 +5551,7 @@ if ($_fast300Daily) {
                 Write-Output "  test_injected     : True"
             }
             if (-not $_tcPass) {
-                $_tcFail = ("TECHCRUNCH_CAP_HARD_DAILY_FAIL: techcrunch_total={0} > 4" -f $_tcCount)
+                $_tcFail = ("TECHCRUNCH_CAP_HARD_DAILY_FAIL: techcrunch_total={0} > 3" -f $_tcCount)
                 Write-Output ("  => FAIL: {0}" -f $_tcFail)
                 Invoke-VerifyOnlineFailFast -Gate "TECHCRUNCH_CAP_HARD_DAILY" -Reason $_tcFail
             }
@@ -5593,6 +5593,70 @@ if ($_fast300Daily) {
         }
     } else {
         Write-Output "  HF_BLOG_EXPLAINER_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter79: TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY — combined <= 5
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_tcgrMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY:"
+    if (Test-Path $_tcgrMetaPath) {
+        try {
+            $_tcgrMeta = Get-Content $_tcgrMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_tcgrCount  = if ($_tcgrMeta.PSObject.Properties['techcrunch_google_research_total']) { [int]$_tcgrMeta.techcrunch_google_research_total } else { 0 }
+            $_tcgrPass   = if ($_tcgrMeta.PSObject.Properties['techcrunch_google_research_combined_cap_pass']) { $_tcgrMeta.techcrunch_google_research_combined_cap_pass } else { $false }
+            $_tcgrInjected = if ($_tcgrMeta.PSObject.Properties['techcrunch_google_research_combined_test_injected']) { $_tcgrMeta.techcrunch_google_research_combined_test_injected } else { $false }
+            Write-Output ("  techcrunch_google_research_total : {0}" -f $_tcgrCount)
+            Write-Output ("  combined_cap_pass                : {0}" -f $_tcgrPass)
+            if ($_tcgrInjected) {
+                Write-Output "  test_injected                     : True"
+            }
+            if (-not $_tcgrPass) {
+                $_tcgrFail = ("TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY_FAIL: combined_total={0} > 5" -f $_tcgrCount)
+                Write-Output ("  => FAIL: {0}" -f $_tcgrFail)
+                Invoke-VerifyOnlineFailFast -Gate "TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY" -Reason $_tcgrFail
+            }
+            Write-Output "  => TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter79: ROLE_DIVERSITY_MIN_HARD_DAILY — selected_role_axes_distinct >= 4
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_rdMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "ROLE_DIVERSITY_MIN_HARD_DAILY:"
+    if (Test-Path $_rdMetaPath) {
+        try {
+            $_rdMeta = Get-Content $_rdMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_rdCount  = if ($_rdMeta.PSObject.Properties['selected_role_axes_distinct']) { [int]$_rdMeta.selected_role_axes_distinct } else { 0 }
+            $_rdPass   = if ($_rdMeta.PSObject.Properties['role_diversity_pass']) { $_rdMeta.role_diversity_pass } else { $false }
+            $_rdInjected = if ($_rdMeta.PSObject.Properties['role_diversity_test_injected']) { $_rdMeta.role_diversity_test_injected } else { $false }
+            Write-Output ("  selected_role_axes_distinct : {0}" -f $_rdCount)
+            Write-Output ("  role_diversity_pass         : {0}" -f $_rdPass)
+            if ($_rdInjected) {
+                Write-Output "  test_injected               : True"
+            }
+            if (-not $_rdPass) {
+                $_rdFail = ("ROLE_DIVERSITY_MIN_HARD_DAILY_FAIL: role_axes={0} < 4" -f $_rdCount)
+                Write-Output ("  => FAIL: {0}" -f $_rdFail)
+                Invoke-VerifyOnlineFailFast -Gate "ROLE_DIVERSITY_MIN_HARD_DAILY" -Reason $_rdFail
+            }
+            Write-Output "  => ROLE_DIVERSITY_MIN_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  ROLE_DIVERSITY_MIN_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  ROLE_DIVERSITY_MIN_HARD_DAILY: WARN (content_mix.meta.json not found)"
     }
 }
 Write-Output ""
@@ -5970,6 +6034,8 @@ if (Test-Path $_fpCmPath) {
         Write-Output ("us_policy_count                  = {0}" -f $(if ($_fpCm.PSObject.Properties['us_policy_count']) { $_fpCm.us_policy_count } else { "N/A" }))
         Write-Output ("china_policy_count               = {0}" -f $(if ($_fpCm.PSObject.Properties['china_policy_count']) { $_fpCm.china_policy_count } else { "N/A" }))
         Write-Output ("selected_strategic_buckets_distinct = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_strategic_buckets_distinct']) { $_fpCm.selected_strategic_buckets_distinct } else { "N/A" }))
+        Write-Output ("techcrunch_google_research_total    = {0}" -f $(if ($_fpCm.PSObject.Properties['techcrunch_google_research_total']) { $_fpCm.techcrunch_google_research_total } else { "N/A" }))
+        Write-Output ("selected_role_axes_distinct          = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_role_axes_distinct']) { $_fpCm.selected_role_axes_distinct } else { "N/A" }))
     } catch {}
 }
 if (Test-Path $_fpSdPath) {
