@@ -1,3 +1,88 @@
+# iter75: block developer-release & indie-dev-tone from CEO daily brief
+
+run_date: 2026-03-08
+
+## A) 同一 HEAD 閉環證據（iter75 code HEAD = `c10e591`）
+
+| 入口 | run_id | GIT_HEAD | ENTRYPOINT | MODE | selected_events | devrel | indie | status |
+|------|--------|----------|------------|------|-----------------|--------|-------|--------|
+| 桌面按鈕 | 20260308_180554 | c10e591 | direct | daily | 10 | 0 | 0 | OK |
+| 北京09:00排程 | 20260308_181141 | c10e591 | scheduled_task | daily | 10 | 0 | 0 | OK |
+
+**結論：兩邊 GIT_HEAD = `c10e591`，完全一致，且均 PASS。devrel=0, indie=0。**
+
+### 桌面按鈕 P0 FINGERPRINT (run_id=20260308_180554)
+
+```
+GIT_HEAD=c10e591  ENTRYPOINT=direct  MODE=daily
+selected_events=10  bigtech_actionable_count=8  bigtech_official_media_count=8
+leadership_politics_ai_count=4  china_ai_gov_count=1
+platform_total=1  research_tutorial_total=0  google_research_total=1
+developer_release_total=0  indie_dev_tone_total=0
+strategic_buckets_distinct=5  buckets=[distribution, economics, governance, leadership, product]
+selected_avg_strategic_density=84.6  selected_min_strategic_density=15
+```
+
+### 排程 P0 FINGERPRINT (run_id=20260308_181141)
+
+```
+GIT_HEAD=c10e591  ENTRYPOINT=scheduled_task  MODE=daily
+selected_events=10  bigtech_actionable_count=8  bigtech_official_media_count=8
+leadership_politics_ai_count=4  china_ai_gov_count=1
+platform_total=1  research_tutorial_total=0  google_research_total=1
+developer_release_total=0  indie_dev_tone_total=0
+strategic_buckets_distinct=5
+selected_avg_strategic_density=84.6  selected_min_strategic_density=15
+```
+
+## B) 新增 Gate 與分類器
+
+| Gate | 門檻 | 說明 |
+|------|------|------|
+| DEVELOPER_RELEASE_CAP_HARD_DAILY | <=0 | GitHub releases/changelogs/repo items — 完全禁止 |
+| INDIE_DEV_TONE_CAP_HARD_DAILY | <=0 | PR#/issue#/bugfix/refactor/maintainer tone — 完全禁止 |
+
+分類器：
+- `_is_developer_release(it)`: URL path regex (`/releases/\d`, `/pull/\d`, etc.) + org repo match + title regex; official/media 豁免
+- `_is_indie_dev_tone(it)`: title+snippet regex (PR#, issue#, bugfix, refactor, commit hash, maintainer); official/media 豁免
+
+防線：
+1. Pool exclusion: BOMA, BTA, Pool C, Platform, Leader, China 全部加 `not _is_devrel_or_indie(it)`
+2. Sort key penalty: devrel=-5, indie=-4
+3. Phase-9 swap rescue: 逐一替換殘留 devrel/indie
+4. Hard gate: 最終 meta check devrel_total<=0, indie_total<=0
+
+## C) 注入 FAIL 驗證（5/5 通過）
+
+| # | 注入 | 預期 FAIL Gate | 實際 FAIL 訊息 | 結果 |
+|---|------|---------------|---------------|------|
+| 1 | INJECT_DEVELOPER_RELEASE_TOTAL=1 | DEVELOPER_RELEASE_CAP_HARD_DAILY | `developer_release_total=1 > 0 [test_injected=true]` | FAIL ✓ |
+| 2 | INJECT_INDIE_DEV_TONE_TOTAL=1 | INDIE_DEV_TONE_CAP_HARD_DAILY | `indie_dev_tone_total=1 > 0 [test_injected=true]` | FAIL ✓ |
+| 3 | INJECT_PLATFORM_DOMAIN_TOTAL=2 | DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY | `platform_total=2 > 1 [test_injected=true]` | FAIL ✓ |
+| 4 | INJECT_RESEARCH_TUTORIAL_TOTAL=2 | RESEARCH_TUTORIAL_CAP_HARD_DAILY | `research_tutorial_total=2 > 1 [test_injected=true]` | FAIL ✓ |
+| 5 | INJECT_GOOGLE_RESEARCH_TOTAL=2 | GOOGLE_RESEARCH_CAP_HARD_DAILY | `google_research_total=2 > 1 [test_injected=true]` | FAIL ✓ |
+
+## D) 本輪程式碼變更
+
+| 檔案 | 變更 |
+|------|------|
+| run_once.py | `_is_developer_release()`, `_is_indie_dev_tone()` classifiers; pool exclusion (BOMA/BTA/C/Plat/Leader/China); sort penalty (-5/-4); Phase-9 swap rescue; gates B8/B9; injection support; meta expansion |
+| verify_online.ps1 | DEVELOPER_RELEASE_CAP_HARD_DAILY + INDIE_DEV_TONE_CAP_HARD_DAILY gate checks; P0 fingerprint fields |
+
+```
+git log --oneline (iter75 commits):
+c10e591 iter75: block developer-release & indie-dev-tone from CEO daily brief
+```
+
+## E) Debugging 筆記
+
+- 初版 `_is_developer_release` 有 `github.com` domain catch-all → BOMA pool 從 7 掉到 6，選取失敗
+- 修正：移除 domain catch-all，URL regex 收窄至 `/releases/\d`，text regex 限 title-only + 特定 pattern，加 official/media 豁免
+- 第二次 run: platform pool (`_p72_pool_plat`) 未加 devrel 排除 → `huggingface/transformers/releases/tag/v5.1.0` 進入 → devrel=1
+- 修正：platform pool 加 `and not _is_devrel_or_indie(it)` → devrel=0
+
+---
+
 # iter74b: de-research validation pack — google research <=1, official/media>=7, 4 injection fails
 
 run_date: 2026-03-08
