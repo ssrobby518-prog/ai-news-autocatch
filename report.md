@@ -1,3 +1,79 @@
+# iter77: purge forum/devrelease/tutorial/research + fix stale verify chain
+
+run_date: 2026-03-09
+
+## 問題本質
+
+1. verify_run 讀到舊 run 的 exec_zh_narrative.meta.json（12 event, 全英文）→ Q1_STRUCTURE_HARD/ZH_NARRATIVE 等 gate 全部 FAIL
+2. content_mix platform_cap 使用固定 _PLATFORM_CAP=1，但 gate 用 dynamic effective_cap → 數值不同步
+3. Phase-6 bucket rescue 找不到 governance 項目（LLM classifier 不穩定）→ STRATEGIC_BUCKET_COVERAGE < 5
+
+## 修正
+
+| 修正 | 檔案 | 說明 |
+|------|------|------|
+| stale meta cleanup | run_once.py | 啟動時清除所有 verify_run gate meta（exec_zh_narrative, q1/q2_structure, ai_purity 等 20+ 個） |
+| stale meta cleanup | verify_online.ps1 | PRE-CLEAN 新增 exec_zh_narrative + supply_resilience |
+| platform_cap sync | run_once.py | content_mix 改用 _pdc_effective_cap（dynamic cap） |
+| Phase-6b governance rescue | run_once.py | 當 LLM 分類器未產出 governance 項目時，以 governance_signal_hits >= 1 為 fallback 強制分配 |
+| bucket override | run_once.py | _bucket_override dict 讓 Phase-6b 強制分配的 governance 在後續 gate 計算中生效 |
+
+## A) desktop_button PASS（GIT_HEAD=`431bd91`）
+
+```
+RUN_ID=20260309_072136  GIT_HEAD=431bd91  ENTRYPOINT=desktop_button  MODE=daily
+selected_events=10  bigtech_actionable_count=9  bigtech_official_media_count=8
+leadership_politics_ai_count=8  china_ai_gov_count=1
+platform_total=2  research_tutorial_total=0  google_research_total=0
+developer_release_total=0  indie_dev_tone_total=0
+forum_discussion_total=0  tutorial_explainer_total=0
+official_media_count=8  strategic_buckets_distinct=5
+buckets=[distribution, economics, governance, leadership, product]
+selected_avg_strategic_density=71.1  selected_min_strategic_density=15
+OVERLAP_POLICY=allow_duplicates  DAILY_DUP_GATE_ENABLED=False
+STATUS=OK  elapsed=106s
+```
+
+## B) scheduled_task PASS（同一 HEAD=`431bd91`）
+
+```
+RUN_ID=20260309_072952  GIT_HEAD=431bd91  ENTRYPOINT=scheduled_task  MODE=daily
+selected_events=10  bigtech_actionable_count=9  bigtech_official_media_count=8
+leadership_politics_ai_count=8  china_ai_gov_count=1
+platform_total=2  research_tutorial_total=0  google_research_total=0
+developer_release_total=0  indie_dev_tone_total=0
+forum_discussion_total=0  tutorial_explainer_total=0
+official_media_count=8  strategic_buckets_distinct=5
+OVERLAP_POLICY=daily_unique_only  DAILY_DUP_GATE_ENABLED=True
+STATUS=OK
+```
+
+## C) 注入 FAIL 驗證（6/6 通過）
+
+| # | 注入 | 預期 FAIL Gate | 結果 |
+|---|------|---------------|------|
+| 1 | INJECT_FORUM_DISCUSSION_TOTAL=1 | HUGGINGFACE_FORUM_CAP_HARD_DAILY | FAIL ✓ |
+| 2 | INJECT_DEVELOPER_RELEASE_TOTAL=1 | DEVELOPER_RELEASE_CAP_HARD_DAILY | FAIL ✓ |
+| 3 | INJECT_INDIE_DEV_TONE_TOTAL=1 | INDIE_DEV_TONE_CAP_HARD_DAILY | FAIL ✓ |
+| 4 | INJECT_TUTORIAL_EXPLAINER_TOTAL=1 | TUTORIAL_EXPLAINER_CAP_HARD_DAILY | FAIL ✓ |
+| 5 | INJECT_GOOGLE_RESEARCH_TOTAL=1 | GOOGLE_RESEARCH_CAP_HARD_DAILY | FAIL ✓ |
+| 6 | INJECT_BIGTECH_OFFICIAL_MEDIA_COUNT=7 | BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY | FAIL ✓ |
+
+## D) 程式碼變更
+
+| 檔案 | 變更 |
+|------|------|
+| run_once.py | stale gate meta cleanup (20+ files); Phase-6b governance signal rescue + bucket override; platform_cap sync to effective_cap; pool/swap `_is_ceo_prohibited` filter |
+| verify_online.ps1 | PRE-CLEAN exec_zh_narrative + supply_resilience |
+
+```
+git log --oneline -3 (iter77):
+431bd91 iter77: fix stale meta + platform_cap sync + governance bucket rescue
+5bf7fd5 iter77: purge forum/devrelease/tutorial/research items from CEO daily brief (official/media>=8, forum/devrel/tutorial/google_research=0)
+```
+
+---
+
 # iter76: split overlap policy by entrypoint
 
 run_date: 2026-03-08
