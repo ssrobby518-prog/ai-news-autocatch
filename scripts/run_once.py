@@ -7590,12 +7590,17 @@ def _f600_run_fast_path(
         r'|China(?:\'?s?)?\s+(?:regulat|policy|government|ministry|ban|restrict|compute|chip|AI\s+(?:governance|policy|regulation|investment))'
         r'|Chinese\s+(?:regulat|government|ministry|policy))', _ct71_re.I)
     _CHINA_POLICY_SIGNAL_RE = _ct71_re.compile(
-        r'\b(?:policy|regulat|invest|compute|算力|政策|監管|regulation|government|ministry|compliance|資金|佈局|產業|戰略)\b', _ct71_re.I)
+        r'\b(?:policy|regulat|invest|compute|算力|政策|監管|regulation|government|ministry|compliance'
+        r'|資金|佈局|產業|戰略|模型|model|GPU|chip|semiconductor|硬體|芯片|資料中心|datacenter'
+        r'|AI|artificial\s+intelligence|大模型|人工智[慧能]|machine\s+learning'
+        r'|funding|valuation|revenue|partnership|acquisition|security|safety)\b', _ct71_re.I)
 
     def _is_china_policy(it) -> bool:
         _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or "")[:2000]
         if _CHINA_POLICY_RE.search(_blob):
             return True
+        # iter78: China geo items with ANY AI/tech/business signal count as china_policy
+        # (Chinese AI company activity IS policy-relevant in current geopolitical context)
         if _geo_class(it) == "china" and _CHINA_POLICY_SIGNAL_RE.search(_blob):
             return True
         return False
@@ -8552,22 +8557,44 @@ def _f600_run_fast_path(
             # Find most over-concentrated item to replace
             _worst_it = None
             _worst_idx = -1
+            # iter78b: compute target_player/policy state for swap safety
+            _div1_tp_cur = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+            _div1_tp_distinct = len(_div1_tp_cur)
+            def _div1_safe_to_remove(it):
+                """iter78b: prefer removing non-target-player items; protect coverage."""
+                _v = _f6_vendor_key(it)
+                if _is_target_player(it) and _div1_tp_distinct <= 6:
+                    _other_tp = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s) and s is not it)
+                    if _v not in _other_tp:
+                        return False
+                return True
             if _max_dc > _DIV_MAX_DOMAIN:
                 _worst_dom = _d_counts.most_common(1)[0][0]
                 _dom_items = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _worst_dom]
-                if _dom_items:
+                # iter78b: prefer safe-to-remove items
+                _safe_dom = [(i, s) for i, s in _dom_items if _div1_safe_to_remove(s)]
+                if _safe_dom:
+                    _worst_idx, _worst_it = min(_safe_dom, key=lambda x: _f6_bfp(x[1]))
+                elif _dom_items:
                     _worst_idx, _worst_it = min(_dom_items, key=lambda x: _f6_bfp(x[1]))
             elif _max_vc > _DIV_MAX_VENDOR:
                 _worst_ven = _v_counts.most_common(1)[0][0]
                 _ven_items = [(i, s) for i, s in enumerate(_selected) if _f6_vendor_key(s) == _worst_ven]
-                if _ven_items:
+                _safe_ven = [(i, s) for i, s in _ven_items if _div1_safe_to_remove(s)]
+                if _safe_ven:
+                    _worst_idx, _worst_it = min(_safe_ven, key=lambda x: _f6_bfp(x[1]))
+                elif _ven_items:
                     _worst_idx, _worst_it = min(_ven_items, key=lambda x: _f6_bfp(x[1]))
             elif _dist_doms < _DIV_MIN_DOMAINS or _dist_vens < _DIV_MIN_VENDORS:
                 # Need more diversity: replace item from most-common domain/vendor
                 _worst_dom = _d_counts.most_common(1)[0][0]
                 _dom_items = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _worst_dom]
                 if len(_dom_items) > 1:
-                    _worst_idx, _worst_it = min(_dom_items, key=lambda x: _f6_bfp(x[1]))
+                    _safe_dom_b = [(i, s) for i, s in _dom_items if _div1_safe_to_remove(s)]
+                    if _safe_dom_b:
+                        _worst_idx, _worst_it = min(_safe_dom_b, key=lambda x: _f6_bfp(x[1]))
+                    else:
+                        _worst_idx, _worst_it = min(_dom_items, key=lambda x: _f6_bfp(x[1]))
             if _worst_it is None or _worst_idx < 0:
                 break
             # Find replacement that STRICTLY improves diversity
@@ -8596,8 +8623,14 @@ def _f600_run_fast_path(
                 # iter77: also preserve bucket coverage
                 _test_buckets = len(set(_ct72b_strategic_bucket(s) for s in _test_sel))
                 _cur_buckets = len(set(_ct72b_strategic_bucket(s) for s in _selected))
+                # iter78b: also preserve target_player coverage + TechCrunch/GoogleResearch caps
+                _test_tp_set1 = set(_f6_vendor_key(s) for s in _test_sel if _is_target_player(s))
+                _test_tc1 = sum(1 for s in _test_sel if _is_techcrunch(s))
+                _test_gr1 = sum(1 for s in _test_sel if _f6_is_google_research_blog(s))
                 if (_test_max_dc <= max(_DIV_MAX_DOMAIN, _max_dc) and _test_max_vc <= max(_DIV_MAX_VENDOR, _max_vc)
-                        and _test_buckets >= min(_cur_buckets, 5)):
+                        and _test_buckets >= min(_cur_buckets, 5)
+                        and len(_test_tp_set1) >= min(_div1_tp_distinct, 6)
+                        and _test_tc1 <= _TECHCRUNCH_CAP and _test_gr1 <= _GOOGLE_RESEARCH_CAP):
                     _sample = {"title": str(getattr(_worst_it, "title", ""))[:120],
                                "domain": _f6_domain_key(_worst_it), "vendor": _f6_vendor_key(_worst_it),
                                "reason": "domain_cap" if _max_dc > _DIV_MAX_DOMAIN else ("vendor_cap" if _max_vc > _DIV_MAX_VENDOR else "diversity_increase")}
@@ -8621,6 +8654,53 @@ def _f600_run_fast_path(
         _log.info("FAST_600_MODE iter53: diversity final domains=%d max_domain=%d vendors=%d max_vendor=%d",
                   len(_final_dc), _final_dc.most_common(1)[0][1] if _final_dc else 0,
                   len(_final_vset), _final_vc.most_common(1)[0][1] if _final_vc else 0)
+
+    # iter78: post-diversity target player rescue — re-check after diversity swaps
+    if _is_daily:
+        _post_tp_cur = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+        _post_tp_distinct = len(_post_tp_cur)
+        _post_tp_attempts = 0
+        while _post_tp_distinct < 6 and _post_tp_attempts < 10:
+            _post_tp_attempts += 1
+            _post_tp_swapped = False
+            # iter78b: build vendor count for multi-item swap safety
+            _pt_vc = {}
+            for _pts in _selected:
+                _ptv = _f6_vendor_key(_pts)
+                _pt_vc[_ptv] = _pt_vc.get(_ptv, 0) + 1
+            for _pt_ri in range(len(_selected)):
+                _pt_rv = _f6_vendor_key(_selected[_pt_ri])
+                if _pt_rv in _TARGET_PLAYER_VENDORS:
+                    # iter78b: allow swap if vendor has 2+ items (won't lose the vendor)
+                    if _pt_vc.get(_pt_rv, 0) <= 1:
+                        continue
+                _pt_test = [s for j, s in enumerate(_selected) if j != _pt_ri]
+                for _pt_cand in _pool_300:
+                    if (_pt_cand in _pt_test or _is_ceo_prohibited(_pt_cand)
+                            or _f6_is_dev_noise(_pt_cand)
+                            or _hdf_all_scores.get(id(_pt_cand), {}).get("density_score", 0) < _HDF_NEW_DENSITY_MIN):
+                        continue
+                    _pt_cv = _f6_vendor_key(_pt_cand)
+                    if _pt_cv not in _TARGET_PLAYER_VENDORS or _pt_cv in _post_tp_cur:
+                        continue  # need NEW target player vendor
+                    _pt_n = _pt_test + [_pt_cand]
+                    _pt_nd = _DivCounter(_f6_domain_key(s) for s in _pt_n)
+                    _pt_nv = _DivCounter(_f6_vendor_key(s) for s in _pt_n)
+                    if (_pt_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _pt_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and sum(1 for s in _pt_n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
+                            and sum(1 for s in _pt_n if _is_techcrunch(s)) <= _TECHCRUNCH_CAP):
+                        _selected[_pt_ri] = _pt_cand
+                        _post_tp_cur = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+                        _post_tp_distinct = len(_post_tp_cur)
+                        _log.info("iter78 post-diversity target_player rescue: idx=%d vendor=%s, tp_distinct=%d", _pt_ri, _pt_cv, _post_tp_distinct)
+                        _post_tp_swapped = True
+                        break
+                if _post_tp_swapped:
+                    break
+            if not _post_tp_swapped:
+                _log.warning("iter78 post-diversity target_player rescue: stuck at tp_distinct=%d", _post_tp_distinct)
+                break
 
     # --- iter46: dev_forum replacement loop ---
     # Replace dev_forum_low_value items; limit dev_forum_high_value to <=1 (only if needed)
@@ -9198,23 +9278,57 @@ def _f600_run_fast_path(
                 break
             if not _div_backup2:
                 break
+            # iter78b: compute current target_player set for protection during diversity swap
+            _div2_tp_cur = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+            _div2_tp_distinct = len(_div2_tp_cur)
+            _div2_usp = sum(1 for s in _selected if _is_us_policy(s))
+            _div2_cnp = sum(1 for s in _selected if _is_china_policy(s))
+            _div2_om = sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media"))
             _worst_it2 = None
             _worst_idx2 = -1
+            def _div2_safe_to_remove(it):
+                """iter78b: check if removing this item would break coverage gates."""
+                _v = _f6_vendor_key(it)
+                # protect target player if at boundary
+                if _is_target_player(it) and _div2_tp_distinct <= 6:
+                    _other_tp_v = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s) and s is not it)
+                    if _v not in _other_tp_v:
+                        return False
+                # protect policy items if at boundary
+                if _is_us_policy(it) and (_div2_usp + _div2_cnp) <= 2:
+                    return False
+                if _is_china_policy(it) and _div2_cnp <= 1:
+                    return False
+                # protect official_media if at boundary
+                if _ct72b_source_class(it) in ("official", "media") and _div2_om <= 8:
+                    return False
+                return True
             if _max_dc2 > _DIV_MAX_DOMAIN:
                 _worst_dom2 = _d_counts2.most_common(1)[0][0]
                 _dom_items2 = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _worst_dom2]
-                if _dom_items2:
+                # iter78b: filter out items that are unsafe to remove
+                _safe_dom_items2 = [(i, s) for i, s in _dom_items2 if _div2_safe_to_remove(s)]
+                if _safe_dom_items2:
+                    _worst_idx2, _worst_it2 = min(_safe_dom_items2, key=lambda x: _f6_bfp(x[1]))
+                elif _dom_items2:
                     _worst_idx2, _worst_it2 = min(_dom_items2, key=lambda x: _f6_bfp(x[1]))
             elif _max_vc2 > _DIV_MAX_VENDOR:
                 _worst_ven2 = _v_counts2.most_common(1)[0][0]
                 _ven_items2 = [(i, s) for i, s in enumerate(_selected) if _f6_vendor_key(s) == _worst_ven2]
-                if _ven_items2:
+                _safe_ven_items2 = [(i, s) for i, s in _ven_items2 if _div2_safe_to_remove(s)]
+                if _safe_ven_items2:
+                    _worst_idx2, _worst_it2 = min(_safe_ven_items2, key=lambda x: _f6_bfp(x[1]))
+                elif _ven_items2:
                     _worst_idx2, _worst_it2 = min(_ven_items2, key=lambda x: _f6_bfp(x[1]))
             elif _dist_doms2 < _DIV_MIN_DOMAINS or _dist_vens2 < _DIV_MIN_VENDORS:
                 _worst_dom2 = _d_counts2.most_common(1)[0][0]
                 _dom_items2 = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _worst_dom2]
                 if len(_dom_items2) > 1:
-                    _worst_idx2, _worst_it2 = min(_dom_items2, key=lambda x: _f6_bfp(x[1]))
+                    _safe_dom_items2b = [(i, s) for i, s in _dom_items2 if _div2_safe_to_remove(s)]
+                    if _safe_dom_items2b:
+                        _worst_idx2, _worst_it2 = min(_safe_dom_items2b, key=lambda x: _f6_bfp(x[1]))
+                    else:
+                        _worst_idx2, _worst_it2 = min(_dom_items2, key=lambda x: _f6_bfp(x[1]))
             if _worst_it2 is None or _worst_idx2 < 0:
                 break
             _repl_found2 = False
@@ -9225,6 +9339,9 @@ def _f600_run_fast_path(
                 if _worst_dom_name2 and _f6_domain_key(_bcand2) == _worst_dom_name2:
                     continue
                 if _worst_ven_name2 and _f6_vendor_key(_bcand2) == _worst_ven_name2:
+                    continue
+                # iter78b: reject prohibited candidates
+                if _is_ceo_prohibited(_bcand2):
                     continue
                 _test_sel2 = [s for j, s in enumerate(_selected) if j != _worst_idx2] + [_bcand2]
                 _test_dc2 = _DivCounter(_f6_domain_key(s) for s in _test_sel2)
@@ -9238,8 +9355,16 @@ def _f600_run_fast_path(
                 # iter77: preserve bucket coverage
                 _test_buckets2 = len(set(_ct72b_strategic_bucket(s) for s in _test_sel2))
                 _cur_buckets2 = len(set(_ct72b_strategic_bucket(s) for s in _selected))
+                # iter78b: also verify TechCrunch/GoogleResearch caps and target_player coverage after swap
+                _test_tc2 = sum(1 for s in _test_sel2 if _is_techcrunch(s))
+                _test_gr2 = sum(1 for s in _test_sel2 if _f6_is_google_research_blog(s))
+                _test_tp_set2 = set(_f6_vendor_key(s) for s in _test_sel2 if _is_target_player(s))
+                _test_om2 = sum(1 for s in _test_sel2 if _ct72b_source_class(s) in ("official", "media"))
                 if (_test_max_dc2 <= max(_DIV_MAX_DOMAIN, _max_dc2) and _test_max_vc2 <= max(_DIV_MAX_VENDOR, _max_vc2)
-                        and _test_buckets2 >= min(_cur_buckets2, 5)):
+                        and _test_buckets2 >= min(_cur_buckets2, 5)
+                        and _test_tc2 <= _TECHCRUNCH_CAP and _test_gr2 <= _GOOGLE_RESEARCH_CAP
+                        and len(_test_tp_set2) >= min(_div2_tp_distinct, 6)
+                        and _test_om2 >= min(_div2_om, 8)):
                     _selected[_worst_idx2] = _bcand2
                     _div_backup2.pop(_bi2)
                     _repl_found2 = True
@@ -9274,11 +9399,13 @@ def _f600_run_fast_path(
             _plat_repl_boma = [it for it in _f6_tier(300) if it not in _selected
                                and not _is_platform_domain(it)
                                and not _f6_is_google_research_blog(it)
+                               and not _is_ceo_prohibited(it)  # iter78b
                                and _ct72b_is_bigtech_official_media_actionable(it)
                                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
             _plat_repl_other = [it for it in _f6_tier(300) if it not in _selected
                                 and not _is_platform_domain(it)
                                 and not _f6_is_google_research_blog(it)
+                                and not _is_ceo_prohibited(it)  # iter78b
                                 and _f6_is_bigtech(it)
                                 and not _ct72b_is_bigtech_official_media_actionable(it)
                                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
@@ -9490,6 +9617,199 @@ def _f600_run_fast_path(
                         _hdf_mp_ps2.write_text(_f6_j.dumps(_hdf_d_ps2, ensure_ascii=False, indent=2), encoding="utf-8")
                 except Exception:
                     pass
+
+    # --- iter78b: FINAL RESCUE after ALL swaps (diversity, platform, post-dedup) ---
+    # Re-check target_player, policy, official_media, prohibited caps; swap to fix if broken
+    if _is_daily and len(_selected) >= _max_events:
+        _fr_pool = [it for it in _pool_300 if it not in _selected
+                    and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
+                    and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+        # iter78b: also build wider pool (pool_sorted, relaxed density) for target_player rescue only
+        _fr_pool_wide = [it for it in _pool_sorted if it not in _selected and it not in _fr_pool
+                         and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
+                         and _is_target_player(it)
+                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
+        _fr_changed = False
+        _fr_pre_tp = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+        _fr_pre_usp = sum(1 for s in _selected if _is_us_policy(s))
+        _fr_pre_cnp = sum(1 for s in _selected if _is_china_policy(s))
+        _fr_pre_om = sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media"))
+        # Count candidate target player vendors available in pool
+        _fr_pool_tp_vendors = set(_f6_vendor_key(c) for c in _fr_pool if _is_target_player(c)) - _fr_pre_tp
+        _fr_wide_tp_vendors = set(_f6_vendor_key(c) for c in _fr_pool_wide if _is_target_player(c)) - _fr_pre_tp
+        _log.info("iter78b FINAL rescue ENTER: tp_distinct=%d tp_set=%s usp=%d cnp=%d om=%d pool_size=%d pool_new_tp_vendors=%s wide_pool=%d wide_new_tp=%s",
+                  len(_fr_pre_tp), sorted(_fr_pre_tp), _fr_pre_usp, _fr_pre_cnp, _fr_pre_om,
+                  len(_fr_pool), sorted(_fr_pool_tp_vendors), len(_fr_pool_wide), sorted(_fr_wide_tp_vendors))
+
+        # --- Phase FR-1: target_player_distinct >= 6 ---
+        for _fr_round in range(15):
+            _fr_tp_set = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+            if len(_fr_tp_set) >= 6:
+                break
+            _fr_swapped = False
+            # iter78b: try regular pool first, then wider pool for target_player rescue
+            # Build vendor count to know which vendors have multiple items (safe to swap one out)
+            _fr_vc = {}
+            for _frs in _selected:
+                _frv = _f6_vendor_key(_frs)
+                _fr_vc[_frv] = _fr_vc.get(_frv, 0) + 1
+            for _fr_candidate_pool in [_fr_pool, _fr_pool_wide]:
+                if _fr_swapped:
+                    break
+                for _fr_ri in range(len(_selected)):
+                    _fr_rv = _f6_vendor_key(_selected[_fr_ri])
+                    if _fr_rv in _TARGET_PLAYER_VENDORS:
+                        # iter78b: only skip if this vendor has only 1 item (removing would lose the vendor)
+                        if _fr_vc.get(_fr_rv, 0) <= 1:
+                            continue
+                        # safe to swap: this vendor has 2+ items, we won't lose the vendor
+                    _fr_test_base = [s for j, s in enumerate(_selected) if j != _fr_ri]
+                    for _fr_cand in _fr_candidate_pool:
+                        _fr_cv = _f6_vendor_key(_fr_cand)
+                        if _fr_cv not in _TARGET_PLAYER_VENDORS or _fr_cv in _fr_tp_set:
+                            continue  # need NEW target player vendor
+                        _fr_n = _fr_test_base + [_fr_cand]
+                        _fr_nd = _DivCounter(_f6_domain_key(s) for s in _fr_n)
+                        _fr_nv = _DivCounter(_f6_vendor_key(s) for s in _fr_n)
+                        if (_fr_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                                and _fr_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                                and sum(1 for s in _fr_n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
+                                and sum(1 for s in _fr_n if _is_techcrunch(s)) <= _TECHCRUNCH_CAP):
+                            _selected[_fr_ri] = _fr_cand
+                            # Compute SD for swapped-in item if not cached
+                            if id(_fr_cand) not in _sd72_all_scores:
+                                _sd72_all_scores[id(_fr_cand)] = _sd72_score(_fr_cand)
+                            _fr_changed = True
+                            _fr_swapped = True
+                            _log.info("iter78b FINAL rescue target_player: idx=%d → vendor=%s, tp_distinct=%d (wide=%s)",
+                                      _fr_ri, _fr_cv, len(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))),
+                                      _fr_candidate_pool is _fr_pool_wide)
+                            break
+                    if _fr_swapped:
+                        break
+            if not _fr_swapped:
+                break
+
+        # --- Phase FR-2: us_policy + china_policy >= 2 AND china_policy >= 1 ---
+        for _fr_pol_round in range(10):
+            _fr_usp = sum(1 for s in _selected if _is_us_policy(s))
+            _fr_cnp = sum(1 for s in _selected if _is_china_policy(s))
+            if (_fr_usp + _fr_cnp) >= 2 and _fr_cnp >= 1:
+                break
+            _fr_pol_swapped = False
+            # Determine what we need: prioritize china_policy if < 1, then us_policy
+            _fr_need_china = (_fr_cnp < 1)
+            for _fr_pi in range(len(_selected)):
+                # Don't swap out items that are already useful
+                if _is_us_policy(_selected[_fr_pi]) or _is_china_policy(_selected[_fr_pi]):
+                    continue
+                if _is_target_player(_selected[_fr_pi]):
+                    # Only swap target player if we have >6 distinct
+                    _fr_tp_if_remove = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s) and s is not _selected[_fr_pi])
+                    if len(_fr_tp_if_remove) < 6:
+                        continue
+                _fr_pol_base = [s for j, s in enumerate(_selected) if j != _fr_pi]
+                for _fr_pc in _fr_pool:
+                    if _fr_need_china and not _is_china_policy(_fr_pc):
+                        continue
+                    if not _fr_need_china and not _is_us_policy(_fr_pc):
+                        continue
+                    _fr_pn = _fr_pol_base + [_fr_pc]
+                    _fr_pnd = _DivCounter(_f6_domain_key(s) for s in _fr_pn)
+                    _fr_pnv = _DivCounter(_f6_vendor_key(s) for s in _fr_pn)
+                    if (_fr_pnd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _fr_pnv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and sum(1 for s in _fr_pn if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
+                            and sum(1 for s in _fr_pn if _is_techcrunch(s)) <= _TECHCRUNCH_CAP):
+                        _selected[_fr_pi] = _fr_pc
+                        _fr_changed = True
+                        _fr_pol_swapped = True
+                        _log.info("iter78b FINAL rescue policy: idx=%d → %s, us=%d cn=%d",
+                                  _fr_pi, "china" if _fr_need_china else "us",
+                                  sum(1 for s in _selected if _is_us_policy(s)),
+                                  sum(1 for s in _selected if _is_china_policy(s)))
+                        break
+                if _fr_pol_swapped:
+                    break
+            if not _fr_pol_swapped:
+                break
+
+        # --- Phase FR-3: official_media >= 8 ---
+        for _fr_om_round in range(10):
+            _fr_om_cur = sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media"))
+            if _fr_om_cur >= 8:
+                break
+            _fr_om_swapped = False
+            for _fr_oi in range(len(_selected)):
+                if _ct72b_source_class(_selected[_fr_oi]) in ("official", "media"):
+                    continue
+                _fr_om_base = [s for j, s in enumerate(_selected) if j != _fr_oi]
+                for _fr_oc in _fr_pool:
+                    if _fr_oc in _fr_om_base:
+                        continue
+                    if _ct72b_source_class(_fr_oc) not in ("official", "media"):
+                        continue
+                    _fr_on = _fr_om_base + [_fr_oc]
+                    _fr_ond = _DivCounter(_f6_domain_key(s) for s in _fr_on)
+                    _fr_onv = _DivCounter(_f6_vendor_key(s) for s in _fr_on)
+                    if (_fr_ond.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _fr_onv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and sum(1 for s in _fr_on if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
+                            and sum(1 for s in _fr_on if _is_techcrunch(s)) <= _TECHCRUNCH_CAP):
+                        _selected[_fr_oi] = _fr_oc
+                        _fr_changed = True
+                        _fr_om_swapped = True
+                        _log.info("iter78b FINAL rescue official_media: idx=%d, om=%d",
+                                  _fr_oi, sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")))
+                        break
+                if _fr_om_swapped:
+                    break
+            if not _fr_om_swapped:
+                break
+
+        # --- Phase FR-4: purge any prohibited items that leaked through ---
+        for _fr_purge_round in range(10):
+            _fr_prohib_idx = None
+            for _fri, _frs in enumerate(_selected):
+                if _is_ceo_prohibited(_frs):
+                    _fr_prohib_idx = _fri
+                    break
+            if _fr_prohib_idx is None:
+                break
+            _fr_purge_base = [s for j, s in enumerate(_selected) if j != _fr_prohib_idx]
+            _fr_purge_done = False
+            for _fr_prc in _fr_pool:
+                if _fr_prc in _fr_purge_base:
+                    continue
+                _fr_prn = _fr_purge_base + [_fr_prc]
+                _fr_prnd = _DivCounter(_f6_domain_key(s) for s in _fr_prn)
+                _fr_prnv = _DivCounter(_f6_vendor_key(s) for s in _fr_prn)
+                if (_fr_prnd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                        and _fr_prnv.most_common(1)[0][1] <= _DIV_MAX_VENDOR):
+                    _selected[_fr_prohib_idx] = _fr_prc
+                    _fr_changed = True
+                    _fr_purge_done = True
+                    _log.info("iter78b FINAL rescue purge prohibited: idx=%d", _fr_prohib_idx)
+                    break
+            if not _fr_purge_done:
+                break
+
+        if _fr_changed:
+            _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+            _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+            try:
+                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+            except Exception:
+                pass
+            _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+            _log.info("iter78b FINAL rescue: tp=%d us=%d cn=%d om=%d tc=%d gr=%d prohib=%d",
+                      len(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))),
+                      sum(1 for s in _selected if _is_us_policy(s)),
+                      sum(1 for s in _selected if _is_china_policy(s)),
+                      sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")),
+                      sum(1 for s in _selected if _is_techcrunch(s)),
+                      sum(1 for s in _selected if _f6_is_google_research_blog(s)),
+                      sum(1 for s in _selected if _is_ceo_prohibited(s)))
 
     # --- iter53: domain/vendor diversity meta + gate ---
     _div_domain_counts = dict(_DivCounter(_f6_domain_key(s) for s in _selected))
@@ -13312,9 +13632,58 @@ def run_pipeline() -> None:
                             _hy_dom_counts[_hy_dk] += 1
                             _hy_pri_injected += 1
                             _hy_injected += 1
+                    # iter78b Pass 3: target player VENDOR diversity injection
+                    # google_news articles mention many companies in titles but share the same domain;
+                    # inject items whose titles mention under-represented target player vendors
+                    import re as _hy_re
+                    _HY_TP_KW = [
+                        (_hy_re.compile(r"\b(?:Microsoft|Azure|Copilot|Bing|Windows)\b", _hy_re.I), "Microsoft"),
+                        (_hy_re.compile(r"\bMeta\b", _hy_re.I), "Meta"),
+                        (_hy_re.compile(r"\bxAI\b", _hy_re.I), "xAI"),
+                        (_hy_re.compile(r"\bApple\b", _hy_re.I), "Apple"),
+                        (_hy_re.compile(r"\b(?:Alibaba|Qwen)\b", _hy_re.I), "Alibaba"),
+                        (_hy_re.compile(r"\bTencent\b", _hy_re.I), "Tencent"),
+                        (_hy_re.compile(r"\bByteDance\b", _hy_re.I), "ByteDance"),
+                        (_hy_re.compile(r"\b(?:Baidu|Ernie)\b", _hy_re.I), "Baidu"),
+                        (_hy_re.compile(r"\bDeepSeek\b", _hy_re.I), "DeepSeek"),
+                        (_hy_re.compile(r"\b(?:Google|DeepMind|Gemini)\b", _hy_re.I), "Google"),
+                        (_hy_re.compile(r"\bOpenAI\b", _hy_re.I), "OpenAI"),
+                        (_hy_re.compile(r"\bNVIDIA\b", _hy_re.I), "NVIDIA"),
+                        (_hy_re.compile(r"\bAnthropic\b", _hy_re.I), "Anthropic"),
+                        (_hy_re.compile(r"\bAmazon\b", _hy_re.I), "Amazon"),
+                        (_hy_re.compile(r"\bSamsung\b", _hy_re.I), "Samsung"),
+                    ]
+                    def _hy_title_vendor(it):
+                        _t = str(getattr(it, "title", "") or "")
+                        for _rx, _vn in _HY_TP_KW:
+                            if _rx.search(_t):
+                                return _vn
+                        return "other"
+                    _hy_vendor_counts = {}
+                    for _hy_it in _targeted_pool:
+                        _hv = _hy_title_vendor(_hy_it)
+                        _hy_vendor_counts[_hv] = _hy_vendor_counts.get(_hv, 0) + 1
+                    _HY_TP_SET = frozenset({"OpenAI", "Microsoft", "Google", "Meta", "Amazon", "NVIDIA",
+                                            "Anthropic", "xAI", "Apple", "Alibaba", "Tencent", "ByteDance",
+                                            "Baidu", "DeepSeek"})
+                    _hy_tp_injected = 0
+                    for _hy_it in raw_items[_hydrate_n:]:
+                        if _hy_tp_injected >= 30:
+                            break
+                        if id(_hy_it) in _hy_pool_ids:
+                            continue
+                        _hv = _hy_title_vendor(_hy_it)
+                        if _hv in _HY_TP_SET and _hy_vendor_counts.get(_hv, 0) < 3:
+                            _targeted_pool.append(_hy_it)
+                            _hy_pool_ids.add(id(_hy_it))
+                            _hy_vendor_counts[_hv] = _hy_vendor_counts.get(_hv, 0) + 1
+                            _hy_tp_injected += 1
+                            _hy_injected += 1
+                    if _hy_tp_injected:
+                        log.info("DAILY hydration vendor diversity: injected %d items for target player coverage", _hy_tp_injected)
                     if _hy_injected:
-                        log.info("DAILY hydration diversity: injected %d items from %d under-represented domains (priority=%d)",
-                                 _hy_injected, len([d for d, c in _hy_dom_counts.items() if c <= 2 and d]), _hy_pri_injected)
+                        log.info("DAILY hydration diversity: injected %d items from %d under-represented domains (priority=%d vendor=%d)",
+                                 _hy_injected, len([d for d, c in _hy_dom_counts.items() if c <= 2 and d]), _hy_pri_injected, _hy_tp_injected)
                 # iter42: DAILY uses per-url=4s, batch_timeout=55s (hydrate_hard_deadline)
                 _hy_timeout = 4 if _is_daily else 8
                 _hy_batch   = 55 if _is_daily else 180
