@@ -478,6 +478,18 @@ if (Test-Path $_doPreCleanPath) {
     Remove-Item -LiteralPath $_doPreCleanPath -Force -ErrorAction SilentlyContinue
     Write-Output "  [PRE-CLEAN] 已刪除 daily_overlap.meta.json"
 }
+# iter77: PRE-CLEAN exec_zh_narrative.meta.json — avoid stale old-run narrative data causing verify_run FAIL
+$_zhnPreCleanPath = Join-Path $repoRoot "outputs\exec_zh_narrative.meta.json"
+if (Test-Path $_zhnPreCleanPath) {
+    Remove-Item -LiteralPath $_zhnPreCleanPath -Force -ErrorAction SilentlyContinue
+    Write-Output "  [PRE-CLEAN] 已刪除 exec_zh_narrative.meta.json"
+}
+# iter77: PRE-CLEAN supply_resilience.meta.json — avoid stale observability data confusion
+$_srPreCleanPath = Join-Path $repoRoot "outputs\supply_resilience.meta.json"
+if (Test-Path $_srPreCleanPath) {
+    Remove-Item -LiteralPath $_srPreCleanPath -Force -ErrorAction SilentlyContinue
+    Write-Output "  [PRE-CLEAN] 已刪除 supply_resilience.meta.json"
+}
 # iter71: PRE-CLEAN content_mix.meta.json
 $_cmPreCleanPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
 if (Test-Path $_cmPreCleanPath) {

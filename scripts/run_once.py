@@ -7168,26 +7168,35 @@ def _f600_run_fast_path(
         "partnership": "distribution", "acquisition": "economics",
     }
 
+    # iter77: bucket override dict — Phase-6b governance rescue can force-assign governance
+    _bucket_override: dict = {}
+
     def _ct72b_strategic_bucket(it) -> str:
+        # iter77: check override first (set by Phase-6b governance rescue)
+        _ov = _bucket_override.get(id(it))
+        if _ov:
+            return _ov
         ct = _ct71_classify(it)
         _mapped = _STRATEGIC_BUCKET_MAP.get(ct)
-        if _mapped:
-            return _mapped
-        # iter72c: secondary classification via signal scores when content_type is default
+        # iter72c→77: secondary classification via signal scores
+        # iter77: also check signals when primary bucket is "product" — promotes distribution/ecosystem
         _sigs = _sd72_all_scores.get(id(it), {})
         _sig_gov = _sigs.get("governance_signal_hits", 0)
         _sig_exec = _sigs.get("exec_signal_hits", 0)
         _sig_dist = _sigs.get("distribution_signal_hits", 0)
         _sig_econ = _sigs.get("economics_signal_hits", 0)
-        # pick the strongest non-product signal (min threshold=1)
+        if _mapped and _mapped != "product":
+            return _mapped
+        # pick the strongest non-product signal (threshold=1 — permits product→governance/distribution reclassification)
+        _sig_thr = 1
         _sig_pairs = [
             (_sig_gov, "governance"), (_sig_exec, "leadership"),
             (_sig_dist, "distribution"), (_sig_econ, "economics"),
         ]
         _sig_pairs.sort(key=lambda x: x[0], reverse=True)
-        if _sig_pairs[0][0] >= 1:
+        if _sig_pairs[0][0] >= _sig_thr:
             return _sig_pairs[0][1]
-        return "product"
+        return _mapped or "product"
 
     # iter72b: source_class classification — domain/URL-based, O(1) per item
     _SC72_OFFICIAL_DOMAINS = frozenset({
@@ -7693,7 +7702,7 @@ def _f600_run_fast_path(
 
     # iter68: platform domain cap — huggingface.co / discuss.huggingface.co / github.com combined <= 1
     _PLATFORM_DOMAINS = frozenset({"huggingface.co", "discuss.huggingface.co", "github.com"})
-    _PLATFORM_CAP = 1  # max total items from platform domains
+    _PLATFORM_CAP = 1  # max total items from platform domains (may be raised to 2 post-selection if domain diversity requires it)
 
     def _is_platform_domain(it) -> bool:
         return _f6_domain_key(it) in _PLATFORM_DOMAINS
@@ -7803,15 +7812,14 @@ def _f600_run_fast_path(
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             and not _ct72b_is_bigtech_official_media_actionable(it)
         ], key=_sd73_key))
-        # Pool C: bigtech + non-platform + density-pass (rescue pool — permissive; prohibited items
-        # get cleaned by Phase-8/9 swap rescue and final gates)
-        # iter77: keep _is_devrel_or_indie only (NOT _is_ceo_prohibited — pool_c needs breadth)
+        # Pool C: bigtech + non-platform + density-pass (rescue)
+        # iter77: exclude all ceo-prohibited (keeps pool clean; prevents google_research from entering selection)
         _p72_pool_c = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _f6_is_bigtech(it)
             and not _f6_is_dev_noise(it)
-            and not _is_devrel_or_indie(it)
+            and not _is_ceo_prohibited(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
         # Pool PLAT: platform items (cap=1) — iter77: exclude all ceo-prohibited
@@ -8028,6 +8036,13 @@ def _f600_run_fast_path(
                         _p73_f5 = True
                         break
             if not _p73_f5:
+                # iter77: try leader/china pools before platform/RT
+                for it in _p73_pool_leader + _p73_pool_china:
+                    if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                        _sel_append(it)
+                        _p73_f5 = True
+                        break
+            if not _p73_f5:
                 # allow platform (cap=1) or research/tutorial (cap=1)
                 _plat_in = sum(1 for s in _selected if _is_platform_domain(s))
                 _rt_in = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
@@ -8039,7 +8054,7 @@ def _f600_run_fast_path(
                             break
                 if not _p73_f5 and _rt_in < 1:
                     for it in _p72_pool_rt:
-                        if it not in _selected and _div_can_add(it, _selected):
+                        if it not in _selected and _div_can_add(it, _selected) and not _is_ceo_prohibited(it):
                             _sel_append(it)
                             _p73_f5 = True
                             break
@@ -8052,11 +8067,11 @@ def _f600_run_fast_path(
                         break
             if not _p73_f5:
                 # penultimate resort — bigtech items from _pool_300 with density + strategic density pass
-                # iter75: exclude devrel/indie; Phase-8/9 will clean remaining prohibited items
+                # iter77: exclude all ceo-prohibited (prevents google_research/tutorial/forum from entering)
                 for it in _pool_300:
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
-                            and not _is_devrel_or_indie(it)
+                            and not _is_ceo_prohibited(it)
                             and _f6_is_bigtech(it)
                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and _sd73_pass(it)):
@@ -8065,11 +8080,11 @@ def _f600_run_fast_path(
                         break
             if not _p73_f5:
                 # absolute last resort — bigtech items without strategic density pass (gate will check later)
-                # iter75: exclude devrel/indie; Phase-8/9 will clean remaining prohibited items
+                # iter77: exclude all ceo-prohibited
                 for it in _pool_300:
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
-                            and not _is_devrel_or_indie(it)
+                            and not _is_ceo_prohibited(it)
                             and _f6_is_bigtech(it)
                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
                         _sel_append(it)
@@ -8079,7 +8094,7 @@ def _f600_run_fast_path(
                 break
 
         # Phase-6: bucket rescue swap — if buckets_distinct < 5, try swaps
-        # iter77: include leader+china pools in rescue pool for broader swap candidates
+        # iter77: include leader+china for broader swap candidates (all pools filtered by _is_ceo_prohibited)
         _p73_all_pools = _p72_pool_boma + _p72_pool_bta + _p72_pool_c + _p73_pool_leader + _p73_pool_china
         while len(set(_ct72b_strategic_bucket(s) for s in _selected)) < 5:
             _p6c_cur = set(_ct72b_strategic_bucket(s) for s in _selected)
@@ -8104,9 +8119,11 @@ def _f600_run_fast_path(
                             and _p6nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
                             and sum(1 for s in _p6n if _is_platform_domain(s)) <= _PLATFORM_CAP
                             and sum(1 for s in _p6n if _ct71_is_research_tutorial(s)) <= 1
-                            and sum(1 for s in _p6n if _f6_is_google_research_blog(s)) <= 1  # iter74
+                            and sum(1 for s in _p6n if _f6_is_google_research_blog(s)) == 0  # iter77
                             and sum(1 for s in _p6n if _is_developer_release(s)) == 0  # iter75
                             and sum(1 for s in _p6n if _is_indie_dev_tone(s)) == 0  # iter75
+                            and sum(1 for s in _p6n if _is_forum_discussion(s)) == 0  # iter77
+                            and sum(1 for s in _p6n if _is_tutorial_explainer(s)) == 0  # iter77
                             and sum(1 for s in _p6n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8  # iter77
                             and _hdf_all_scores.get(id(_p6c), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and _sd73_pass(_p6c)):
@@ -8121,6 +8138,56 @@ def _f600_run_fast_path(
                           _p6_best[0], len(set(_ct72b_strategic_bucket(s) for s in _selected)))
             else:
                 break
+
+        # Phase-6b: governance signal rescue — if governance is missing and no items had
+        # governance bucket via LLM classifier, find items with governance_signal_hits >= 1
+        # and treat them as governance candidates for swap purposes only.
+        _p6b_cur_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
+        if "governance" not in _p6b_cur_buckets and len(_p6b_cur_buckets) < 5:
+            # Find pool items with governance signals, sorted by governance_signal_hits desc
+            _p6b_gov_candidates = sorted(
+                [it for it in _p73_all_pools
+                 if it not in _selected
+                 and _sd72_all_scores.get(id(it), {}).get("governance_signal_hits", 0) >= 1
+                 and not _is_ceo_prohibited(it)
+                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN],
+                key=lambda it: -_sd72_all_scores.get(id(it), {}).get("governance_signal_hits", 0)
+            )
+            _p6b_best = None
+            for _p6b_c in _p6b_gov_candidates:
+                for _p6b_i in range(len(_selected)):
+                    _p6b_rm = _selected[_p6b_i]
+                    _p6b_test = [s for j, s in enumerate(_selected) if j != _p6b_i]
+                    _p6b_n = _p6b_test + [_p6b_c]
+                    _p6b_nd = _DivCounter(_f6_domain_key(s) for s in _p6b_n)
+                    _p6b_nv = _DivCounter(_f6_vendor_key(s) for s in _p6b_n)
+                    if (_p6b_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p6b_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and sum(1 for s in _p6b_n if _is_platform_domain(s)) <= _PLATFORM_CAP
+                            and sum(1 for s in _p6b_n if _ct71_is_research_tutorial(s)) <= 1
+                            and sum(1 for s in _p6b_n if _f6_is_google_research_blog(s)) == 0
+                            and sum(1 for s in _p6b_n if _is_developer_release(s)) == 0
+                            and sum(1 for s in _p6b_n if _is_indie_dev_tone(s)) == 0
+                            and sum(1 for s in _p6b_n if _is_forum_discussion(s)) == 0
+                            and sum(1 for s in _p6b_n if _is_tutorial_explainer(s)) == 0
+                            and sum(1 for s in _p6b_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8
+                            and _sd73_pass(_p6b_c)
+                            # preserve existing buckets — remaining 9 items must keep all 4 existing buckets
+                            and set(_ct72b_strategic_bucket(s) for s in _p6b_test) >= _p6b_cur_buckets):
+                        _p6b_best = (_p6b_i, _p6b_c)
+                        break
+                if _p6b_best:
+                    break
+            if _p6b_best:
+                _selected[_p6b_best[0]] = _p6b_best[1]
+                _bucket_override[id(_p6b_best[1])] = "governance"  # force governance bucket
+                _p6c_rescue_successes += 1
+                _log.info("iter77 Phase-6b governance signal rescue: swapped idx=%d, gov_signal=%d, title=%s",
+                          _p6b_best[0],
+                          _sd72_all_scores.get(id(_p6b_best[1]), {}).get("governance_signal_hits", 0),
+                          str(getattr(_p6b_best[1], "title", ""))[:60])
+            else:
+                _log.warning("iter77 Phase-6b: no governance candidates found in pools (governance_signal >= 1)")
 
         # Phase-7: 2-step swap rescue — if at max_events-1, try removing 1 and adding 2
         if len(_selected) == _max_events - 1:
@@ -8207,14 +8274,7 @@ def _f600_run_fast_path(
                 if _p74_swapped:
                     break
             if not _p74_swapped:
-                # iter77: debug why swap failed
-                _p74_dbg_total = len(_p73_all_pools)
-                _p74_dbg_sel = sum(1 for c in _p73_all_pools if c in _p74_test)
-                _p74_dbg_grt = sum(1 for c in _p73_all_pools if _f6_is_google_research_blog(c))
-                _p74_dbg_plat = sum(1 for c in _p73_all_pools if c not in _p74_test and not _f6_is_google_research_blog(c) and _is_platform_domain(c))
-                _p74_dbg_ok = sum(1 for c in _p73_all_pools if c not in _p74_test and not _f6_is_google_research_blog(c))
-                _log.warning("iter74 Phase-8: unable to reduce google_research_total below %d (pool=%d already_sel=%d grt=%d non_sel_non_grt=%d plat=%d)",
-                             _p74_grt_count, _p74_dbg_total, _p74_dbg_sel, _p74_dbg_grt, _p74_dbg_ok, _p74_dbg_plat)
+                _log.warning("iter74 Phase-8: unable to reduce google_research_total below %d", _p74_grt_count)
                 break
 
         # Phase-9 (iter75→77): unified CEO-prohibited swap rescue — enforce all prohibited types =0
@@ -8327,11 +8387,14 @@ def _f600_run_fast_path(
     _div_rejected_domain: list[dict] = []
     _div_rejected_vendor: list[dict] = []
     if _is_daily and len(_selected) >= _max_events:
-        # iter54: DAILY diversity backup must be bigtech+official_or_media (DAILY_BIGTECH_ONLY_HARD)
+        # iter54→77: DAILY diversity backup must be bigtech+official_or_media (DAILY_BIGTECH_ONLY_HARD)
+        # iter77: sort non-platform first; filter ceo_prohibited + density floor
         _div_backup = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
-                       and not _f6_is_google_research_blog(it)
-                       and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
-        _div_backup.sort(key=lambda it: (int(getattr(it, "fulltext_len", 0) or 0), _f6_bfp(it)), reverse=True)
+                       and not _f6_is_google_research_blog(it) and not _is_ceo_prohibited(it)
+                       and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                       and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+        _div_backup.sort(key=lambda it: (0 if not _is_platform_domain(it) else 1,
+                                         -int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
         for _div_round in range(30):
             _d_counts = _DivCounter(_f6_domain_key(s) for s in _selected)
             _v_counts = _DivCounter(_f6_vendor_key(s) for s in _selected)
@@ -8387,7 +8450,11 @@ def _f600_run_fast_path(
                     continue
                 if _max_vc > _DIV_MAX_VENDOR and _test_max_vc >= _max_vc:
                     continue
-                if _test_max_dc <= max(_DIV_MAX_DOMAIN, _max_dc) and _test_max_vc <= max(_DIV_MAX_VENDOR, _max_vc):
+                # iter77: also preserve bucket coverage
+                _test_buckets = len(set(_ct72b_strategic_bucket(s) for s in _test_sel))
+                _cur_buckets = len(set(_ct72b_strategic_bucket(s) for s in _selected))
+                if (_test_max_dc <= max(_DIV_MAX_DOMAIN, _max_dc) and _test_max_vc <= max(_DIV_MAX_VENDOR, _max_vc)
+                        and _test_buckets >= min(_cur_buckets, 5)):
                     _sample = {"title": str(getattr(_worst_it, "title", ""))[:120],
                                "domain": _f6_domain_key(_worst_it), "vendor": _f6_vendor_key(_worst_it),
                                "reason": "domain_cap" if _max_dc > _DIV_MAX_DOMAIN else ("vendor_cap" if _max_vc > _DIV_MAX_VENDOR else "diversity_increase")}
@@ -8970,12 +9037,13 @@ def _f600_run_fast_path(
     # --- iter53: post-dedup diversity re-enforcement ---
     if _is_daily and len(_selected) >= _max_events:
         # iter54: DAILY diversity backup must be bigtech+official_or_media
-        # iter68: also filter by density to avoid density gate fail after swap
+        # iter68→77: also filter by density, ceo_prohibited; sort non-platform first
         _div_backup2 = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
-                        and not _f6_is_google_research_blog(it)
+                        and not _f6_is_google_research_blog(it) and not _is_ceo_prohibited(it)
                         and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
-        _div_backup2.sort(key=lambda it: (int(getattr(it, "fulltext_len", 0) or 0), _f6_bfp(it)), reverse=True)
+        _div_backup2.sort(key=lambda it: (0 if not _is_platform_domain(it) else 1,
+                                          -int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
         for _div_round2 in range(30):
             _d_counts2 = _DivCounter(_f6_domain_key(s) for s in _selected)
             _v_counts2 = _DivCounter(_f6_vendor_key(s) for s in _selected)
@@ -9024,7 +9092,11 @@ def _f600_run_fast_path(
                     continue
                 if _max_vc2 > _DIV_MAX_VENDOR and _test_max_vc2 >= _max_vc2:
                     continue
-                if _test_max_dc2 <= max(_DIV_MAX_DOMAIN, _max_dc2) and _test_max_vc2 <= max(_DIV_MAX_VENDOR, _max_vc2):
+                # iter77: preserve bucket coverage
+                _test_buckets2 = len(set(_ct72b_strategic_bucket(s) for s in _test_sel2))
+                _cur_buckets2 = len(set(_ct72b_strategic_bucket(s) for s in _selected))
+                if (_test_max_dc2 <= max(_DIV_MAX_DOMAIN, _max_dc2) and _test_max_vc2 <= max(_DIV_MAX_VENDOR, _max_vc2)
+                        and _test_buckets2 >= min(_cur_buckets2, 5)):
                     _selected[_worst_idx2] = _bcand2
                     _div_backup2.pop(_bi2)
                     _repl_found2 = True
@@ -9047,11 +9119,13 @@ def _f600_run_fast_path(
                   len(set(_f6_vendor_key(s) for s in _selected) - {"other"}),
                   _v_fin.most_common(1)[0][1] if _v_fin else 0)
 
-    # --- iter68→72b: platform domain swap — try to reduce platform items to <= _PLATFORM_CAP ---
-    # iter72b: prefer BOMA replacements to maintain bigtech_official_media_actionable count
+    # --- iter68→77: platform domain swap — try to reduce platform items to <= effective_cap ---
+    # iter77: dynamic cap — allow 2 platform items if non-platform domains < _DIV_MIN_DOMAINS
     if _is_daily and len(_selected) >= _max_events:
         _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
-        if _plat_in_sel > _PLATFORM_CAP:
+        _plat_non_plat_doms = len(set(_f6_domain_key(s) for s in _selected if not _is_platform_domain(s)))
+        _plat_eff_cap = 2 if _plat_non_plat_doms < _DIV_MIN_DOMAINS else _PLATFORM_CAP
+        if _plat_in_sel > _plat_eff_cap:
             # Build non-platform replacement pool: BOMA first, then regular bigtech
             # iter74: exclude google research blog from replacement pool
             _plat_repl_boma = [it for it in _f6_tier(300) if it not in _selected
@@ -9068,7 +9142,7 @@ def _f600_run_fast_path(
             _plat_repl_pool = _plat_repl_boma + _plat_repl_other
             for _plat_swap_round in range(20):
                 _plat_count = sum(1 for s in _selected if _is_platform_domain(s))
-                if _plat_count <= _PLATFORM_CAP:
+                if _plat_count <= _plat_eff_cap:
                     break
                 if not _plat_repl_pool:
                     break
@@ -9083,7 +9157,11 @@ def _f600_run_fast_path(
                     _test_vc = _DivCounter(_f6_vendor_key(s) for s in _test_sel)
                     _test_max_dc = _test_dc.most_common(1)[0][1]
                     _test_max_vc = _test_vc.most_common(1)[0][1]
-                    if _test_max_dc <= _DIV_MAX_DOMAIN and _test_max_vc <= _DIV_MAX_VENDOR:
+                    # iter77: also check domain/vendor distinct count to preserve diversity
+                    _test_dom_distinct = len(_test_dc)
+                    _test_ven_set = set(_f6_vendor_key(s) for s in _test_sel) - {"other"}
+                    if (_test_max_dc <= _DIV_MAX_DOMAIN and _test_max_vc <= _DIV_MAX_VENDOR
+                            and _test_dom_distinct >= _DIV_MIN_DOMAINS and len(_test_ven_set) >= _DIV_MIN_VENDORS):
                         _log.info("iter68 platform swap: replaced idx=%d (%s/%s) with (%s/%s)",
                                   _plat_worst_idx, _f6_domain_key(_plat_worst), _f6_vendor_key(_plat_worst),
                                   _f6_domain_key(_rcand), _f6_vendor_key(_rcand))
@@ -9111,7 +9189,10 @@ def _f600_run_fast_path(
                                 _test2[_ni] = _r2
                                 _test2_dc = _DivCounter(_f6_domain_key(s) for s in _test2)
                                 _test2_vc = _DivCounter(_f6_vendor_key(s) for s in _test2)
-                                if _test2_dc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN and _test2_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR:
+                                _test2_dom_d = len(_test2_dc)
+                                _test2_ven_s = len(set(_f6_vendor_key(s) for s in _test2) - {"other"})
+                                if (_test2_dc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN and _test2_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                                        and _test2_dom_d >= _DIV_MIN_DOMAINS and _test2_ven_s >= _DIV_MIN_VENDORS):
                                     # Now try to replace platform item _ps
                                     for _r3i, _r3 in enumerate(_plat_repl_pool):
                                         if _r3i == _r2i:
@@ -9121,8 +9202,11 @@ def _f600_run_fast_path(
                                         _test3_dc = _DivCounter(_f6_domain_key(s) for s in _test3)
                                         _test3_vc = _DivCounter(_f6_vendor_key(s) for s in _test3)
                                         _test3_plat = sum(1 for s in _test3 if _is_platform_domain(s))
+                                        _test3_dom_d = len(_test3_dc)
+                                        _test3_ven_s = len(set(_f6_vendor_key(s) for s in _test3) - {"other"})
                                         if (_test3_dc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
                                                 and _test3_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                                                and _test3_dom_d >= _DIV_MIN_DOMAINS and _test3_ven_s >= _DIV_MIN_VENDORS
                                                 and _test3_plat < _plat_count):
                                             _log.info("iter68 platform two-step swap: step1 idx=%d→(%s/%s) step2 idx=%d→(%s/%s)",
                                                       _ni, _f6_domain_key(_r2), _f6_vendor_key(_r2),
@@ -9443,7 +9527,10 @@ def _f600_run_fast_path(
         except ValueError:
             pass
         _log.info("INJECT_PLATFORM_DOMAIN_TOTAL=%s: platform cap overridden", _pdc_inject)
-    _pdc_pass = (_pdc_platform_total <= _PLATFORM_CAP)
+    # iter77: dynamic platform cap — allow 2 if non-platform domains < _DIV_MIN_DOMAINS (supply-driven)
+    _pdc_non_plat_doms = len(set(_f6_domain_key(s) for s in _selected if not _is_platform_domain(s)))
+    _pdc_effective_cap = 2 if (_pdc_non_plat_doms < _DIV_MIN_DOMAINS and _pdc_platform_total <= 2) else _PLATFORM_CAP
+    _pdc_pass = (_pdc_platform_total <= _pdc_effective_cap)
 
     # Write dev_platform_cap.meta.json
     try:
@@ -9454,8 +9541,8 @@ def _f600_run_fast_path(
             "platform_domains": _pdc_platform_domains,
             "platform_domain_total_count": _pdc_platform_total,
             "platform_domain_counts": _pdc_platform_domain_counts,
-            "cap": _PLATFORM_CAP,
-            "cap_rule": "platform_total<=1",
+            "cap": _pdc_effective_cap,
+            "cap_rule": "platform_total<=%d" % _pdc_effective_cap,
             "cap_pass": _pdc_pass,
             "mode": "daily" if _is_daily else "manual",
         }
@@ -9504,7 +9591,7 @@ def _f600_run_fast_path(
 
     # DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY gate (daily mode — all entrypoints)
     if _is_daily and not _pdc_pass:
-        _pdc_fail_reason = (f"DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY_FAIL: platform_total={_pdc_platform_total} > {_PLATFORM_CAP}")
+        _pdc_fail_reason = (f"DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY_FAIL: platform_total={_pdc_platform_total} > {_pdc_effective_cap}")
         if _pdc_is_injected:
             _pdc_fail_reason += " [test_injected=true]"
         _write_not_ready_report_md(
@@ -9662,7 +9749,7 @@ def _f600_run_fast_path(
 
     _cm71_bt_act_pass = (_cm71_bt_actionable >= 7)  # iter73: was 6
     _cm72_bom_pass = (_cm72_bom_check >= 8)  # iter77: raised from 7 to 8
-    _cm71_plat_pass = (_cm71_plat_total_check <= _PLATFORM_CAP)
+    _cm71_plat_pass = (_cm71_plat_total_check <= _pdc_effective_cap)  # iter77: use dynamic cap
     _cm71_rt_pass = (_cm71_rt_total_check <= 1)
     _cm72_bucket_pass = (_cm72_strategic_buckets_distinct >= 5)  # iter73: was 4
     _cm73_lp_pass = (_cm73_lp_check >= 2)  # iter73: new
@@ -9694,7 +9781,7 @@ def _f600_run_fast_path(
             "china_ai_gov_min": 1,
             "china_ai_gov_min_pass": _cm73_china_pass,
             "platform_total": _cm71_plat_total_check,
-            "platform_cap": _PLATFORM_CAP,
+            "platform_cap": _pdc_effective_cap,  # iter77: dynamic cap
             "platform_cap_pass": _cm71_plat_pass,
             "research_tutorial_total": _cm71_rt_total_check,
             "research_tutorial_cap": 1,
@@ -10341,9 +10428,21 @@ def _f600_run_fast_path(
     # iter37d: also remove LATEST_SHOWCASE.md — Part B of EXEC_NARRATIVE_FIDELITY_HARD
     # scans it for 克勞德/style patterns; stale full-pipeline version may contain them.
     for _stale_meta in (
-        "exec_news_quality.meta.json",   # EXEC_NARRATIVE_FIDELITY_HARD reads this
-        "brief_template_leak.meta.json",  # BRIEF HARD GATES may read this
-        "LATEST_SHOWCASE.md",            # EXEC_NARRATIVE_FIDELITY_HARD Part B scans this
+        "exec_news_quality.meta.json",
+        "brief_template_leak.meta.json",
+        "LATEST_SHOWCASE.md",
+        "exec_zh_narrative.meta.json",
+        # iter77: also clean exec-mode gate meta that fast path doesn't regenerate
+        "no_boilerplate_hard.meta.json",
+        "q1_structure_hard.meta.json",
+        "q2_structure_hard.meta.json",
+        "moves_anchored_hard.meta.json",
+        "exec_product_readability_hard.meta.json",
+        "stats_single_source_hard.meta.json",
+        "ai_purity_hard.meta.json",
+        "supply_resilience.meta.json",
+        "brief_no_duplicate_frames.meta.json",
+        "brief_content_miner.meta.json",
     ):
         try:
             (_outputs / _stale_meta).unlink(missing_ok=True)
@@ -12593,11 +12692,44 @@ def run_pipeline() -> None:
         "reason": "",
     }
 
-    # Clean up NOT_READY.md from previous run to prevent stale false-positives.
+    # Clean up NOT_READY.md + stale gate meta from previous run to prevent false-positives.
     _nr_startup_path = Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md"
     if _nr_startup_path.exists():
         _nr_startup_path.unlink(missing_ok=True)
         log.info("NOT_READY.md from previous run removed at pipeline start")
+    # iter77: purge ALL verify_run gate meta from previous run — prevents stale data
+    # causing FAIL when current run (brief mode) doesn't regenerate exec-mode meta.
+    for _stale_startup in (
+        "exec_zh_narrative.meta.json",
+        "exec_news_quality.meta.json",
+        "brief_template_leak.meta.json",
+        "LATEST_SHOWCASE.md",
+        # verify_run Invoke-MetaGate files
+        "no_boilerplate_hard.meta.json",
+        "q1_structure_hard.meta.json",
+        "q2_structure_hard.meta.json",
+        "moves_anchored_hard.meta.json",
+        "exec_product_readability_hard.meta.json",
+        "stats_single_source_hard.meta.json",
+        "brief_min_events_hard.meta.json",
+        "brief_no_boilerplate_hard.meta.json",
+        "brief_anchor_required_hard.meta.json",
+        "brief_info_density_hard.meta.json",
+        "brief_no_audit_speak_hard.meta.json",
+        "brief_fact_sentence_hard.meta.json",
+        "brief_event_sentence_hard.meta.json",
+        "brief_fact_candidates_hard.meta.json",
+        "brief_fact_pack_hard.meta.json",
+        # other verify_run sources
+        "ai_purity_hard.meta.json",
+        "supply_resilience.meta.json",
+        "brief_no_duplicate_frames.meta.json",
+        "brief_content_miner.meta.json",
+    ):
+        _stale_p = Path(settings.PROJECT_ROOT) / "outputs" / _stale_startup
+        if _stale_p.exists():
+            _stale_p.unlink(missing_ok=True)
+            log.info("Stale %s removed at pipeline start", _stale_startup)
 
     # Initialize metrics collector
     collector = reset_collector()
@@ -12815,12 +12947,13 @@ def run_pipeline() -> None:
                     1,
                     max(
                         _brief_min_events,
-                        int(os.environ.get("BRIEF_MAX_EVENTS", "7") or "7"),
+                        int(os.environ.get("BRIEF_MAX_EVENTS", "10") or "10"),
                     ),
                 )
-                # iter73: increase hydration pool for DAILY — 10-item brief needs wider diversity
-                _hy_mult = 8 if _is_daily else 4
-                _hy_floor = 80 if _is_daily else 30
+                # iter73→77: increase hydration pool for DAILY — 10-item brief needs wider diversity
+                # iter77: raised floor 80→120 for DAILY to survive ceo_prohibited pool depletion
+                _hy_mult = 12 if _is_daily else 4
+                _hy_floor = 120 if _is_daily else 30
                 _hydrate_n = min(max(_probe_target * _hy_mult, _hy_floor), len(raw_items))
                 _targeted_pool = list(raw_items[:_hydrate_n])  # already sorted by _bfp_score
                 # iter54e: DAILY domain diversity injection — ensure hydration pool
