@@ -5374,7 +5374,7 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter77: GOOGLE_RESEARCH_CAP_HARD_DAILY — google_research_total = 0 (tightened from <=1)
+# iter78: GOOGLE_RESEARCH_CAP_HARD_DAILY — google_research_total <= 3 (was =0 in iter77)
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
     $_grtMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
@@ -5391,7 +5391,7 @@ if ($_fast300Daily) {
                 Write-Output "  test_injected          : True"
             }
             if (-not $_grtPass) {
-                $_grtFail = ("GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: google_research_total={0} > 0" -f $_grtCount)
+                $_grtFail = ("GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: google_research_total={0} > 3" -f $_grtCount)
                 Write-Output ("  => FAIL: {0}" -f $_grtFail)
                 Invoke-VerifyOnlineFailFast -Gate "GOOGLE_RESEARCH_CAP_HARD_DAILY" -Reason $_grtFail
             }
@@ -5529,6 +5529,140 @@ if ($_fast300Daily) {
         }
     } else {
         Write-Output "  TUTORIAL_EXPLAINER_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter78: TECHCRUNCH_CAP_HARD_DAILY — techcrunch_total <= 4
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_tcMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "TECHCRUNCH_CAP_HARD_DAILY:"
+    if (Test-Path $_tcMetaPath) {
+        try {
+            $_tcMeta = Get-Content $_tcMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_tcCount  = if ($_tcMeta.PSObject.Properties['techcrunch_total']) { [int]$_tcMeta.techcrunch_total } else { 0 }
+            $_tcPass   = if ($_tcMeta.PSObject.Properties['techcrunch_cap_pass']) { $_tcMeta.techcrunch_cap_pass } else { $false }
+            $_tcInjected = if ($_tcMeta.PSObject.Properties['techcrunch_test_injected']) { $_tcMeta.techcrunch_test_injected } else { $false }
+            Write-Output ("  techcrunch_total : {0}" -f $_tcCount)
+            Write-Output ("  techcrunch_pass  : {0}" -f $_tcPass)
+            if ($_tcInjected) {
+                Write-Output "  test_injected     : True"
+            }
+            if (-not $_tcPass) {
+                $_tcFail = ("TECHCRUNCH_CAP_HARD_DAILY_FAIL: techcrunch_total={0} > 4" -f $_tcCount)
+                Write-Output ("  => FAIL: {0}" -f $_tcFail)
+                Invoke-VerifyOnlineFailFast -Gate "TECHCRUNCH_CAP_HARD_DAILY" -Reason $_tcFail
+            }
+            Write-Output "  => TECHCRUNCH_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  TECHCRUNCH_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  TECHCRUNCH_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter78: HF_BLOG_EXPLAINER_CAP_HARD_DAILY — hf_blog_explainer_total = 0
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_hfbeMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "HF_BLOG_EXPLAINER_CAP_HARD_DAILY:"
+    if (Test-Path $_hfbeMetaPath) {
+        try {
+            $_hfbeMeta = Get-Content $_hfbeMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_hfbeCount  = if ($_hfbeMeta.PSObject.Properties['hf_blog_explainer_total']) { [int]$_hfbeMeta.hf_blog_explainer_total } else { 0 }
+            $_hfbePass   = if ($_hfbeMeta.PSObject.Properties['hf_blog_explainer_cap_pass']) { $_hfbeMeta.hf_blog_explainer_cap_pass } else { $false }
+            $_hfbeInjected = if ($_hfbeMeta.PSObject.Properties['hf_blog_explainer_test_injected']) { $_hfbeMeta.hf_blog_explainer_test_injected } else { $false }
+            Write-Output ("  hf_blog_explainer_total : {0}" -f $_hfbeCount)
+            Write-Output ("  hf_blog_explainer_pass  : {0}" -f $_hfbePass)
+            if ($_hfbeInjected) {
+                Write-Output "  test_injected            : True"
+            }
+            if (-not $_hfbePass) {
+                $_hfbeFail = ("HF_BLOG_EXPLAINER_CAP_HARD_DAILY_FAIL: hf_blog_explainer_total={0} > 0" -f $_hfbeCount)
+                Write-Output ("  => FAIL: {0}" -f $_hfbeFail)
+                Invoke-VerifyOnlineFailFast -Gate "HF_BLOG_EXPLAINER_CAP_HARD_DAILY" -Reason $_hfbeFail
+            }
+            Write-Output "  => HF_BLOG_EXPLAINER_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  HF_BLOG_EXPLAINER_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  HF_BLOG_EXPLAINER_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter78: TARGET_PLAYER_COVERAGE_HARD_DAILY — target_player_distinct >= 6
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_tpMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "TARGET_PLAYER_COVERAGE_HARD_DAILY:"
+    if (Test-Path $_tpMetaPath) {
+        try {
+            $_tpMeta = Get-Content $_tpMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_tpCount  = if ($_tpMeta.PSObject.Properties['target_player_distinct']) { [int]$_tpMeta.target_player_distinct } else { 0 }
+            $_tpPass   = if ($_tpMeta.PSObject.Properties['target_player_coverage_pass']) { $_tpMeta.target_player_coverage_pass } else { $false }
+            $_tpInjected = if ($_tpMeta.PSObject.Properties['target_player_test_injected']) { $_tpMeta.target_player_test_injected } else { $false }
+            $_tpPlayers = if ($_tpMeta.PSObject.Properties['target_players']) { ($_tpMeta.target_players -join ", ") } else { "N/A" }
+            Write-Output ("  target_player_distinct : {0}" -f $_tpCount)
+            Write-Output ("  target_players         : {0}" -f $_tpPlayers)
+            Write-Output ("  target_player_pass     : {0}" -f $_tpPass)
+            if ($_tpInjected) {
+                Write-Output "  test_injected           : True"
+            }
+            if (-not $_tpPass) {
+                $_tpFail = ("TARGET_PLAYER_COVERAGE_HARD_DAILY_FAIL: target_player_distinct={0} < 6" -f $_tpCount)
+                Write-Output ("  => FAIL: {0}" -f $_tpFail)
+                Invoke-VerifyOnlineFailFast -Gate "TARGET_PLAYER_COVERAGE_HARD_DAILY" -Reason $_tpFail
+            }
+            Write-Output "  => TARGET_PLAYER_COVERAGE_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  TARGET_PLAYER_COVERAGE_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  TARGET_PLAYER_COVERAGE_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter78: US_CHINA_POLICY_MIN_HARD_DAILY — us+china >= 2 AND china >= 1
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_ucpMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "US_CHINA_POLICY_MIN_HARD_DAILY:"
+    if (Test-Path $_ucpMetaPath) {
+        try {
+            $_ucpMeta = Get-Content $_ucpMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_ucpUS    = if ($_ucpMeta.PSObject.Properties['us_policy_count']) { [int]$_ucpMeta.us_policy_count } else { 0 }
+            $_ucpCN    = if ($_ucpMeta.PSObject.Properties['china_policy_count']) { [int]$_ucpMeta.china_policy_count } else { 0 }
+            $_ucpPass  = if ($_ucpMeta.PSObject.Properties['us_china_policy_min_pass']) { $_ucpMeta.us_china_policy_min_pass } else { $false }
+            $_ucpUSInj = if ($_ucpMeta.PSObject.Properties['us_policy_test_injected']) { $_ucpMeta.us_policy_test_injected } else { $false }
+            $_ucpCNInj = if ($_ucpMeta.PSObject.Properties['china_policy_test_injected']) { $_ucpMeta.china_policy_test_injected } else { $false }
+            Write-Output ("  us_policy_count   : {0}" -f $_ucpUS)
+            Write-Output ("  china_policy_count : {0}" -f $_ucpCN)
+            Write-Output ("  us_china_total     : {0}" -f ($_ucpUS + $_ucpCN))
+            Write-Output ("  us_china_pass      : {0}" -f $_ucpPass)
+            if ($_ucpUSInj -or $_ucpCNInj) {
+                Write-Output "  test_injected       : True"
+            }
+            if (-not $_ucpPass) {
+                $_ucpFail = ("US_CHINA_POLICY_MIN_HARD_DAILY_FAIL: us_plus_china_policy={0} < 2 / china_policy={1} < 1" -f ($_ucpUS + $_ucpCN), $_ucpCN)
+                Write-Output ("  => FAIL: {0}" -f $_ucpFail)
+                Invoke-VerifyOnlineFailFast -Gate "US_CHINA_POLICY_MIN_HARD_DAILY" -Reason $_ucpFail
+            }
+            Write-Output "  => US_CHINA_POLICY_MIN_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  US_CHINA_POLICY_MIN_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  US_CHINA_POLICY_MIN_HARD_DAILY: WARN (content_mix.meta.json not found)"
     }
 }
 Write-Output ""
@@ -5830,6 +5964,11 @@ if (Test-Path $_fpCmPath) {
         Write-Output ("forum_discussion_total           = {0}" -f $(if ($_fpCm.PSObject.Properties['forum_discussion_total']) { $_fpCm.forum_discussion_total } else { "N/A" }))
         Write-Output ("tutorial_explainer_total         = {0}" -f $(if ($_fpCm.PSObject.Properties['tutorial_explainer_total']) { $_fpCm.tutorial_explainer_total } else { "N/A" }))
         Write-Output ("official_media_count             = {0}" -f $(if ($_fpCm.PSObject.Properties['official_media_count']) { $_fpCm.official_media_count } else { "N/A" }))
+        Write-Output ("techcrunch_total                 = {0}" -f $(if ($_fpCm.PSObject.Properties['techcrunch_total']) { $_fpCm.techcrunch_total } else { "N/A" }))
+        Write-Output ("hf_blog_explainer_total          = {0}" -f $(if ($_fpCm.PSObject.Properties['hf_blog_explainer_total']) { $_fpCm.hf_blog_explainer_total } else { "N/A" }))
+        Write-Output ("target_player_distinct           = {0}" -f $(if ($_fpCm.PSObject.Properties['target_player_distinct']) { $_fpCm.target_player_distinct } else { "N/A" }))
+        Write-Output ("us_policy_count                  = {0}" -f $(if ($_fpCm.PSObject.Properties['us_policy_count']) { $_fpCm.us_policy_count } else { "N/A" }))
+        Write-Output ("china_policy_count               = {0}" -f $(if ($_fpCm.PSObject.Properties['china_policy_count']) { $_fpCm.china_policy_count } else { "N/A" }))
         Write-Output ("selected_strategic_buckets_distinct = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_strategic_buckets_distinct']) { $_fpCm.selected_strategic_buckets_distinct } else { "N/A" }))
     } catch {}
 }

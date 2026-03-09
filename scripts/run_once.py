@@ -7540,6 +7540,70 @@ def _f600_run_fast_path(
             return True
         return False
 
+    # iter78: TechCrunch classifier — domain contains techcrunch
+    def _is_techcrunch(it) -> bool:
+        return "techcrunch" in _f6_domain_key(it)
+
+    # iter78: HF blog explainer classifier — huggingface.co/blog/ + tutorial/deploy/explainer keywords
+    _HF_BLOG_EXPLAINER_RE = _ct71_re.compile(
+        r'(?:\btutorial\b|\bdeploy(?:ment|ing)?\b|\bexplainer\b|\bhow[\-\s]to\b|\bguide\b'
+        r'|\bwalkthrough\b|\bgetting[\-\s]started\b|\bintroduction\s+to\b|\bdeep[\-\s]dive\b'
+        r'|\bframework\b|\bquickstart\b)', _ct71_re.I)
+
+    def _is_hf_blog_explainer(it) -> bool:
+        _dk = _f6_domain_key(it)
+        if _dk != "huggingface.co":
+            return False
+        _url = str(getattr(it, "url", "") or getattr(it, "link", "") or "").lower()
+        if "/blog/" not in _url:
+            return False
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        return bool(_HF_BLOG_EXPLAINER_RE.search(_title + " " + _snippet))
+
+    # iter78: target player classifier — vendor in CEO-grade AI player set
+    _TARGET_PLAYER_VENDORS = frozenset({
+        "OpenAI", "Microsoft", "Google", "Meta", "Amazon", "NVIDIA", "Anthropic", "xAI", "Apple",
+        "Alibaba", "Tencent", "ByteDance", "Baidu", "Zhipu", "DeepSeek", "Moonshot", "Minimax",
+    })
+
+    def _is_target_player(it) -> bool:
+        return _f6_vendor_key(it) in _TARGET_PLAYER_VENDORS
+
+    # iter78: US policy classifier
+    _US_POLICY_RE = _ct71_re.compile(
+        r'\b(?:White\s+House|Congress|Pentagon|Commerce\s+Department|NIST|DOJ|FTC|Senate'
+        r'|House\s+(?:of\s+)?Representatives?|executive\s+order|export\s+control|procurement'
+        r'|federal|national\s+security|AI\s+policy|Department\s+of\s+(?:Commerce|Defense|Energy|State)'
+        r'|Bureau\s+of\s+Industry|trade\s+restriction|sanctions?|tariff|chip\s+ban|entity\s+list'
+        r'|白宮|國會|商務部|國防部|出口管制|採購|國安|聯邦|AI政策)\b', _ct71_re.I)
+
+    def _is_us_policy(it) -> bool:
+        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or "")[:2000]
+        return bool(_US_POLICY_RE.search(_blob))
+
+    # iter78: China policy classifier
+    _CHINA_POLICY_RE = _ct71_re.compile(
+        r'(?:\bMIIT\b|\bCAC\b|\bState\s+Council\b|\bNDRC\b'
+        r'|國務院|工信部|網信辦|發改委|出口|算力|智算|人工智慧產業政策|監管|國資|央企'
+        r'|China(?:\'?s?)?\s+(?:regulat|policy|government|ministry|ban|restrict|compute|chip|AI\s+(?:governance|policy|regulation|investment))'
+        r'|Chinese\s+(?:regulat|government|ministry|policy))', _ct71_re.I)
+    _CHINA_POLICY_SIGNAL_RE = _ct71_re.compile(
+        r'\b(?:policy|regulat|invest|compute|算力|政策|監管|regulation|government|ministry|compliance|資金|佈局|產業|戰略)\b', _ct71_re.I)
+
+    def _is_china_policy(it) -> bool:
+        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or "")[:2000]
+        if _CHINA_POLICY_RE.search(_blob):
+            return True
+        if _geo_class(it) == "china" and _CHINA_POLICY_SIGNAL_RE.search(_blob):
+            return True
+        return False
+
+    # iter78: caps
+    _GOOGLE_RESEARCH_CAP = 3
+    _TECHCRUNCH_CAP = 4
+    _HF_BLOG_EXPLAINER_CAP = 0
+
     def _f6_sort_key(it) -> tuple:
         """iter40→72b: bigtech-first, official/media first, strategic density, then fulltext.
         iter72b: bigtech_official_media_actionable priority + strategic_density_score."""
@@ -7789,10 +7853,11 @@ def _f600_run_fast_path(
             return _is_developer_release(it) or _is_indie_dev_tone(it)
 
         def _is_ceo_prohibited(it) -> bool:
-            """iter77: True if item is any type that must not enter CEO daily brief."""
+            """iter78: True if item is any type that must not enter CEO daily brief.
+            NOTE: google_research is NO LONGER prohibited (allowed up to 3)."""
             return (_is_developer_release(it) or _is_indie_dev_tone(it)
                     or _is_forum_discussion(it) or _is_tutorial_explainer(it)
-                    or _f6_is_google_research_blog(it))
+                    or _is_hf_blog_explainer(it))
 
         # Pool BOMA: bigtech_official_media_actionable + non-platform + non-prohibited + density pass
         # iter77: unified _is_ceo_prohibited filter (forum/tutorial/devrel/indie/google_research)
@@ -8119,7 +8184,7 @@ def _f600_run_fast_path(
                             and _p6nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
                             and sum(1 for s in _p6n if _is_platform_domain(s)) <= _PLATFORM_CAP
                             and sum(1 for s in _p6n if _ct71_is_research_tutorial(s)) <= 1
-                            and sum(1 for s in _p6n if _f6_is_google_research_blog(s)) == 0  # iter77
+                            and sum(1 for s in _p6n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP  # iter78: was ==0
                             and sum(1 for s in _p6n if _is_developer_release(s)) == 0  # iter75
                             and sum(1 for s in _p6n if _is_indie_dev_tone(s)) == 0  # iter75
                             and sum(1 for s in _p6n if _is_forum_discussion(s)) == 0  # iter77
@@ -8165,7 +8230,7 @@ def _f600_run_fast_path(
                             and _p6b_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
                             and sum(1 for s in _p6b_n if _is_platform_domain(s)) <= _PLATFORM_CAP
                             and sum(1 for s in _p6b_n if _ct71_is_research_tutorial(s)) <= 1
-                            and sum(1 for s in _p6b_n if _f6_is_google_research_blog(s)) == 0
+                            and sum(1 for s in _p6b_n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP  # iter78
                             and sum(1 for s in _p6b_n if _is_developer_release(s)) == 0
                             and sum(1 for s in _p6b_n if _is_indie_dev_tone(s)) == 0
                             and sum(1 for s in _p6b_n if _is_forum_discussion(s)) == 0
@@ -8241,9 +8306,9 @@ def _f600_run_fast_path(
                         _log.info("iter73 Phase-7: 2-step swap at idx=%d, selected=%d", _p7_si, len(_selected))
                         break
 
-        # Phase-8 (iter74→77): google_research swap rescue — enforce =0 (was <=1)
+        # Phase-8 (iter78): google_research swap rescue — enforce <=3 (was =0 in iter77)
         _p74_grt_count = sum(1 for s in _selected if _f6_is_google_research_blog(s))
-        while _p74_grt_count > 0:
+        while _p74_grt_count > _GOOGLE_RESEARCH_CAP:
             _p74_swapped = False
             for _p74_ri in range(len(_selected)):
                 if not _f6_is_google_research_blog(_selected[_p74_ri]):
@@ -8274,7 +8339,7 @@ def _f600_run_fast_path(
                 if _p74_swapped:
                     break
             if not _p74_swapped:
-                _log.warning("iter74 Phase-8: unable to reduce google_research_total below %d", _p74_grt_count)
+                _log.warning("iter78 Phase-8: unable to reduce google_research_total below %d (cap=%d)", _p74_grt_count, _GOOGLE_RESEARCH_CAP)
                 break
 
         # Phase-9 (iter75→77): unified CEO-prohibited swap rescue — enforce all prohibited types =0
@@ -8311,22 +8376,59 @@ def _f600_run_fast_path(
                 _log.warning("iter77 Phase-9: unable to eliminate all prohibited items (remaining=%d)", _p77_prohibited_count)
                 break
 
+        # Phase-9b (iter78): TechCrunch cap enforcement — swap out TechCrunch if > 4
+        _p78_tc_count = sum(1 for s in _selected if _is_techcrunch(s))
+        while _p78_tc_count > _TECHCRUNCH_CAP:
+            _p78_tc_swapped = False
+            for _p78_ri in range(len(_selected)):
+                if not _is_techcrunch(_selected[_p78_ri]):
+                    continue
+                _p78_test = [s for j, s in enumerate(_selected) if j != _p78_ri]
+                for _p78_cand in _p73_all_pools:
+                    if _p78_cand in _p78_test or _is_ceo_prohibited(_p78_cand) or _is_techcrunch(_p78_cand):
+                        continue
+                    if _is_platform_domain(_p78_cand):
+                        if sum(1 for s in _p78_test if _is_platform_domain(s)) >= _PLATFORM_CAP:
+                            continue
+                    _p78_n = _p78_test + [_p78_cand]
+                    _p78_nd = _DivCounter(_f6_domain_key(s) for s in _p78_n)
+                    _p78_nv = _DivCounter(_f6_vendor_key(s) for s in _p78_n)
+                    if (_p78_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p78_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _hdf_all_scores.get(id(_p78_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                            and sum(1 for s in _p78_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8
+                            and sum(1 for s in _p78_n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP):
+                        _selected[_p78_ri] = _p78_cand
+                        _p78_tc_count = sum(1 for s in _selected if _is_techcrunch(s))
+                        _swap_successes += 1
+                        _log.info("iter78 Phase-9b TechCrunch swap: idx=%d, tc_count=%d", _p78_ri, _p78_tc_count)
+                        _p78_tc_swapped = True
+                        break
+                if _p78_tc_swapped:
+                    break
+            if not _p78_tc_swapped:
+                _log.warning("iter78 Phase-9b: unable to reduce techcrunch_total below %d (cap=%d)", _p78_tc_count, _TECHCRUNCH_CAP)
+                break
+
         if len(_selected) < _max_events:
             _log.warning("iter73 FAIL: selected=%d < target=%d", len(_selected), _max_events)
 
-        _log.info("iter77 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d grt=%d devrel=%d indie=%d forum=%d tutorial=%d lp=%d china=%d buckets=%s",
+        _log.info("iter78 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d grt=%d tc=%d devrel=%d indie=%d forum=%d tutorial=%d hfbe=%d lp=%d china=%d tp_distinct=%d buckets=%s",
                   len(_selected),
                   sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s)),
                   sum(1 for s in _selected if _ct71_is_bigtech_actionable(s)),
                   sum(1 for s in _selected if _is_platform_domain(s)),
                   sum(1 for s in _selected if _ct71_is_research_tutorial(s)),
                   sum(1 for s in _selected if _f6_is_google_research_blog(s)),
+                  sum(1 for s in _selected if _is_techcrunch(s)),
                   sum(1 for s in _selected if _is_developer_release(s)),
                   sum(1 for s in _selected if _is_indie_dev_tone(s)),
                   sum(1 for s in _selected if _is_forum_discussion(s)),
                   sum(1 for s in _selected if _is_tutorial_explainer(s)),
+                  sum(1 for s in _selected if _is_hf_blog_explainer(s)),
                   sum(1 for s in _selected if _is_leadership_politics_ai(s)),
                   sum(1 for s in _selected if _is_china_ai_gov(s)),
+                  len(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))),
                   sorted(set(_ct72b_strategic_bucket(s) for s in _selected)))
     else:
         # Non-daily: no swap tracking needed
@@ -9616,6 +9718,12 @@ def _f600_run_fast_path(
     _cm77_forum_total = sum(1 for s in _selected if _is_forum_discussion(s))  # iter77
     _cm77_tutorial_total = sum(1 for s in _selected if _is_tutorial_explainer(s))  # iter77
     _cm77_official_media_count = sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media"))  # iter77
+    _cm78_tc_total = sum(1 for s in _selected if _is_techcrunch(s))  # iter78
+    _cm78_hfbe_total = sum(1 for s in _selected if _is_hf_blog_explainer(s))  # iter78
+    _cm78_target_players = sorted(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s)))  # iter78
+    _cm78_target_player_distinct = len(_cm78_target_players)  # iter78
+    _cm78_us_policy_count = sum(1 for s in _selected if _is_us_policy(s))  # iter78
+    _cm78_china_policy_count = sum(1 for s in _selected if _is_china_policy(s))  # iter78
 
     # iter77: patch selection_audit.meta.json with prohibited-type totals (AFTER counts are computed)
     try:
@@ -9628,6 +9736,12 @@ def _f600_run_fast_path(
             _sa77_d["tutorial_explainer_total"] = _cm77_tutorial_total
             _sa77_d["google_research_total"] = _cm74_google_research_total
             _sa77_d["official_media_count"] = _cm77_official_media_count
+            _sa77_d["techcrunch_total"] = _cm78_tc_total  # iter78
+            _sa77_d["hf_blog_explainer_total"] = _cm78_hfbe_total  # iter78
+            _sa77_d["target_player_distinct"] = _cm78_target_player_distinct  # iter78
+            _sa77_d["target_players"] = _cm78_target_players  # iter78
+            _sa77_d["us_policy_count"] = _cm78_us_policy_count  # iter78
+            _sa77_d["china_policy_count"] = _cm78_china_policy_count  # iter78
             _sa77.write_text(_f6_j.dumps(_sa77_d, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -9658,6 +9772,11 @@ def _f600_run_fast_path(
             "indie_dev_tone_item": _is_indie_dev_tone(_cm71_s),  # iter75
             "forum_discussion_item": _is_forum_discussion(_cm71_s),  # iter77
             "tutorial_explainer_item": _is_tutorial_explainer(_cm71_s),  # iter77
+            "techcrunch_item": _is_techcrunch(_cm71_s),  # iter78
+            "hf_blog_explainer_item": _is_hf_blog_explainer(_cm71_s),  # iter78
+            "target_player_item": _is_target_player(_cm71_s),  # iter78
+            "us_policy_item": _is_us_policy(_cm71_s),  # iter78
+            "china_policy_item": _is_china_policy(_cm71_s),  # iter78
             "strategic_density_score": _sd_item.get("strategic_density_score", 0),
             "strategic_density_floor_pass": _sd_item.get("strategic_density_score", 0) >= _cm73_sd_floor,
         })
@@ -9673,6 +9792,11 @@ def _f600_run_fast_path(
     _cm75_inject_indie = os.environ.get("INJECT_INDIE_DEV_TONE_TOTAL", "")  # iter75
     _cm77_inject_forum = os.environ.get("INJECT_FORUM_DISCUSSION_TOTAL", "")  # iter77
     _cm77_inject_tutorial = os.environ.get("INJECT_TUTORIAL_EXPLAINER_TOTAL", "")  # iter77
+    _cm78_inject_tc = os.environ.get("INJECT_TECHCRUNCH_TOTAL", "")  # iter78
+    _cm78_inject_hfbe = os.environ.get("INJECT_HF_BLOG_EXPLAINER_TOTAL", "")  # iter78
+    _cm78_inject_tp = os.environ.get("INJECT_TARGET_PLAYER_DISTINCT", "")  # iter78
+    _cm78_inject_usp = os.environ.get("INJECT_US_POLICY_COUNT", "")  # iter78
+    _cm78_inject_cnp = os.environ.get("INJECT_CHINA_POLICY_COUNT", "")  # iter78
     _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
     _cm71_rt_total_check = _cm71_rt_total
     _cm72_bom_check = _cm72_bt_om_actionable
@@ -9683,6 +9807,11 @@ def _f600_run_fast_path(
     _cm75_indie_check = _cm75_indie_total
     _cm77_forum_check = _cm77_forum_total
     _cm77_tutorial_check = _cm77_tutorial_total
+    _cm78_tc_check = _cm78_tc_total
+    _cm78_hfbe_check = _cm78_hfbe_total
+    _cm78_tp_check = _cm78_target_player_distinct
+    _cm78_usp_check = _cm78_us_policy_count
+    _cm78_cnp_check = _cm78_china_policy_count
     _cm71_rt_is_injected = bool(_cm71_inject_rt)
     _cm72_bom_is_injected = bool(_cm72_inject_bom)
     _cm73_lp_is_injected = bool(_cm73_inject_lp)
@@ -9692,6 +9821,41 @@ def _f600_run_fast_path(
     _cm75_indie_is_injected = bool(_cm75_inject_indie)
     _cm77_forum_is_injected = bool(_cm77_inject_forum)
     _cm77_tutorial_is_injected = bool(_cm77_inject_tutorial)
+    _cm78_tc_is_injected = bool(_cm78_inject_tc)
+    _cm78_hfbe_is_injected = bool(_cm78_inject_hfbe)
+    _cm78_tp_is_injected = bool(_cm78_inject_tp)
+    _cm78_usp_is_injected = bool(_cm78_inject_usp)
+    _cm78_cnp_is_injected = bool(_cm78_inject_cnp)
+    if _cm78_tc_is_injected:
+        try:
+            _cm78_tc_check = int(_cm78_inject_tc)
+        except ValueError:
+            pass
+        _log.info("INJECT_TECHCRUNCH_TOTAL=%s: techcrunch_total overridden", _cm78_inject_tc)
+    if _cm78_hfbe_is_injected:
+        try:
+            _cm78_hfbe_check = int(_cm78_inject_hfbe)
+        except ValueError:
+            pass
+        _log.info("INJECT_HF_BLOG_EXPLAINER_TOTAL=%s: hf_blog_explainer_total overridden", _cm78_inject_hfbe)
+    if _cm78_tp_is_injected:
+        try:
+            _cm78_tp_check = int(_cm78_inject_tp)
+        except ValueError:
+            pass
+        _log.info("INJECT_TARGET_PLAYER_DISTINCT=%s: target_player_distinct overridden", _cm78_inject_tp)
+    if _cm78_usp_is_injected:
+        try:
+            _cm78_usp_check = int(_cm78_inject_usp)
+        except ValueError:
+            pass
+        _log.info("INJECT_US_POLICY_COUNT=%s: us_policy_count overridden", _cm78_inject_usp)
+    if _cm78_cnp_is_injected:
+        try:
+            _cm78_cnp_check = int(_cm78_inject_cnp)
+        except ValueError:
+            pass
+        _log.info("INJECT_CHINA_POLICY_COUNT=%s: china_policy_count overridden", _cm78_inject_cnp)
     if _cm75_devrel_is_injected:
         try:
             _cm75_devrel_check = int(_cm75_inject_devrel)
@@ -9754,11 +9918,15 @@ def _f600_run_fast_path(
     _cm72_bucket_pass = (_cm72_strategic_buckets_distinct >= 5)  # iter73: was 4
     _cm73_lp_pass = (_cm73_lp_check >= 2)  # iter73: new
     _cm73_china_pass = (_cm73_china_check >= 1)  # iter73: new
-    _cm74_grt_pass = (_cm74_grt_check <= 0)  # iter77: google research blog = 0 (was <=1)
+    _cm74_grt_pass = (_cm74_grt_check <= _GOOGLE_RESEARCH_CAP)  # iter78: google research blog <= 3 (was =0)
     _cm75_devrel_pass = (_cm75_devrel_check <= 0)  # iter75: developer_release = 0
     _cm75_indie_pass = (_cm75_indie_check <= 0)  # iter75: indie_dev_tone = 0
     _cm77_forum_pass = (_cm77_forum_check <= 0)  # iter77: forum_discussion = 0
     _cm77_tutorial_pass = (_cm77_tutorial_check <= 0)  # iter77: tutorial_explainer = 0
+    _cm78_tc_pass = (_cm78_tc_check <= _TECHCRUNCH_CAP)  # iter78: techcrunch <= 4
+    _cm78_hfbe_pass = (_cm78_hfbe_check <= _HF_BLOG_EXPLAINER_CAP)  # iter78: hf_blog_explainer = 0
+    _cm78_tp_pass = (_cm78_tp_check >= 6)  # iter78: target_player_distinct >= 6
+    _cm78_usp_cnp_pass = ((_cm78_usp_check + _cm78_cnp_check) >= 2 and _cm78_cnp_check >= 1)  # iter78
     _cm73_total_pass = (len(_selected) >= 10)  # iter73: new
 
     try:
@@ -9787,8 +9955,10 @@ def _f600_run_fast_path(
             "research_tutorial_cap": 1,
             "research_tutorial_cap_pass": _cm71_rt_pass,
             "google_research_total": _cm74_grt_check,
-            "google_research_cap": 0,  # iter77: tightened from 1
+            "google_research_cap": _GOOGLE_RESEARCH_CAP,  # iter78: was 0, now 3
             "google_research_cap_pass": _cm74_grt_pass,
+            "google_research_target_band": "2-3",  # iter78: soft target
+            "google_research_target_soft_hit": (2 <= _cm74_grt_check <= 3),  # iter78
             "developer_release_total": _cm75_devrel_check,  # iter75
             "developer_release_cap": 0,
             "developer_release_cap_pass": _cm75_devrel_pass,
@@ -9801,6 +9971,20 @@ def _f600_run_fast_path(
             "tutorial_explainer_total": _cm77_tutorial_check,  # iter77
             "tutorial_explainer_cap": 0,
             "tutorial_explainer_cap_pass": _cm77_tutorial_pass,
+            "techcrunch_total": _cm78_tc_check,  # iter78
+            "techcrunch_cap": _TECHCRUNCH_CAP,
+            "techcrunch_cap_pass": _cm78_tc_pass,
+            "hf_blog_explainer_total": _cm78_hfbe_check,  # iter78
+            "hf_blog_explainer_cap": _HF_BLOG_EXPLAINER_CAP,
+            "hf_blog_explainer_cap_pass": _cm78_hfbe_pass,
+            "target_player_distinct": _cm78_tp_check,  # iter78
+            "target_players": _cm78_target_players,
+            "target_player_coverage_min": 6,
+            "target_player_coverage_pass": _cm78_tp_pass,
+            "us_policy_count": _cm78_usp_check,  # iter78
+            "china_policy_count": _cm78_cnp_check,  # iter78
+            "us_china_policy_min": 2,
+            "us_china_policy_min_pass": _cm78_usp_cnp_pass,
             "official_media_count": _cm77_official_media_count,  # iter77
             "selected_strategic_buckets": _cm72_strategic_buckets,
             "selected_strategic_buckets_distinct": _cm72_strategic_buckets_distinct,
@@ -9847,6 +10031,21 @@ def _f600_run_fast_path(
         if _cm77_tutorial_is_injected:
             _cm71_meta["tutorial_explainer_test_injected"] = True
             _cm71_meta["injected_tutorial_explainer_total"] = _cm77_inject_tutorial
+        if _cm78_tc_is_injected:
+            _cm71_meta["techcrunch_test_injected"] = True
+            _cm71_meta["injected_techcrunch_total"] = _cm78_inject_tc
+        if _cm78_hfbe_is_injected:
+            _cm71_meta["hf_blog_explainer_test_injected"] = True
+            _cm71_meta["injected_hf_blog_explainer_total"] = _cm78_inject_hfbe
+        if _cm78_tp_is_injected:
+            _cm71_meta["target_player_test_injected"] = True
+            _cm71_meta["injected_target_player_distinct"] = _cm78_inject_tp
+        if _cm78_usp_is_injected:
+            _cm71_meta["us_policy_test_injected"] = True
+            _cm71_meta["injected_us_policy_count"] = _cm78_inject_usp
+        if _cm78_cnp_is_injected:
+            _cm71_meta["china_policy_test_injected"] = True
+            _cm71_meta["injected_china_policy_count"] = _cm78_inject_cnp
         _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _cm71_exc:
         _log.warning("content_mix.meta.json write failed: %s", _cm71_exc)
@@ -9950,9 +10149,9 @@ def _f600_run_fast_path(
         )
         _f6_fail("CHINA_AI_GOV_MIN_HARD_DAILY", _cm73_china_fail)
 
-    # iter77: GOOGLE_RESEARCH_CAP_HARD_DAILY gate (B7b) — google research blog = 0 (tightened from <=1)
+    # iter78: GOOGLE_RESEARCH_CAP_HARD_DAILY gate (B7b) — google research blog <= 3 (was =0 in iter77)
     if _is_daily and not _cm74_grt_pass:
-        _cm74_grt_fail = f"GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: google_research_total={_cm74_grt_check} > 0"
+        _cm74_grt_fail = f"GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: google_research_total={_cm74_grt_check} > {_GOOGLE_RESEARCH_CAP}"
         if _cm74_grt_is_injected:
             _cm74_grt_fail += " [test_injected=true]"
         _write_not_ready_report_md(
@@ -10024,6 +10223,67 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("TUTORIAL_EXPLAINER_CAP_HARD_DAILY", _cm77_tutorial_fail)
+
+    # iter78: TECHCRUNCH_CAP_HARD_DAILY gate — techcrunch_total <= 4
+    if _is_daily and not _cm78_tc_pass:
+        _cm78_tc_fail = f"TECHCRUNCH_CAP_HARD_DAILY_FAIL: techcrunch_total={_cm78_tc_check} > {_TECHCRUNCH_CAP}"
+        if _cm78_tc_is_injected:
+            _cm78_tc_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "TECHCRUNCH_CAP_HARD_DAILY",
+            _cm78_tc_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("TECHCRUNCH_CAP_HARD_DAILY", _cm78_tc_fail)
+
+    # iter78: HF_BLOG_EXPLAINER_CAP_HARD_DAILY gate — hf_blog_explainer_total = 0
+    if _is_daily and not _cm78_hfbe_pass:
+        _cm78_hfbe_fail = f"HF_BLOG_EXPLAINER_CAP_HARD_DAILY_FAIL: hf_blog_explainer_total={_cm78_hfbe_check} > {_HF_BLOG_EXPLAINER_CAP}"
+        if _cm78_hfbe_is_injected:
+            _cm78_hfbe_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "HF_BLOG_EXPLAINER_CAP_HARD_DAILY",
+            _cm78_hfbe_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("HF_BLOG_EXPLAINER_CAP_HARD_DAILY", _cm78_hfbe_fail)
+
+    # iter78: TARGET_PLAYER_COVERAGE_HARD_DAILY gate — target_player_distinct >= 6
+    if _is_daily and not _cm78_tp_pass:
+        _cm78_tp_fail = f"TARGET_PLAYER_COVERAGE_HARD_DAILY_FAIL: target_player_distinct={_cm78_tp_check} < 6"
+        if _cm78_tp_is_injected:
+            _cm78_tp_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "TARGET_PLAYER_COVERAGE_HARD_DAILY",
+            _cm78_tp_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("TARGET_PLAYER_COVERAGE_HARD_DAILY", _cm78_tp_fail)
+
+    # iter78: US_CHINA_POLICY_MIN_HARD_DAILY gate — us+china >= 2 AND china >= 1
+    if _is_daily and not _cm78_usp_cnp_pass:
+        _cm78_usp_cnp_fail = (f"US_CHINA_POLICY_MIN_HARD_DAILY_FAIL: us_plus_china_policy="
+                              f"{_cm78_usp_check + _cm78_cnp_check} < 2 / china_policy={_cm78_cnp_check} < 1")
+        if _cm78_usp_is_injected or _cm78_cnp_is_injected:
+            _cm78_usp_cnp_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "US_CHINA_POLICY_MIN_HARD_DAILY",
+            _cm78_usp_cnp_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("US_CHINA_POLICY_MIN_HARD_DAILY", _cm78_usp_cnp_fail)
 
     # iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY gate (B7) — each item >= 15
     if _is_daily and not _cm73_per_item_sd_pass:
