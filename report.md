@@ -1,3 +1,67 @@
+# iter76: split overlap policy by entrypoint
+
+run_date: 2026-03-08
+
+## 問題本質
+
+前版把 desktop_button 與 scheduled_task 錯誤共用 DAILY_DUP_OVER_CAP gate。
+桌面按鈕一天可能按 10–20 次，重複正常；排程每天生成一次，不允許和前一天重複過多。
+
+## 正確業務規則
+
+| 入口 | overlap_policy | DAILY_DUP_OVER_CAP | daily_last_ids 讀取 | daily_last_ids 寫入 |
+|------|---------------|-------------------|-------------------|-------------------|
+| desktop_button | allow_duplicates | 不啟用 | 不讀 | 不寫 |
+| scheduled_task | daily_unique_only | 啟用 (<=2) | 讀取 | 只有成功 run 才寫 |
+
+## A) desktop_button 連按兩次 PASS（GIT_HEAD=`1d6d053`）
+
+| # | run_id | ENTRYPOINT | overlap_policy | dup_gate_enabled | ids_written | status |
+|---|--------|------------|----------------|-----------------|-------------|--------|
+| 1 | 20260308_192542 | desktop_button | allow_duplicates | False | false | OK |
+| 2 | 20260308_192729 | desktop_button | allow_duplicates | False | false | OK |
+
+**第二次未因 DAILY_DUP_OVER_CAP FAIL → 重複允許生效。**
+
+## B) scheduled_task 第一次 PASS、第二次 duplicate FAIL
+
+| # | run_id | ENTRYPOINT | overlap_policy | dup_gate_enabled | ids_read | ids_written | status |
+|---|--------|------------|----------------|-----------------|----------|-------------|--------|
+| 1 | 20260308_192935 | scheduled_task | daily_unique_only | True | False (empty state) | true | OK |
+| 2 | (failed) | scheduled_task | daily_unique_only | True | True (10 ids) | — | FAIL: DAILY_DUP_OVER_CAP overlap=6>2 |
+
+**第二次被 DAILY_DUP_OVER_CAP 正確攔下 → daily uniqueness 生效。**
+**失敗 run 未覆寫 daily_last_ids.json（仍為 run_id=20260308_192935）→ state 不被污染。**
+
+## C) state 不污染證據
+
+1. 注入 `INJECT_PLATFORM_DOMAIN_TOTAL=2` 強制 FAIL → daily_last_ids.json 未被更新（仍為 pre_inject_test）
+2. 失敗後再跑 desktop_button → PASS（overlap_policy=allow_duplicates, ids_written=false）
+3. 只有 scheduled_task 成功 run 才寫入 daily_last_ids — deferred write at sys.exit(0)
+
+## D) 修正後 fingerprint 欄位
+
+所有入口（desktop_button / scheduled_task / direct）都印出：
+- OVERLAP_POLICY (allow_duplicates / daily_unique_only)
+- DAILY_DUP_GATE_ENABLED (True / False)
+- DAILY_LAST_IDS_READ (True / False)
+- DAILY_LAST_IDS_WRITTEN (true / false)
+
+## E) 程式碼變更
+
+| 檔案 | 變更 |
+|------|------|
+| run_once.py | overlap policy split by PIPELINE_ENTRYPOINT; deferred daily_last_ids write (only on success); selection_audit.meta.json overlap policy fields |
+| verify_online.ps1 | P0 fingerprint: overlap_policy, daily_dup_gate_enabled, daily_last_ids_read/written |
+| desktop_button.ps1 | P0 fingerprint: overlap policy fields |
+
+```
+git log --oneline (iter76 commit):
+1d6d053 iter76: split overlap policy by entrypoint (desktop allows duplicates, scheduled_task enforces daily uniqueness) without relaxing other gates
+```
+
+---
+
 # iter75: block developer-release & indie-dev-tone from CEO daily brief
 
 run_date: 2026-03-08
