@@ -1,3 +1,100 @@
+# iter78b: target player coverage + policy rescue + diversity swap protection
+
+run_date: 2026-03-09
+
+## 問題本質
+
+1. target_player_distinct=5 < 6 — 多樣性 swap 把 Amazon 換成 HuggingFace，破壞覆蓋率
+2. us_policy_count=0 / china_policy_count=0 — 選到的 china_ai_gov 項目未被標記 china_policy
+3. 後選階段（initial diversity swap, post-dedup diversity, platform swap）無覆蓋率保護 → 任意破壞 target player/policy/official_media 不變量
+
+## 修正
+
+| 修正 | 檔案 | 說明 |
+|------|------|------|
+| hydration vendor diversity Pass 3 | run_once.py | 標題關鍵字匹配注入目標廠商（Microsoft/Meta/xAI/Apple/Alibaba/Tencent/ByteDance/Baidu/DeepSeek 等）至 hydration pool |
+| initial diversity swap protection | run_once.py | `_div1_safe_to_remove()` 防止 swap 導致 target_player_distinct < 6 |
+| post-dedup diversity swap protection | run_once.py | `_div2_safe_to_remove()` + prohibited filter + target_player/TechCrunch/GoogleResearch/official_media cap 檢查 |
+| post-diversity target player rescue | run_once.py | 允許 swap 多項目廠商（vendor count > 1）而非一律跳過 |
+| platform swap pool filter | run_once.py | 替換池加 `not _is_ceo_prohibited(it)` |
+| FINAL RESCUE | run_once.py | FR-1 target_player, FR-2 us/china policy, FR-3 official_media, FR-4 purge prohibited |
+| CHINA_POLICY_SIGNAL_RE expansion | run_once.py | 加入 AI/model/chip/funding/semiconductor/datacenter 詞使 china_ai_gov 項也計為 china_policy |
+| iter78 gates | verify_online.ps1 | TECHCRUNCH_CAP<=4, HF_BLOG_EXPLAINER_CAP<=0, TARGET_PLAYER_COVERAGE>=6, US_CHINA_POLICY_MIN>=2 |
+| iter78 injections | run_once.py | INJECT_TECHCRUNCH_TOTAL, INJECT_HF_BLOG_EXPLAINER_TOTAL, INJECT_TARGET_PLAYER_DISTINCT, INJECT_US_POLICY_COUNT, INJECT_CHINA_POLICY_COUNT |
+
+## A) desktop_button PASS（GIT_HEAD=`815f462`）
+
+```
+RUN_ID=20260309_112813  GIT_HEAD=815f462  ENTRYPOINT=desktop_button  MODE=daily
+selected_events=10  bigtech_actionable_count=9  bigtech_official_media_count=8
+leadership_politics_ai_count=8  china_ai_gov_count=1
+target_player_distinct=6  target_players=[Amazon, Anthropic, Google, Meta, NVIDIA, OpenAI]
+us_policy_count=1  china_policy_count=1
+platform_total=2  research_tutorial_total=0  google_research_total=1
+developer_release_total=0  indie_dev_tone_total=0
+forum_discussion_total=0  tutorial_explainer_total=0
+techcrunch_total=3  hf_blog_explainer_total=0
+official_media_count=8  strategic_buckets_distinct=5
+buckets=[distribution, economics, ecosystem, leadership, product]
+selected_avg_strategic_density=71.1  selected_min_strategic_density=15
+OVERLAP_POLICY=allow_duplicates  DAILY_DUP_GATE_ENABLED=False
+STATUS=OK  elapsed=101s
+```
+
+## B) scheduled_task PASS（同一 HEAD=`815f462`）
+
+```
+RUN_ID=20260309_113734  GIT_HEAD=815f462  ENTRYPOINT=scheduled_task  MODE=daily
+selected_events=10  bigtech_actionable_count=9  bigtech_official_media_count=8
+leadership_politics_ai_count=7  china_ai_gov_count=2
+target_player_distinct=6  target_players=[Amazon, Anthropic, Google, Meta, NVIDIA, OpenAI]
+us_policy_count=1  china_policy_count=1
+platform_total=2  research_tutorial_total=0  google_research_total=2
+developer_release_total=0  indie_dev_tone_total=0
+forum_discussion_total=0  tutorial_explainer_total=0
+techcrunch_total=3  hf_blog_explainer_total=0
+official_media_count=8  strategic_buckets_distinct=5
+OVERLAP_POLICY=daily_unique_only  DAILY_DUP_GATE_ENABLED=True
+STATUS=OK
+```
+
+## C) 注入 FAIL 驗證（10/10 通過）
+
+| # | 注入 | 預期 FAIL Gate | 結果 |
+|---|------|---------------|------|
+| 1 | INJECT_FORUM_DISCUSSION_TOTAL=1 | HUGGINGFACE_FORUM_CAP_HARD_DAILY | FAIL ✓ |
+| 2 | INJECT_DEVELOPER_RELEASE_TOTAL=1 | DEVELOPER_RELEASE_CAP_HARD_DAILY | FAIL ✓ |
+| 3 | INJECT_INDIE_DEV_TONE_TOTAL=1 | INDIE_DEV_TONE_CAP_HARD_DAILY | FAIL ✓ |
+| 4 | INJECT_TUTORIAL_EXPLAINER_TOTAL=1 | TUTORIAL_EXPLAINER_CAP_HARD_DAILY | FAIL ✓ |
+| 5 | INJECT_GOOGLE_RESEARCH_TOTAL=4 | GOOGLE_RESEARCH_CAP_HARD_DAILY | FAIL ✓ |
+| 6 | INJECT_BIGTECH_OFFICIAL_MEDIA_COUNT=7 | BIGTECH_OFFICIAL_MEDIA_MIN_HARD_DAILY | FAIL ✓ |
+| 7 | INJECT_TECHCRUNCH_TOTAL=5 | TECHCRUNCH_CAP_HARD_DAILY | FAIL ✓ |
+| 8 | INJECT_HF_BLOG_EXPLAINER_TOTAL=1 | HF_BLOG_EXPLAINER_CAP_HARD_DAILY | FAIL ✓ |
+| 9 | INJECT_TARGET_PLAYER_DISTINCT=5 | TARGET_PLAYER_COVERAGE_HARD_DAILY | FAIL ✓ |
+| 10 | INJECT_US_POLICY_COUNT=0 + INJECT_CHINA_POLICY_COUNT=0 | US_CHINA_POLICY_MIN_HARD_DAILY | FAIL ✓ |
+
+## D) 程式碼變更
+
+| 檔案 | 變更 |
+|------|------|
+| run_once.py | hydration vendor diversity Pass 3; diversity swap protection (_div1/_div2_safe_to_remove); FINAL RESCUE (FR-1~FR-4); platform swap pool filter; CHINA_POLICY_SIGNAL_RE expansion; iter78 injection vars |
+| verify_online.ps1 | 4 new gates: TECHCRUNCH_CAP, HF_BLOG_EXPLAINER_CAP, TARGET_PLAYER_COVERAGE, US_CHINA_POLICY_MIN |
+
+```
+git log --oneline -3 (iter78b):
+815f462 iter78b: target player coverage rescue + diversity swap protection + policy signal expansion
+```
+
+## E) Debugging Lessons
+
+- Diversity swaps operated without coverage awareness → must add safe-to-remove checks in ALL swap phases
+- google_news items (1558/2228) share same domain → title-keyword vendor matching needed for hydration diversity
+- When all 10 selected items are target players but only 5 vendors → rescue must allow swapping multi-item vendor (count>1) items
+- DELIVERABLE_TIMESTAMP_INCOHERENT if Word holds docx open → must close Word between runs
+- Scheduled task with Unicode path (`ai捕捉資訊`) gets corrupted in schtasks → run scheduler_wrapper.ps1 directly
+
+---
+
 # iter77: purge forum/devrelease/tutorial/research + fix stale verify chain
 
 run_date: 2026-03-09
