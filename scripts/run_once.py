@@ -7252,6 +7252,7 @@ def _f600_run_fast_path(
     _CT71_BIGTECH_VENDORS = frozenset({
         "Google", "Microsoft", "OpenAI", "NVIDIA", "Amazon", "Anthropic", "Meta", "Apple", "Samsung", "Adobe", "Figma",
         "Mistral", "DeepSeek", "Baidu", "Alibaba", "xAI",  # iter77: major AI cos for CEO-grade coverage
+        "Tencent", "ByteDance", "Zhipu", "Moonshot", "Minimax",  # iter78: full target player coverage
     })
 
     def _ct71_is_bigtech_actionable(it) -> bool:
@@ -8408,6 +8409,46 @@ def _f600_run_fast_path(
                     break
             if not _p78_tc_swapped:
                 _log.warning("iter78 Phase-9b: unable to reduce techcrunch_total below %d (cap=%d)", _p78_tc_count, _TECHCRUNCH_CAP)
+                break
+
+        # Phase-9d (iter78): target player coverage — swap non-target-player items for target players
+        _p78_tp_distinct = len(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s)))
+        _p78_tp_attempts = 0
+        while _p78_tp_distinct < 6 and _p78_tp_attempts < 10:
+            _p78_tp_attempts += 1
+            _p78_tp_cur = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+            _p78_tp_swapped = False
+            # try swapping a non-target-player item for a target player from a new vendor
+            for _p78_ri in range(len(_selected)):
+                _p78_rv = _f6_vendor_key(_selected[_p78_ri])
+                if _p78_rv in _TARGET_PLAYER_VENDORS:
+                    continue  # don't swap out a target player
+                _p78_test = [s for j, s in enumerate(_selected) if j != _p78_ri]
+                for _p78_cand in _p73_all_pools:
+                    if _p78_cand in _p78_test or _is_ceo_prohibited(_p78_cand):
+                        continue
+                    _p78_cv = _f6_vendor_key(_p78_cand)
+                    if _p78_cv not in _TARGET_PLAYER_VENDORS or _p78_cv in _p78_tp_cur:
+                        continue  # need NEW target player vendor
+                    _p78_n = _p78_test + [_p78_cand]
+                    _p78_nd = _DivCounter(_f6_domain_key(s) for s in _p78_n)
+                    _p78_nv = _DivCounter(_f6_vendor_key(s) for s in _p78_n)
+                    if (_p78_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p78_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _hdf_all_scores.get(id(_p78_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                            and sum(1 for s in _p78_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8
+                            and sum(1 for s in _p78_n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
+                            and sum(1 for s in _p78_n if _is_techcrunch(s)) <= _TECHCRUNCH_CAP):
+                        _selected[_p78_ri] = _p78_cand
+                        _p78_tp_distinct = len(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s)))
+                        _swap_successes += 1
+                        _log.info("iter78 Phase-9d target_player swap: idx=%d vendor=%s, tp_distinct=%d", _p78_ri, _p78_cv, _p78_tp_distinct)
+                        _p78_tp_swapped = True
+                        break
+                if _p78_tp_swapped:
+                    break
+            if not _p78_tp_swapped:
+                _log.warning("iter78 Phase-9d: target_player_distinct=%d < 6, no swap candidates", _p78_tp_distinct)
                 break
 
         if len(_selected) < _max_events:
