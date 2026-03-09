@@ -5394,6 +5394,70 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
+# iter75: DEVELOPER_RELEASE_CAP_HARD_DAILY — developer_release_total = 0
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_drMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "DEVELOPER_RELEASE_CAP_HARD_DAILY:"
+    if (Test-Path $_drMetaPath) {
+        try {
+            $_drMeta = Get-Content $_drMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_drCount  = if ($_drMeta.PSObject.Properties['developer_release_total']) { [int]$_drMeta.developer_release_total } else { 0 }
+            $_drPass   = if ($_drMeta.PSObject.Properties['developer_release_cap_pass']) { $_drMeta.developer_release_cap_pass } else { $false }
+            $_drInjected = if ($_drMeta.PSObject.Properties['developer_release_test_injected']) { $_drMeta.developer_release_test_injected } else { $false }
+            Write-Output ("  developer_release_total : {0}" -f $_drCount)
+            Write-Output ("  developer_release_pass  : {0}" -f $_drPass)
+            if ($_drInjected) {
+                Write-Output "  test_injected            : True"
+            }
+            if (-not $_drPass) {
+                $_drFail = ("DEVELOPER_RELEASE_CAP_HARD_DAILY_FAIL: developer_release_total={0} > 0" -f $_drCount)
+                Write-Output ("  => FAIL: {0}" -f $_drFail)
+                Invoke-VerifyOnlineFailFast -Gate "DEVELOPER_RELEASE_CAP_HARD_DAILY" -Reason $_drFail
+            }
+            Write-Output "  => DEVELOPER_RELEASE_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  DEVELOPER_RELEASE_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  DEVELOPER_RELEASE_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter75: INDIE_DEV_TONE_CAP_HARD_DAILY — indie_dev_tone_total = 0
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_idtMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "INDIE_DEV_TONE_CAP_HARD_DAILY:"
+    if (Test-Path $_idtMetaPath) {
+        try {
+            $_idtMeta = Get-Content $_idtMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_idtCount  = if ($_idtMeta.PSObject.Properties['indie_dev_tone_total']) { [int]$_idtMeta.indie_dev_tone_total } else { 0 }
+            $_idtPass   = if ($_idtMeta.PSObject.Properties['indie_dev_tone_cap_pass']) { $_idtMeta.indie_dev_tone_cap_pass } else { $false }
+            $_idtInjected = if ($_idtMeta.PSObject.Properties['indie_dev_tone_test_injected']) { $_idtMeta.indie_dev_tone_test_injected } else { $false }
+            Write-Output ("  indie_dev_tone_total : {0}" -f $_idtCount)
+            Write-Output ("  indie_dev_tone_pass  : {0}" -f $_idtPass)
+            if ($_idtInjected) {
+                Write-Output "  test_injected         : True"
+            }
+            if (-not $_idtPass) {
+                $_idtFail = ("INDIE_DEV_TONE_CAP_HARD_DAILY_FAIL: indie_dev_tone_total={0} > 0" -f $_idtCount)
+                Write-Output ("  => FAIL: {0}" -f $_idtFail)
+                Invoke-VerifyOnlineFailFast -Gate "INDIE_DEV_TONE_CAP_HARD_DAILY" -Reason $_idtFail
+            }
+            Write-Output "  => INDIE_DEV_TONE_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  INDIE_DEV_TONE_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  INDIE_DEV_TONE_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # iter73: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY — strategic_buckets_distinct >= 5
 #   Reads content_mix.meta.json
 # ---------------------------------------------------------------------------
@@ -5685,6 +5749,8 @@ if (Test-Path $_fpCmPath) {
         Write-Output ("platform_total                  = {0}" -f $(if ($_fpCm.PSObject.Properties['platform_total']) { $_fpCm.platform_total } else { "N/A" }))
         Write-Output ("research_tutorial_total          = {0}" -f $(if ($_fpCm.PSObject.Properties['research_tutorial_total']) { $_fpCm.research_tutorial_total } else { "N/A" }))
         Write-Output ("google_research_total            = {0}" -f $(if ($_fpCm.PSObject.Properties['google_research_total']) { $_fpCm.google_research_total } else { "N/A" }))
+        Write-Output ("developer_release_total          = {0}" -f $(if ($_fpCm.PSObject.Properties['developer_release_total']) { $_fpCm.developer_release_total } else { "N/A" }))
+        Write-Output ("indie_dev_tone_total             = {0}" -f $(if ($_fpCm.PSObject.Properties['indie_dev_tone_total']) { $_fpCm.indie_dev_tone_total } else { "N/A" }))
         Write-Output ("selected_strategic_buckets_distinct = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_strategic_buckets_distinct']) { $_fpCm.selected_strategic_buckets_distinct } else { "N/A" }))
     } catch {}
 }

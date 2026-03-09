@@ -7418,6 +7418,69 @@ def _f600_run_fast_path(
         """iter74: True if domain is blog.research.google (hard cap <=1)."""
         return _f6_domain_key(it) == _GOOGLE_RESEARCH_BLOG_DOMAIN
 
+    # iter75: developer_release / indie_dev_tone classification
+    # NOTE: github.com is already handled by _PLATFORM_DOMAINS (platform cap).
+    # This classifier targets repo-release-style items from ANY domain.
+    _DEVREL_REPO_ORGS = frozenset({
+        "microsoft/autogen", "huggingface/diffusers", "huggingface/transformers",
+        "langchain-ai/langchain", "run-llama/llama_index", "vllm-project/vllm",
+        "ollama/ollama",
+    })
+    _DEVREL_URL_PATH_RE = _ct71_re.compile(r'/(?:releases|pull|commit|issues|discussions)/\d', _ct71_re.I)
+    # Title-only patterns: very specific to repo changelogs, not product launches
+    _DEVREL_TITLE_RE = _ct71_re.compile(
+        r'(?:'
+        r'\brelease\s+notes?\b|\bchangelog\b|\bbugfix(?:es)?\b'
+        r'|\bthanks\s+to\s+@|\bsubmitted\s+by\s+@'
+        r'|\bPR\s+#\d|\bissue\s+#\d'
+        r'|\bfix(?:ed|es)?(?:\s+(?:a\s+)?bug|\s+#\d|\s+issue\s+#|\s+crash(?:es)?)\b'
+        r'|\bremoved\s+\w+Agent\b|\bstop_reason\s+field\b'
+        r'|\bcontributor(?:s)?\s+(?:guide|list|update)\b'
+        r')', _ct71_re.I)
+
+    def _is_developer_release(it) -> bool:
+        """iter75: True if item is a repo/library release, changelog, or contributor update.
+        Does NOT flag legitimate bigtech product announcements."""
+        _url = str(getattr(it, "url", "") or getattr(it, "link", "") or "").lower()
+        # Rule 1: URL path matches /releases/123, /pull/456, etc. (specific, not bare /releases/)
+        if _DEVREL_URL_PATH_RE.search(_url):
+            return True
+        # Rule 2: known OSS repo orgs in URL path
+        for _org in _DEVREL_REPO_ORGS:
+            if _org in _url:
+                return True
+        # Rule 3: title has very specific repo-release signals
+        _title = str(getattr(it, "title", "") or "")
+        if _DEVREL_TITLE_RE.search(_title):
+            # But exempt bigtech official/media items — they might mention a bugfix in passing
+            if _ct72b_source_class(it) in ("official", "media"):
+                return False
+            return True
+        return False
+
+    _INDIE_TONE_RE = _ct71_re.compile(
+        r'(?:'
+        r'\bthanks\s+to\s+@|\bsubmitted\s+by\s+@'
+        r'|\bPR\s+#\d|\bissue\s+#\d|\bbugfix\b|\brefactor(?:ed|ing)?\b'
+        r'|\bremoved\s+\w+Agent\b|\bstop_reason\s+field\b'
+        r'|\brelease\s+v0\.|\brelease\s+v1\.|\brelease\s+v2\.'
+        r'|\bcommit\s+[0-9a-f]{7,40}\b'
+        r'|\bmaintainer(?:s)?\b'
+        r'|\bcontributor(?:s)?\s+(?:guide|list|update)\b'
+        r')', _ct71_re.I)
+
+    def _is_indie_dev_tone(it) -> bool:
+        """iter75: True if item has indie developer / contributor / changelog tone."""
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        _blob = _title + " " + _snippet
+        if _INDIE_TONE_RE.search(_blob):
+            # Exempt bigtech official/media — they occasionally mention contributors
+            if _ct72b_source_class(it) in ("official", "media"):
+                return False
+            return True
+        return False
+
     def _f6_sort_key(it) -> tuple:
         """iter40→72b: bigtech-first, official/media first, strategic density, then fulltext.
         iter72b: bigtech_official_media_actionable priority + strategic_density_score."""
@@ -7426,6 +7489,9 @@ def _f600_run_fast_path(
         om = 2 if st in ("official", "media") else 0
         dn = -2 if _f6_is_dev_noise(it) else 0
         rb = -3 if _f6_is_research_blog(it) else 0  # iter74: stronger penalty (was -1)
+        # iter75: developer_release / indie_dev_tone penalty
+        _devrel_p = -5 if _is_developer_release(it) else 0
+        _indie_p = -4 if _is_indie_dev_tone(it) else 0
         # iter71→72b: actionable-type bonus
         _act71 = 3 if _ct71_is_actionable(it) else (-2 if _ct71_is_research_tutorial(it) else 0)
         # iter72b: bigtech_official_media_actionable super-priority
@@ -7441,7 +7507,7 @@ def _f600_run_fast_path(
         else:
             df_penalty = 0
         ftl = int(getattr(it, "fulltext_len", 0) or 0)
-        return (bt, om, _boma, _act71, rb, dn, df_penalty, _sds, pss, ftl, _f6_bfp(it))
+        return (bt, om, _boma, _act71, rb, _devrel_p, _indie_p, dn, df_penalty, _sds, pss, ftl, _f6_bfp(it))
 
     def _f6_tier(min_len: int) -> list:
         return sorted(
@@ -7650,38 +7716,47 @@ def _f600_run_fast_path(
         def _sd73_key(it):
             return -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0)
 
+        # iter75: exclusion helper — developer_release or indie_dev_tone
+        def _is_devrel_or_indie(it) -> bool:
+            return _is_developer_release(it) or _is_indie_dev_tone(it)
+
         # Pool BOMA: bigtech_official_media_actionable + non-platform + non-rt + non-google-research + density pass
         # iter74: exclude blog.research.google from BOMA (demoted to Pool C/backup)
+        # iter75: exclude developer_release / indie_dev_tone
         _p72_pool_boma = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _ct72b_is_bigtech_official_media_actionable(it)
             and not _ct71_is_research_tutorial(it)
             and not _f6_is_google_research_blog(it)
+            and not _is_devrel_or_indie(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
         # Pool BTA: bigtech_actionable (non-official/media) + non-platform + non-rt + non-google-research
-        # iter74: exclude blog.research.google
+        # iter74: exclude blog.research.google; iter75: exclude devrel/indie
         _p72_pool_bta = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _ct71_is_bigtech_actionable(it)
             and not _ct71_is_research_tutorial(it)
             and not _f6_is_google_research_blog(it)
+            and not _is_devrel_or_indie(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             and not _ct72b_is_bigtech_official_media_actionable(it)
         ], key=_sd73_key))
         # Pool C: bigtech + non-platform + density-pass (rescue — may include non-actionable)
+        # iter75: exclude developer_release / indie_dev_tone
         _p72_pool_c = _oa_partition(sorted([
             it for it in _pool_300
             if not _is_platform_domain(it)
             and _f6_is_bigtech(it)
             and not _f6_is_dev_noise(it)
+            and not _is_devrel_or_indie(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
         # Pool PLAT: platform items (cap=1) — sorted by strategic density
         _p72_pool_plat = _oa_partition(sorted([
-            it for it in _bt_om_pool_sorted if _is_platform_domain(it)
+            it for it in _bt_om_pool_sorted if _is_platform_domain(it) and not _is_devrel_or_indie(it)
         ], key=_sd73_key))
         # Pool RT: research/tutorial (cap=1)
         _p72_pool_rt = _oa_partition(sorted([
@@ -7692,20 +7767,22 @@ def _f600_run_fast_path(
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
 
-        # iter73: Pool LEADER — leadership/politics items
+        # iter73: Pool LEADER — leadership/politics items; iter75: exclude devrel/indie
         _p73_pool_leader = _oa_partition(sorted([
             it for it in _pool_300
             if _is_leadership_politics_ai(it)
             and not _is_platform_domain(it)
             and not _f6_is_dev_noise(it)
+            and not _is_devrel_or_indie(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
-        # iter73: Pool CHINA — china_ai_gov items
+        # iter73: Pool CHINA — china_ai_gov items; iter75: exclude devrel/indie
         _p73_pool_china = _oa_partition(sorted([
             it for it in _pool_300
             if _is_china_ai_gov(it)
             and not _is_platform_domain(it)
             and not _f6_is_dev_noise(it)
+            and not _is_devrel_or_indie(it)
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
 
@@ -7748,7 +7825,7 @@ def _f600_run_fast_path(
             _p73_lp_added = False
             for it in _p73_pool_leader:
                 if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
-                    if not _ct71_is_research_tutorial(it):
+                    if not _ct71_is_research_tutorial(it) and not _is_devrel_or_indie(it):
                         _sel_append(it)
                         _p73_lp_count += 1
                         _p73_lp_added = True
@@ -7771,7 +7848,7 @@ def _f600_run_fast_path(
                     for _lp_cand in (_p73_pool_leader + _p72_pool_boma):
                         if _lp_cand in _lp_test or not _is_leadership_politics_ai(_lp_cand):
                             continue
-                        if _is_platform_domain(_lp_cand) or _ct71_is_research_tutorial(_lp_cand):
+                        if _is_platform_domain(_lp_cand) or _ct71_is_research_tutorial(_lp_cand) or _is_devrel_or_indie(_lp_cand):
                             continue
                         _lp_new = _lp_test + [_lp_cand]
                         _lp_dc = _DivCounter(_f6_domain_key(s) for s in _lp_new)
@@ -7795,7 +7872,7 @@ def _f600_run_fast_path(
         if _p73_china_count < 1 and len(_selected) < _max_events:
             for it in _p73_pool_china:
                 if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
-                    if not _ct71_is_research_tutorial(it):
+                    if not _ct71_is_research_tutorial(it) and not _is_devrel_or_indie(it):
                         _sel_append(it)
                         _p73_china_count += 1
                         break
@@ -7805,6 +7882,7 @@ def _f600_run_fast_path(
             _p73_china_cands = _p73_pool_china + sorted([
                 it for it in _pool_300
                 if _is_china_ai_gov(it) and not _is_platform_domain(it) and not _f6_is_dev_noise(it)
+                and not _is_devrel_or_indie(it)
                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             ], key=_sd73_key)
             for _cn_ri in range(len(_selected)):
@@ -7814,7 +7892,7 @@ def _f600_run_fast_path(
                 for _cn_cand in _p73_china_cands:
                     if _cn_cand in _cn_test:
                         continue
-                    if _is_platform_domain(_cn_cand) or _ct71_is_research_tutorial(_cn_cand):
+                    if _is_platform_domain(_cn_cand) or _ct71_is_research_tutorial(_cn_cand) or _is_devrel_or_indie(_cn_cand):
                         continue
                     _cn_new = _cn_test + [_cn_cand]
                     _cn_dc = _DivCounter(_f6_domain_key(s) for s in _cn_new)
@@ -7913,9 +7991,11 @@ def _f600_run_fast_path(
                         break
             if not _p73_f5:
                 # penultimate resort — bigtech items from _pool_300 with density + strategic density pass
+                # iter75: exclude devrel/indie
                 for it in _pool_300:
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
+                            and not _is_devrel_or_indie(it)
                             and _f6_is_bigtech(it)
                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and _sd73_pass(it)):
@@ -7924,9 +8004,11 @@ def _f600_run_fast_path(
                         break
             if not _p73_f5:
                 # absolute last resort — bigtech items without strategic density pass (gate will check later)
+                # iter75: exclude devrel/indie
                 for it in _pool_300:
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
+                            and not _is_devrel_or_indie(it)
                             and _f6_is_bigtech(it)
                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
                         _sel_append(it)
@@ -7961,6 +8043,8 @@ def _f600_run_fast_path(
                             and sum(1 for s in _p6n if _is_platform_domain(s)) <= _PLATFORM_CAP
                             and sum(1 for s in _p6n if _ct71_is_research_tutorial(s)) <= 1
                             and sum(1 for s in _p6n if _f6_is_google_research_blog(s)) <= 1  # iter74
+                            and sum(1 for s in _p6n if _is_developer_release(s)) == 0  # iter75
+                            and sum(1 for s in _p6n if _is_indie_dev_tone(s)) == 0  # iter75
                             and sum(1 for s in _p6n if _ct72b_is_bigtech_official_media_actionable(s)) >= 7  # iter74
                             and _hdf_all_scores.get(id(_p6c), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and _sd73_pass(_p6c)):
@@ -7983,6 +8067,7 @@ def _f600_run_fast_path(
                 if it not in _selected
                 and not _f6_is_dev_noise(it)
                 and not _f6_is_google_research_blog(it)
+                and not _is_devrel_or_indie(it)  # iter75
                 and _f6_is_bigtech(it)
                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             ])
@@ -8063,16 +8148,59 @@ def _f600_run_fast_path(
                 _log.warning("iter74 Phase-8: unable to reduce google_research_total below %d", _p74_grt_count)
                 break
 
+        # Phase-9 (iter75): developer_release / indie_dev_tone swap rescue — enforce =0
+        _p75_devrel_count = sum(1 for s in _selected if _is_developer_release(s))
+        _p75_indie_count = sum(1 for s in _selected if _is_indie_dev_tone(s))
+        while _p75_devrel_count > 0 or _p75_indie_count > 0:
+            _p75_swapped = False
+            for _p75_ri in range(len(_selected)):
+                if not (_is_developer_release(_selected[_p75_ri]) or _is_indie_dev_tone(_selected[_p75_ri])):
+                    continue  # only swap out devrel/indie items
+                _p75_test = [s for j, s in enumerate(_selected) if j != _p75_ri]
+                for _p75_cand in _p73_all_pools:
+                    if _p75_cand in _p75_test or _is_devrel_or_indie(_p75_cand):
+                        continue
+                    if _is_platform_domain(_p75_cand):
+                        if sum(1 for s in _p75_test if _is_platform_domain(s)) >= _PLATFORM_CAP:
+                            continue
+                    if _ct71_is_research_tutorial(_p75_cand):
+                        if sum(1 for s in _p75_test if _ct71_is_research_tutorial(s)) >= 1:
+                            continue
+                    if _f6_is_google_research_blog(_p75_cand):
+                        if sum(1 for s in _p75_test if _f6_is_google_research_blog(s)) >= 1:
+                            continue
+                    _p75_n = _p75_test + [_p75_cand]
+                    _p75_nd = _DivCounter(_f6_domain_key(s) for s in _p75_n)
+                    _p75_nv = _DivCounter(_f6_vendor_key(s) for s in _p75_n)
+                    if (_p75_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                            and _p75_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _hdf_all_scores.get(id(_p75_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                            and sum(1 for s in _p75_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 7):
+                        _selected[_p75_ri] = _p75_cand
+                        _p75_devrel_count = sum(1 for s in _selected if _is_developer_release(s))
+                        _p75_indie_count = sum(1 for s in _selected if _is_indie_dev_tone(s))
+                        _swap_successes += 1
+                        _log.info("iter75 Phase-9 devrel/indie swap: idx=%d, devrel=%d indie=%d", _p75_ri, _p75_devrel_count, _p75_indie_count)
+                        _p75_swapped = True
+                        break
+                if _p75_swapped:
+                    break
+            if not _p75_swapped:
+                _log.warning("iter75 Phase-9: unable to eliminate devrel/indie (devrel=%d indie=%d)", _p75_devrel_count, _p75_indie_count)
+                break
+
         if len(_selected) < _max_events:
             _log.warning("iter73 FAIL: selected=%d < target=%d", len(_selected), _max_events)
 
-        _log.info("iter74 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d grt=%d lp=%d china=%d buckets=%s",
+        _log.info("iter75 selection done: selected=%d boma=%d actionable=%d plat=%d rt=%d grt=%d devrel=%d indie=%d lp=%d china=%d buckets=%s",
                   len(_selected),
                   sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s)),
                   sum(1 for s in _selected if _ct71_is_bigtech_actionable(s)),
                   sum(1 for s in _selected if _is_platform_domain(s)),
                   sum(1 for s in _selected if _ct71_is_research_tutorial(s)),
                   sum(1 for s in _selected if _f6_is_google_research_blog(s)),
+                  sum(1 for s in _selected if _is_developer_release(s)),
+                  sum(1 for s in _selected if _is_indie_dev_tone(s)),
                   sum(1 for s in _selected if _is_leadership_politics_ai(s)),
                   sum(1 for s in _selected if _is_china_ai_gov(s)),
                   sorted(set(_ct72b_strategic_bucket(s) for s in _selected)))
@@ -9321,6 +9449,8 @@ def _f600_run_fast_path(
     _cm73_lp_count = sum(1 for s in _selected if _is_leadership_politics_ai(s))
     _cm73_china_count = sum(1 for s in _selected if _is_china_ai_gov(s))
     _cm74_google_research_total = sum(1 for s in _selected if _f6_is_google_research_blog(s))  # iter74
+    _cm75_devrel_total = sum(1 for s in _selected if _is_developer_release(s))  # iter75
+    _cm75_indie_total = sum(1 for s in _selected if _is_indie_dev_tone(s))  # iter75
     _cm72_strategic_buckets = sorted(set(_ct72b_strategic_bucket(s) for s in _selected))
     _cm72_strategic_buckets_distinct = len(_cm72_strategic_buckets)
     _cm71_per_item = []
@@ -9342,6 +9472,8 @@ def _f600_run_fast_path(
             "is_platform": _is_platform_domain(_cm71_s),
             "is_research_tutorial": _ct71_is_research_tutorial(_cm71_s),
             "is_google_research_blog": _f6_is_google_research_blog(_cm71_s),
+            "developer_release_item": _is_developer_release(_cm71_s),  # iter75
+            "indie_dev_tone_item": _is_indie_dev_tone(_cm71_s),  # iter75
             "strategic_density_score": _sd_item.get("strategic_density_score", 0),
             "strategic_density_floor_pass": _sd_item.get("strategic_density_score", 0) >= _cm73_sd_floor,
         })
@@ -9353,17 +9485,35 @@ def _f600_run_fast_path(
     _cm73_inject_lp = os.environ.get("INJECT_LEADERSHIP_POLITICS_AI_COUNT", "")
     _cm73_inject_china = os.environ.get("INJECT_CHINA_AI_GOV_COUNT", "")
     _cm74_inject_grt = os.environ.get("INJECT_GOOGLE_RESEARCH_TOTAL", "")  # iter74
+    _cm75_inject_devrel = os.environ.get("INJECT_DEVELOPER_RELEASE_TOTAL", "")  # iter75
+    _cm75_inject_indie = os.environ.get("INJECT_INDIE_DEV_TONE_TOTAL", "")  # iter75
     _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
     _cm71_rt_total_check = _cm71_rt_total
     _cm72_bom_check = _cm72_bt_om_actionable
     _cm73_lp_check = _cm73_lp_count
     _cm73_china_check = _cm73_china_count
     _cm74_grt_check = _cm74_google_research_total
+    _cm75_devrel_check = _cm75_devrel_total
+    _cm75_indie_check = _cm75_indie_total
     _cm71_rt_is_injected = bool(_cm71_inject_rt)
     _cm72_bom_is_injected = bool(_cm72_inject_bom)
     _cm73_lp_is_injected = bool(_cm73_inject_lp)
     _cm73_china_is_injected = bool(_cm73_inject_china)
     _cm74_grt_is_injected = bool(_cm74_inject_grt)
+    _cm75_devrel_is_injected = bool(_cm75_inject_devrel)
+    _cm75_indie_is_injected = bool(_cm75_inject_indie)
+    if _cm75_devrel_is_injected:
+        try:
+            _cm75_devrel_check = int(_cm75_inject_devrel)
+        except ValueError:
+            pass
+        _log.info("INJECT_DEVELOPER_RELEASE_TOTAL=%s: developer_release_total overridden", _cm75_inject_devrel)
+    if _cm75_indie_is_injected:
+        try:
+            _cm75_indie_check = int(_cm75_inject_indie)
+        except ValueError:
+            pass
+        _log.info("INJECT_INDIE_DEV_TONE_TOTAL=%s: indie_dev_tone_total overridden", _cm75_inject_indie)
     if _cm71_rt_is_injected:
         try:
             _cm71_rt_total_check = int(_cm71_inject_rt)
@@ -9403,6 +9553,8 @@ def _f600_run_fast_path(
     _cm73_lp_pass = (_cm73_lp_check >= 2)  # iter73: new
     _cm73_china_pass = (_cm73_china_check >= 1)  # iter73: new
     _cm74_grt_pass = (_cm74_grt_check <= 1)  # iter74: google research blog <= 1
+    _cm75_devrel_pass = (_cm75_devrel_check <= 0)  # iter75: developer_release = 0
+    _cm75_indie_pass = (_cm75_indie_check <= 0)  # iter75: indie_dev_tone = 0
     _cm73_total_pass = (len(_selected) >= 10)  # iter73: new
 
     try:
@@ -9433,6 +9585,12 @@ def _f600_run_fast_path(
             "google_research_total": _cm74_grt_check,
             "google_research_cap": 1,
             "google_research_cap_pass": _cm74_grt_pass,
+            "developer_release_total": _cm75_devrel_check,  # iter75
+            "developer_release_cap": 0,
+            "developer_release_cap_pass": _cm75_devrel_pass,
+            "indie_dev_tone_total": _cm75_indie_check,  # iter75
+            "indie_dev_tone_cap": 0,
+            "indie_dev_tone_cap_pass": _cm75_indie_pass,
             "selected_strategic_buckets": _cm72_strategic_buckets,
             "selected_strategic_buckets_distinct": _cm72_strategic_buckets_distinct,
             "strategic_bucket_coverage_min": 5,
@@ -9466,6 +9624,12 @@ def _f600_run_fast_path(
         if _cm74_grt_is_injected:
             _cm71_meta["google_research_test_injected"] = True
             _cm71_meta["injected_google_research_total"] = _cm74_inject_grt
+        if _cm75_devrel_is_injected:
+            _cm71_meta["developer_release_test_injected"] = True
+            _cm71_meta["injected_developer_release_total"] = _cm75_inject_devrel
+        if _cm75_indie_is_injected:
+            _cm71_meta["indie_dev_tone_test_injected"] = True
+            _cm71_meta["injected_indie_dev_tone_total"] = _cm75_inject_indie
         _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _cm71_exc:
         _log.warning("content_mix.meta.json write failed: %s", _cm71_exc)
@@ -9583,6 +9747,36 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("GOOGLE_RESEARCH_CAP_HARD_DAILY", _cm74_grt_fail)
+
+    # iter75: DEVELOPER_RELEASE_CAP_HARD_DAILY gate (B8) — developer_release_total = 0
+    if _is_daily and not _cm75_devrel_pass:
+        _cm75_devrel_fail = f"DEVELOPER_RELEASE_CAP_HARD_DAILY_FAIL: developer_release_total={_cm75_devrel_check} > 0"
+        if _cm75_devrel_is_injected:
+            _cm75_devrel_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "DEVELOPER_RELEASE_CAP_HARD_DAILY",
+            _cm75_devrel_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("DEVELOPER_RELEASE_CAP_HARD_DAILY", _cm75_devrel_fail)
+
+    # iter75: INDIE_DEV_TONE_CAP_HARD_DAILY gate (B9) — indie_dev_tone_total = 0
+    if _is_daily and not _cm75_indie_pass:
+        _cm75_indie_fail = f"INDIE_DEV_TONE_CAP_HARD_DAILY_FAIL: indie_dev_tone_total={_cm75_indie_check} > 0"
+        if _cm75_indie_is_injected:
+            _cm75_indie_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "INDIE_DEV_TONE_CAP_HARD_DAILY",
+            _cm75_indie_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("INDIE_DEV_TONE_CAP_HARD_DAILY", _cm75_indie_fail)
 
     # iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY gate (B7) — each item >= 15
     if _is_daily and not _cm73_per_item_sd_pass:
