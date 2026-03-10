@@ -48,6 +48,7 @@ function Write-Log {
 # --- P0 fingerprint ---
 $gitHead = "unknown"
 try { $gitHead = (git rev-parse --short HEAD 2>$null) } catch {}
+$voScript = Join-Path $repoRoot "scripts\verify_online.ps1"
 
 Add-Content -LiteralPath $logPath -Value "" -Encoding utf8
 Add-Content -LiteralPath $logPath -Value ("=" * 72) -Encoding utf8
@@ -56,6 +57,13 @@ Write-Log "run_timestamp           = $runTs"
 Write-Log "Mode                    = $Mode"
 Write-Log "ENTRYPOINT              = $($env:PIPELINE_ENTRYPOINT)"
 Write-Log "GIT_HEAD                = $gitHead"
+Write-Log "VERIFY_SCRIPT_PATH      = $voScript"
+$_dbVoHash = "unavailable"
+try { $_dbVoHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $voScript).Hash.Substring(0,16) } catch {}
+Write-Log "VERIFY_SCRIPT_SHA256    = $_dbVoHash"
+Write-Log "MODE                    = daily"
+Write-Log "DUPLICATE_POLICY        = allow_duplicates"
+Write-Log "DAILY_DUP_GATE_ENABLED  = false"
 Write-Log "DENSITY_MULTIPLIER_TARGET = 1.5"
 Write-Log "soft_target             = $($env:PIPELINE_SOFT_TARGET_SEC)s"
 Write-Log "hard_budget             = $($env:PIPELINE_TIME_BUDGET_SEC)s"
@@ -63,7 +71,6 @@ Write-Log "repo_root               = $repoRoot"
 Write-Log ""
 
 # --- Run verify_online.ps1 ---
-$voScript = Join-Path $repoRoot "scripts\verify_online.ps1"
 if (-not (Test-Path $voScript)) {
     Write-Log "ERROR: verify_online.ps1 not found at $voScript"
     Read-Host "Press Enter to close / 按 Enter 關閉"
