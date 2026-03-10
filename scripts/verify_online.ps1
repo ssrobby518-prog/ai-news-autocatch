@@ -5062,7 +5062,7 @@ if ($_fast300Daily) {
             Write-Output ("  max_domain_count          : {0}" -f $_divMaxDom)
             Write-Output ("  max_vendor_count          : {0}" -f $_divMaxVen)
             Write-Output ("  diversity_pass            : {0}" -f $_divPass)
-            if ($_divDomains -lt 5 -or $_divMaxDom -gt 3 -or $_divVendors -lt 5 -or $_divMaxVen -gt 3) {
+            if ($_divDomains -lt 5 -or $_divMaxDom -gt 2 -or $_divVendors -lt 5 -or $_divMaxVen -gt 2) {
                 $_divFail = ("BIGTECH_DIVERSITY_HARD_DAILY_FAIL: domains={0} max_domain={1} vendors={2} max_vendor={3}" -f $_divDomains, $_divMaxDom, $_divVendors, $_divMaxVen)
                 Write-Output ("  => FAIL: {0}" -f $_divFail)
                 Invoke-VerifyOnlineFailFast -Gate "BIGTECH_DIVERSITY_HARD_DAILY" -Reason $_divFail

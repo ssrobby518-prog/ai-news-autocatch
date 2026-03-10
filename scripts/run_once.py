@@ -7808,8 +7808,8 @@ def _f600_run_fast_path(
     _bt_om_pool = [it for it in _pool_300 if _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
 
     # iter53: domain/vendor quota-aware selection
-    _DIV_MAX_DOMAIN = 3  # iter73: 10 items, max 1/3 → 3
-    _DIV_MAX_VENDOR = 3  # iter73: 10 items, max 1/3 → 3
+    _DIV_MAX_DOMAIN = 2  # iter80b: 10 items, domains>=5 requires max 2 per domain
+    _DIV_MAX_VENDOR = 2  # iter80b: 10 items, vendors>=5 requires max 2 per vendor
     _DIV_MIN_DOMAINS = 5  # iter73: 10-item requires >= 5
     _DIV_MIN_VENDORS = 5  # iter73: 10-item requires >= 5
     from collections import Counter as _DivCounter
@@ -8819,10 +8819,15 @@ def _f600_run_fast_path(
                     continue
                 if _max_vc > _DIV_MAX_VENDOR and _test_max_vc >= _max_vc:
                     continue
-                # iter80: full invariant check — no regression allowed
+                # iter80→80b: invariant check — allow diversity-fixing swaps
                 _div1_inv_before = _i80_invariant_snapshot(_selected)
                 _div1_inv_after = _i80_invariant_snapshot(_test_sel)
                 _div1_inv_ok, _div1_inv_reg = _i80_no_regression(_div1_inv_before, _div1_inv_after)
+                # iter80b: if strict check fails, allow swap if it IMPROVES diversity
+                # and only regresses invariants that were already failing
+                if not _div1_inv_ok and (_test_max_dc < _max_dc or _test_max_vc < _max_vc):
+                    # all regressed keys were already False → tolerable
+                    _div1_inv_ok = all(not _div1_inv_before[k] for k in _div1_inv_reg)
                 # Also check diversity improvement (must not make concentration worse)
                 _test_buckets = len(set(_ct72b_strategic_bucket(s) for s in _test_sel))
                 _cur_buckets = len(set(_ct72b_strategic_bucket(s) for s in _selected))
@@ -8884,10 +8889,12 @@ def _f600_run_fast_path(
                     if _pt_cv not in _TARGET_PLAYER_VENDORS or _pt_cv in _post_tp_cur:
                         continue  # need NEW target player vendor
                     _pt_n = _pt_test + [_pt_cand]
-                    # iter80: full invariant check — no regression allowed
+                    # iter80→80b: invariant check with relaxed fallback
                     _pt_inv_before = _i80_invariant_snapshot(_selected)
                     _pt_inv_after = _i80_invariant_snapshot(_pt_n)
                     _pt_inv_ok, _pt_inv_reg = _i80_no_regression(_pt_inv_before, _pt_inv_after)
+                    if not _pt_inv_ok:
+                        _pt_inv_ok = all(not _pt_inv_before[k] for k in _pt_inv_reg)
                     if _pt_inv_ok:
                         _selected[_pt_ri] = _pt_cand
                         _post_tp_cur = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
@@ -9615,10 +9622,12 @@ def _f600_run_fast_path(
                 if _max_vc2 > _DIV_MAX_VENDOR and _test_max_vc2 >= _max_vc2:
                     continue
                 # iter77: preserve bucket coverage
-                # iter80: full invariant check — no regression allowed
+                # iter80→80b: invariant check with relaxed fallback
                 _div2_inv_before = _i80_invariant_snapshot(_selected)
                 _div2_inv_after = _i80_invariant_snapshot(_test_sel2)
                 _div2_inv_ok, _div2_inv_reg = _i80_no_regression(_div2_inv_before, _div2_inv_after)
+                if not _div2_inv_ok:
+                    _div2_inv_ok = all(not _div2_inv_before[k] for k in _div2_inv_reg)
                 _test_buckets2 = len(set(_ct72b_strategic_bucket(s) for s in _test_sel2))
                 _cur_buckets2 = len(set(_ct72b_strategic_bucket(s) for s in _selected))
                 if (_div2_inv_ok
@@ -9646,9 +9655,11 @@ def _f600_run_fast_path(
                   len(_d_fin), _d_fin.most_common(1)[0][1] if _d_fin else 0,
                   len(set(_f6_vendor_key(s) for s in _selected) - {"other"}),
                   _v_fin.most_common(1)[0][1] if _v_fin else 0)
-        # iter80: no-regression gate — revert if post-dedup diversity REGRESSED any passing invariant
+        # iter80→80b: no-regression gate with relaxed fallback — revert if NEWLY regressed
         _i80_post_div2 = _i80_invariant_snapshot(_selected)
         _i80_ok_div2, _i80_reg_div2 = _i80_no_regression(_i80_inv_div2, _i80_post_div2)
+        if not _i80_ok_div2:
+            _i80_ok_div2 = all(not _i80_inv_div2[k] for k in _i80_reg_div2)
         if not _i80_ok_div2:
             _log.warning("iter80: REVERTED post-dedup diversity swap — regressed: %s", _i80_reg_div2)
             _selected[:] = _i80_snap_div2
@@ -9712,10 +9723,12 @@ def _f600_run_fast_path(
                     _cur_role_p = len(set(_role_axis(s) for s in _selected))
                     _test_om_p = sum(1 for s in _test_sel if _ct72b_source_class(s) in ("official", "media"))
                     _cur_om_p = sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media"))
-                    # iter80: full invariant check
+                    # iter80→80b: invariant check with relaxed fallback
                     _plat_inv_b = _i80_invariant_snapshot(_selected)
                     _plat_inv_a = _i80_invariant_snapshot(_test_sel)
                     _plat_inv_ok, _plat_inv_reg = _i80_no_regression(_plat_inv_b, _plat_inv_a)
+                    if not _plat_inv_ok:
+                        _plat_inv_ok = all(not _plat_inv_b[k] for k in _plat_inv_reg)
                     if _plat_inv_ok:
                         _log.info("iter68 platform swap: replaced idx=%d (%s/%s) with (%s/%s)",
                                   _plat_worst_idx, _f6_domain_key(_plat_worst), _f6_vendor_key(_plat_worst),
@@ -9759,10 +9772,12 @@ def _f600_run_fast_path(
                                         _test3_plat = sum(1 for s in _test3 if _is_platform_domain(s))
                                         _test3_dom_d = len(_test3_dc)
                                         _test3_ven_s = len(set(_f6_vendor_key(s) for s in _test3) - {"other"})
-                                        # iter80: full invariant check
+                                        # iter80→80b: invariant check with relaxed fallback
                                         _test3_inv_b = _i80_invariant_snapshot(_selected)
                                         _test3_inv_a = _i80_invariant_snapshot(_test3)
                                         _test3_inv_ok, _test3_inv_reg = _i80_no_regression(_test3_inv_b, _test3_inv_a)
+                                        if not _test3_inv_ok:
+                                            _test3_inv_ok = all(not _test3_inv_b[k] for k in _test3_inv_reg)
                                         if _test3_inv_ok and _test3_plat < _plat_count:
                                             _log.info("iter68 platform two-step swap: step1 idx=%d→(%s/%s) step2 idx=%d→(%s/%s)",
                                                       _ni, _f6_domain_key(_r2), _f6_vendor_key(_r2),
@@ -9904,10 +9919,12 @@ def _f600_run_fast_path(
                 except Exception:
                     pass
 
-    # iter80: no-regression gate — revert if platform swap REGRESSED any passing invariant
+    # iter80→80b: no-regression gate with relaxed fallback — revert if NEWLY regressed
     if _is_daily and len(_selected) >= _max_events:
         _i80_post_plat = _i80_invariant_snapshot(_selected)
         _i80_ok_plat, _i80_reg_plat = _i80_no_regression(_i80_inv_plat, _i80_post_plat)
+        if not _i80_ok_plat:
+            _i80_ok_plat = all(not _i80_inv_plat[k] for k in _i80_reg_plat)
         if not _i80_ok_plat:
             _log.warning("iter80: REVERTED platform swap — regressed: %s", _i80_reg_plat)
             _selected[:] = _i80_snap_plat
@@ -9972,10 +9989,12 @@ def _f600_run_fast_path(
                         if _fr_cv not in _TARGET_PLAYER_VENDORS or _fr_cv in _fr_tp_set:
                             continue  # need NEW target player vendor
                         _fr_n = _fr_test_base + [_fr_cand]
-                        # iter80: full invariant check — no regression allowed
+                        # iter80→80b: invariant check with relaxed fallback
                         _fr_inv_before = _i80_invariant_snapshot(_selected)
                         _fr_inv_after = _i80_invariant_snapshot(_fr_n)
                         _fr_inv_ok, _fr_inv_reg = _i80_no_regression(_fr_inv_before, _fr_inv_after)
+                        if not _fr_inv_ok:
+                            _fr_inv_ok = all(not _fr_inv_before[k] for k in _fr_inv_reg)
                         if _fr_inv_ok:
                             _selected[_fr_ri] = _fr_cand
                             # Compute SD for swapped-in item if not cached
@@ -10017,10 +10036,12 @@ def _f600_run_fast_path(
                     if not _fr_need_china and not _is_us_policy(_fr_pc):
                         continue
                     _fr_pn = _fr_pol_base + [_fr_pc]
-                    # iter80: full invariant check
+                    # iter80→80b: invariant check with relaxed fallback
                     _fr_pol_inv_b = _i80_invariant_snapshot(_selected)
                     _fr_pol_inv_a = _i80_invariant_snapshot(_fr_pn)
                     _fr_pol_ok, _fr_pol_reg = _i80_no_regression(_fr_pol_inv_b, _fr_pol_inv_a)
+                    if not _fr_pol_ok:
+                        _fr_pol_ok = all(not _fr_pol_inv_b[k] for k in _fr_pol_reg)
                     if _fr_pol_ok:
                         _selected[_fr_pi] = _fr_pc
                         _fr_changed = True
@@ -10051,10 +10072,12 @@ def _f600_run_fast_path(
                     if _ct72b_source_class(_fr_oc) not in ("official", "media"):
                         continue
                     _fr_on = _fr_om_base + [_fr_oc]
-                    # iter80: full invariant check
+                    # iter80→80b: invariant check with relaxed fallback
                     _fr_om_inv_b = _i80_invariant_snapshot(_selected)
                     _fr_om_inv_a = _i80_invariant_snapshot(_fr_on)
                     _fr_om_ok, _fr_om_reg = _i80_no_regression(_fr_om_inv_b, _fr_om_inv_a)
+                    if not _fr_om_ok:
+                        _fr_om_ok = all(not _fr_om_inv_b[k] for k in _fr_om_reg)
                     if _fr_om_ok:
                         _selected[_fr_oi] = _fr_oc
                         _fr_changed = True
@@ -10082,10 +10105,12 @@ def _f600_run_fast_path(
                 if _fr_prc in _fr_purge_base:
                     continue
                 _fr_prn = _fr_purge_base + [_fr_prc]
-                # iter80: full invariant check
+                # iter80→80b: invariant check with relaxed fallback
                 _fr_pr_inv_b = _i80_invariant_snapshot(_selected)
                 _fr_pr_inv_a = _i80_invariant_snapshot(_fr_prn)
                 _fr_pr_ok, _fr_pr_reg = _i80_no_regression(_fr_pr_inv_b, _fr_pr_inv_a)
+                if not _fr_pr_ok:
+                    _fr_pr_ok = all(not _fr_pr_inv_b[k] for k in _fr_pr_reg)
                 if _fr_pr_ok:
                     _selected[_fr_prohib_idx] = _fr_prc
                     _fr_changed = True
@@ -10111,9 +10136,11 @@ def _f600_run_fast_path(
                       sum(1 for s in _selected if _is_techcrunch(s)),
                       sum(1 for s in _selected if _f6_is_google_research_blog(s)),
                       sum(1 for s in _selected if _is_ceo_prohibited(s)))
-        # iter80: no-regression gate — revert if FINAL rescue REGRESSED any passing invariant
+        # iter80→80b: no-regression gate with relaxed fallback — revert if NEWLY regressed
         _i80_post_fr = _i80_invariant_snapshot(_selected)
         _i80_ok_fr, _i80_reg_fr = _i80_no_regression(_i80_inv_fr, _i80_post_fr)
+        if not _i80_ok_fr:
+            _i80_ok_fr = all(not _i80_inv_fr[k] for k in _i80_reg_fr)
         if not _i80_ok_fr:
             _log.warning("iter80: REVERTED FINAL rescue — regressed: %s", _i80_reg_fr)
             _selected[:] = _i80_snap_fr
@@ -10150,8 +10177,9 @@ def _f600_run_fast_path(
                 _i80_cur_inv = _i80_invariant_snapshot(_selected)
                 _i80_test_inv = _i80_invariant_snapshot(_i80_test)
                 _i80_ok_t, _i80_reg_t = _i80_no_regression(_i80_cur_inv, _i80_test_inv)
+                if not _i80_ok_t:
+                    _i80_ok_t = all(not _i80_cur_inv[k] for k in _i80_reg_t)
                 _i80_test_tc = sum(1 for s in _i80_test if _is_techcrunch(s))
-                # Accept only if tc decreases AND no other invariant regresses (except tc_cap itself which improves)
                 if _i80_test_tc < _i80_tc and _i80_ok_t:
                     _log.info("iter80 final cap enforcement: replaced TC[%d] '%s' with '%s'",
                               _i80_tc_worst[0], str(getattr(_i80_tc_worst[1], "title", ""))[:60],
@@ -10179,6 +10207,8 @@ def _f600_run_fast_path(
                 _i80_hcur_inv = _i80_invariant_snapshot(_selected)
                 _i80_htest_inv = _i80_invariant_snapshot(_i80_htest)
                 _i80_hok, _i80_hreg = _i80_no_regression(_i80_hcur_inv, _i80_htest_inv)
+                if not _i80_hok:
+                    _i80_hok = all(not _i80_hcur_inv[k] for k in _i80_hreg)
                 if _i80_hok:
                     _log.info("iter80 final cap enforcement: replaced HFBE[%d] '%s' with '%s'",
                               _i80_hf_worst[0], str(getattr(_i80_hf_worst[1], "title", ""))[:60],
@@ -10189,6 +10219,70 @@ def _f600_run_fast_path(
                     _i80_hf_swapped = True
                     break
             if not _i80_hf_swapped:
+                break
+        # iter80b: enforce GR cap
+        for _i80_gr_round in range(10):
+            _i80_gr = sum(1 for s in _selected if _f6_is_google_research_blog(s))
+            if _i80_gr <= _GOOGLE_RESEARCH_CAP:
+                break
+            if not _i80_final_pool:
+                _log.warning("iter80b final cap: no pool for GR reduction (gr=%d)", _i80_gr)
+                break
+            _i80_gr_items = [(i, s) for i, s in enumerate(_selected) if _f6_is_google_research_blog(s)]
+            _i80_gr_worst = min(_i80_gr_items, key=lambda x: _f6_bfp(x[1]))
+            _i80_gr_swapped = False
+            for _i80_gci, _i80_gcand in enumerate(_i80_final_pool):
+                _i80_gtest = [s if j != _i80_gr_worst[0] else _i80_gcand for j, s in enumerate(_selected)]
+                _i80_gcur_inv = _i80_invariant_snapshot(_selected)
+                _i80_gtest_inv = _i80_invariant_snapshot(_i80_gtest)
+                _i80_gok, _i80_greg = _i80_no_regression(_i80_gcur_inv, _i80_gtest_inv)
+                if not _i80_gok:
+                    _i80_gok = all(not _i80_gcur_inv[k] for k in _i80_greg)
+                _i80_gtest_gr = sum(1 for s in _i80_gtest if _f6_is_google_research_blog(s))
+                if _i80_gtest_gr < _i80_gr and _i80_gok:
+                    _log.info("iter80b final cap: replaced GR[%d] '%s' with '%s'",
+                              _i80_gr_worst[0], str(getattr(_i80_gr_worst[1], "title", ""))[:60],
+                              str(getattr(_i80_gcand, "title", ""))[:60])
+                    _selected[_i80_gr_worst[0]] = _i80_gcand
+                    _i80_final_pool.pop(_i80_gci)
+                    _i80_changed = True
+                    _i80_gr_swapped = True
+                    break
+            if not _i80_gr_swapped:
+                _log.warning("iter80b final cap: stuck at gr=%d, no valid replacement", _i80_gr)
+                break
+        # iter80b: enforce domain concentration cap (max _DIV_MAX_DOMAIN per domain)
+        for _i80_dom_round in range(10):
+            _i80_dom_c = _DivCounter(_f6_domain_key(s) for s in _selected)
+            _i80_dom_max = _i80_dom_c.most_common(1)[0][1] if _i80_dom_c else 0
+            if _i80_dom_max <= _DIV_MAX_DOMAIN:
+                break
+            if not _i80_final_pool:
+                _log.warning("iter80b final cap: no pool for domain reduction (max_dom=%d)", _i80_dom_max)
+                break
+            _i80_worst_dom = _i80_dom_c.most_common(1)[0][0]
+            _i80_dom_items = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _i80_worst_dom]
+            _i80_dom_worst = min(_i80_dom_items, key=lambda x: _f6_bfp(x[1]))
+            _i80_dom_swapped = False
+            for _i80_dci, _i80_dcand in enumerate(_i80_final_pool):
+                if _f6_domain_key(_i80_dcand) == _i80_worst_dom:
+                    continue
+                _i80_dtest = [s if j != _i80_dom_worst[0] else _i80_dcand for j, s in enumerate(_selected)]
+                _i80_dcur_inv = _i80_invariant_snapshot(_selected)
+                _i80_dtest_inv = _i80_invariant_snapshot(_i80_dtest)
+                _i80_dok, _i80_dreg = _i80_no_regression(_i80_dcur_inv, _i80_dtest_inv)
+                if not _i80_dok:
+                    _i80_dok = all(not _i80_dcur_inv[k] for k in _i80_dreg)
+                if _i80_dok:
+                    _log.info("iter80b final cap: replaced domain '%s'[%d] with '%s'",
+                              _i80_worst_dom, _i80_dom_worst[0], _f6_domain_key(_i80_dcand))
+                    _selected[_i80_dom_worst[0]] = _i80_dcand
+                    _i80_final_pool.pop(_i80_dci)
+                    _i80_changed = True
+                    _i80_dom_swapped = True
+                    break
+            if not _i80_dom_swapped:
+                _log.warning("iter80b final cap: stuck at domain '%s'=%d", _i80_worst_dom, _i80_dom_max)
                 break
         if _i80_changed:
             _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
