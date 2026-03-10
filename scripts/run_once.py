@@ -10000,6 +10000,14 @@ def _f600_run_fast_path(
                         _fr_inv_ok, _fr_inv_reg = _i80_no_regression(_fr_inv_before, _fr_inv_after)
                         if not _fr_inv_ok:
                             _fr_inv_ok = all(not _fr_inv_before[k] for k in _fr_inv_reg)
+                        # iter81: allow tc_cap/gr_cap/tc_gr_combined regression in FR-1
+                        # — final cap enforcement phase (iter80) will fix these after rescue
+                        if not _fr_inv_ok:
+                            _fr_cap_deferrable = {"tc_cap", "gr_cap", "tc_gr_combined"}
+                            _fr_inv_ok = all(
+                                (not _fr_inv_before[k]) or (k in _fr_cap_deferrable)
+                                for k in _fr_inv_reg
+                            )
                         if _fr_inv_ok:
                             _selected[_fr_ri] = _fr_cand
                             # Compute SD for swapped-in item if not cached
