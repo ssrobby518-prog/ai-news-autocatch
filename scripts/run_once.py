@@ -6808,10 +6808,17 @@ def _f600_item_to_card_dict(item) -> dict:
             sentences.append(sc)
         if len(sentences) >= 12:
             break
-    # iter80b: if still too few sentences, chunk the full_text into ~200-char segments
+    # iter80b: if still too few sentences, chunk unseen tail of full_text
+    # iter80b-fix: start chunking AFTER content already captured by sentence-split
     if len(sentences) < 5 and len(full_text.strip()) >= 200:
         _chunk_text = _normalize_ws(full_text)
-        _chunk_pos = 0
+        # find where existing sentences end in full_text
+        _chunk_start = 0
+        for _es in sentences:
+            _es_pos = _chunk_text.find(_es[:40].rstrip() if len(_es) >= 40 else _es.rstrip())
+            if _es_pos >= 0:
+                _chunk_start = max(_chunk_start, _es_pos + len(_es))
+        _chunk_pos = _chunk_start
         while len(sentences) < 8 and _chunk_pos < len(_chunk_text):
             _chunk_end = min(_chunk_pos + 200, len(_chunk_text))
             _chunk = _chunk_text[_chunk_pos:_chunk_end].strip()
