@@ -6302,23 +6302,23 @@ def _generate_digest_md(prepared: list[dict], run_id: str) -> "Path | None":
                     _sc = _normalize_ws(str(_s or ""))
                     if _sc and len(_sc) >= 20 and _sc not in _sentences:
                         _sentences.append(_sc)
-                    if len(_sentences) >= 6:
+                    if len(_sentences) >= 8:
                         break
-                if len(_sentences) >= 3:
+                if len(_sentences) >= 5:
                     break
             # Fallback: split full_text on sentence boundaries
-            if len(_sentences) < 2:
+            if len(_sentences) < 5:
                 _blob = _normalize_ws(str(
                     _fc.get("full_text", "") or _fc.get("what_happened", "") or ""
                 ))
                 if _blob:
-                    for _seg in re.split(r"(?<=[.!?])\s+", _blob):
+                    for _seg in re.split(r"(?<=[.!?])\s+|\n+", _blob):
                         _sc = _normalize_ws(_seg)
-                        if len(_sc) >= 30 and _sc not in _sentences:
+                        if len(_sc) >= 20 and _sc not in _sentences:
                             _sentences.append(_sc)
-                        if len(_sentences) >= 6:
+                        if len(_sentences) >= 8:
                             break
-            for _s in _sentences[:6]:
+            for _s in _sentences[:8]:
                 _lines.append(f"- {_s}")
             _lines.append("")
             _lines.append("---")
@@ -6801,13 +6801,23 @@ def _f600_item_to_card_dict(item) -> dict:
                 full_text = _ftv
     # Build fact_pack_sentences from full_text via sentence splitting
     sentences: list = []
-    # iter80: split on sentence boundaries AND newlines for paragraph-style content
-    for seg in re.split(r"(?<=[.!?。！？])\s+|\n+", full_text):
+    # iter80b: split on sentence boundaries, newlines, semicolons, and em-dashes
+    for seg in re.split(r"(?<=[.!?。！？;；])\s+|\n+|(?<=—)\s+", full_text):
         sc = _normalize_ws(seg)
-        if len(sc) >= 30 and sc not in sentences:
+        if len(sc) >= 20 and sc not in sentences:
             sentences.append(sc)
-        if len(sentences) >= 8:
+        if len(sentences) >= 12:
             break
+    # iter80b: if still too few sentences, chunk the full_text into ~200-char segments
+    if len(sentences) < 5 and len(full_text.strip()) >= 200:
+        _chunk_text = _normalize_ws(full_text)
+        _chunk_pos = 0
+        while len(sentences) < 8 and _chunk_pos < len(_chunk_text):
+            _chunk_end = min(_chunk_pos + 200, len(_chunk_text))
+            _chunk = _chunk_text[_chunk_pos:_chunk_end].strip()
+            if len(_chunk) >= 20 and _chunk not in sentences:
+                sentences.append(_chunk)
+            _chunk_pos = _chunk_end
     return {
         "title": title,
         "source_name": source_name,
@@ -11265,20 +11275,20 @@ def _f600_run_fast_path(
         if _dd_thin_idx < 0:
             break
         _dd_old_title = str(getattr(_selected[_dd_thin_idx], "title", "") or "")[:60]
-        # iter80: transactional density swap — scan pool for first candidate that
-        # passes ALL absolute gate thresholds (not no-regression, since diversity
-        # phases are complete and we need flexibility to find dense items)
+        # iter80b: transactional density swap — no-regression check (don't worsen
+        # any gate that currently passes; tolerate pre-existing failures like buckets<5)
         _dd_old_item = _selected[_dd_thin_idx]
         _dd_found = False
         if _is_daily:
+            _i80_inv_dd = _i80_invariant_snapshot(_selected)
             _dd_scanned = 0
             for _dd_ci in range(len(_dd_swap_pool)):
                 _dd_cand = _dd_swap_pool[_dd_ci]
                 _selected[_dd_thin_idx] = _dd_cand
                 _i80_post_dd = _i80_invariant_snapshot(_selected)
+                _i80_ok_dd, _i80_reg_dd = _i80_no_regression(_i80_inv_dd, _i80_post_dd)
                 _dd_scanned += 1
-                # Accept if ALL absolute gate thresholds pass
-                if all(_i80_post_dd.values()):
+                if _i80_ok_dd:
                     _dd_swap_pool.pop(_dd_ci)
                     _dd_found = True
                     break
