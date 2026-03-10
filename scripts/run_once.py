@@ -7808,8 +7808,8 @@ def _f600_run_fast_path(
     _bt_om_pool = [it for it in _pool_300 if _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
 
     # iter53: domain/vendor quota-aware selection
-    _DIV_MAX_DOMAIN = 2  # iter80b: 10 items, domains>=5 requires max 2 per domain
-    _DIV_MAX_VENDOR = 2  # iter80b: 10 items, vendors>=5 requires max 2 per vendor
+    _DIV_MAX_DOMAIN = 3  # iter73: 10 items, max 1/3 → 3
+    _DIV_MAX_VENDOR = 3  # iter73: 10 items, max 1/3 → 3
     _DIV_MIN_DOMAINS = 5  # iter73: 10-item requires >= 5
     _DIV_MIN_VENDORS = 5  # iter73: 10-item requires >= 5
     from collections import Counter as _DivCounter
@@ -10304,6 +10304,81 @@ def _f600_run_fast_path(
                       len(set(_ct72b_strategic_bucket(s) for s in _selected)),
                       len(set(_role_axis(s) for s in _selected)))
     _i80_tc_diag("after_final_cap_enforcement")
+
+    # --- iter80b: domain diversity enforcement — ensure domains >= _DIV_MIN_DOMAINS ---
+    # This phase uses a wider pool and accepts swaps that only regress already-failing invariants
+    if _is_daily and len(_selected) >= _max_events:
+        _i80b_dc = _DivCounter(_f6_domain_key(s) for s in _selected)
+        _i80b_dist = len(_i80b_dc)
+        if _i80b_dist < _DIV_MIN_DOMAINS:
+            _log.info("iter80b domain diversity: dist_doms=%d < %d, attempting fix", _i80b_dist, _DIV_MIN_DOMAINS)
+            # Use wider pool: include all eligible items, not just non-TC/non-GR
+            _i80b_pool = [it for it in _f6_tier(300) if it not in _selected
+                          and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                          and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                          and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                          and not _is_tutorial_explainer(it)
+                          and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                          and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+            # Sort: prefer items from NEW domains (not currently in selected)
+            _i80b_cur_doms = set(_f6_domain_key(s) for s in _selected)
+            _i80b_pool.sort(key=lambda it: (0 if _f6_domain_key(it) not in _i80b_cur_doms else 1,
+                                            -int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
+            _i80b_changed = False
+            for _i80b_round in range(15):
+                _i80b_dc = _DivCounter(_f6_domain_key(s) for s in _selected)
+                _i80b_dist = len(_i80b_dc)
+                if _i80b_dist >= _DIV_MIN_DOMAINS:
+                    break
+                if not _i80b_pool:
+                    break
+                # Find item from most-concentrated domain to replace
+                _i80b_worst_dom = _i80b_dc.most_common(1)[0][0]
+                _i80b_dom_count = _i80b_dc.most_common(1)[0][1]
+                if _i80b_dom_count <= 1:
+                    break  # can't reduce further
+                _i80b_dom_items = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _i80b_worst_dom]
+                _i80b_worst_item = min(_i80b_dom_items, key=lambda x: _f6_bfp(x[1]))
+                _i80b_swapped = False
+                for _i80b_ci, _i80b_cand in enumerate(_i80b_pool):
+                    _i80b_cdom = _f6_domain_key(_i80b_cand)
+                    if _i80b_cdom == _i80b_worst_dom:
+                        continue
+                    if _i80b_cdom in _i80b_cur_doms:
+                        continue  # must be NEW domain
+                    _i80b_test = [s if j != _i80b_worst_item[0] else _i80b_cand for j, s in enumerate(_selected)]
+                    _i80b_inv_b = _i80_invariant_snapshot(_selected)
+                    _i80b_inv_a = _i80_invariant_snapshot(_i80b_test)
+                    _i80b_ok, _i80b_reg = _i80_no_regression(_i80b_inv_b, _i80b_inv_a)
+                    if not _i80b_ok:
+                        # Relaxed: accept if all regressed invariants were already failing
+                        _i80b_ok = all(not _i80b_inv_b[k] for k in _i80b_reg)
+                    if _i80b_ok:
+                        _log.info("iter80b domain diversity: replaced '%s'[%d] with '%s' (new domain)",
+                                  _i80b_worst_dom, _i80b_worst_item[0], _i80b_cdom)
+                        _selected[_i80b_worst_item[0]] = _i80b_cand
+                        _i80b_pool.pop(_i80b_ci)
+                        _i80b_cur_doms = set(_f6_domain_key(s) for s in _selected)
+                        _i80b_changed = True
+                        _i80b_swapped = True
+                        break
+                if not _i80b_swapped:
+                    _log.warning("iter80b domain diversity: stuck at dist_doms=%d", _i80b_dist)
+                    break
+            if _i80b_changed:
+                _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+                _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+                try:
+                    _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                except Exception:
+                    pass
+                _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+                _log.info("iter80b domain diversity done: domains=%d tc=%d gr=%d buckets=%d tp=%d",
+                          len(_DivCounter(_f6_domain_key(s) for s in _selected)),
+                          sum(1 for s in _selected if _is_techcrunch(s)),
+                          sum(1 for s in _selected if _f6_is_google_research_blog(s)),
+                          len(set(_ct72b_strategic_bucket(s) for s in _selected)),
+                          len(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))))
 
     # --- iter80: FINAL IMMUTABLE SNAPSHOT — all subsequent meta/gates/brief use this ---
     if _is_daily and len(_selected) >= _max_events:
