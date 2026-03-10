@@ -6793,9 +6793,16 @@ def _f600_item_to_card_dict(item) -> dict:
     source_name = str(getattr(item, "source_name", "") or "")
     url = str(getattr(item, "url", "") or getattr(item, "link", "") or "")
     full_text = str(getattr(item, "full_text", "") or getattr(item, "body", "") or "")
+    # iter80: fallback to summary/description if full_text is too short
+    if len(full_text.strip()) < 200:
+        for _ftf in ("summary", "description", "snippet", "content"):
+            _ftv = str(getattr(item, _ftf, "") or "").strip()
+            if len(_ftv) > len(full_text.strip()):
+                full_text = _ftv
     # Build fact_pack_sentences from full_text via sentence splitting
     sentences: list = []
-    for seg in re.split(r"(?<=[.!?])\s+", full_text):
+    # iter80: split on sentence boundaries AND newlines for paragraph-style content
+    for seg in re.split(r"(?<=[.!?。！？])\s+|\n+", full_text):
         sc = _normalize_ws(seg)
         if len(sc) >= 30 and sc not in sentences:
             sentences.append(sc)
@@ -8649,6 +8656,62 @@ def _f600_run_fast_path(
             _f6_majority_src = _f6_src_counts.most_common(1)[0][0] if _f6_src_counts else ""
         _log.info("FAST_600_MODE: diversity swap → distinct_sources=%d", len(_f6_srcs))
 
+    # iter80: TC diagnostic after each post-selection phase
+    def _i80_tc_diag(phase_name):
+        _tc_n = sum(1 for s in _selected if _is_techcrunch(s))
+        if _tc_n > _TECHCRUNCH_CAP:
+            _log.warning("iter80 TC_DIAG %s: tc=%d > cap=%d !! TITLES: %s", phase_name, _tc_n, _TECHCRUNCH_CAP,
+                         [str(getattr(s,"title",""))[:60] for s in _selected if _is_techcrunch(s)])
+        else:
+            _log.info("iter80 TC_DIAG %s: tc=%d", phase_name, _tc_n)
+    _i80_tc_diag("after_iter38_source_diversity")
+
+    # --- iter80: invariant-preserving commit lock for all post-selection mutations ---
+    # A late swap phase is rejected ONLY if it causes a REGRESSION: an invariant that was
+    # passing before the phase now fails after it.  Phases that improve or maintain invariants
+    # are always accepted, even if other invariants are still failing (rescue phases fix those).
+    def _i80_invariant_snapshot(sel):
+        """Compute pass/fail for every hard daily gate.  Returns dict[str, bool]."""
+        _dc = _DivCounter(_f6_domain_key(s) for s in sel)
+        _vc = _DivCounter(_f6_vendor_key(s) for s in sel)
+        _maxd = _dc.most_common(1)[0][1] if _dc else 99
+        _maxv = _vc.most_common(1)[0][1] if _vc else 99
+        _tc = sum(1 for s in sel if _is_techcrunch(s))
+        _gr = sum(1 for s in sel if _f6_is_google_research_blog(s))
+        _usp = sum(1 for s in sel if _is_us_policy(s))
+        _cnp = sum(1 for s in sel if _is_china_policy(s))
+        return {
+            "total": len(sel) == _max_events,
+            "max_domain": _maxd <= _DIV_MAX_DOMAIN,
+            "max_vendor": _maxv <= _DIV_MAX_VENDOR,
+            "min_domains": len(_dc) >= _DIV_MIN_DOMAINS,
+            "min_vendors": len(set(_f6_vendor_key(s) for s in sel) - {"other"}) >= _DIV_MIN_VENDORS,
+            "platform": sum(1 for s in sel if _is_platform_domain(s)) <= _PLATFORM_CAP,
+            "research_tutorial": sum(1 for s in sel if _ct71_is_research_tutorial(s)) <= 1,
+            "forum": sum(1 for s in sel if _is_forum_discussion(s)) == 0,
+            "devrel": sum(1 for s in sel if _is_developer_release(s)) == 0,
+            "indie": sum(1 for s in sel if _is_indie_dev_tone(s)) == 0,
+            "tutorial_explainer": sum(1 for s in sel if _is_tutorial_explainer(s)) == 0,
+            "hf_blog": sum(1 for s in sel if _is_hf_blog_explainer(s)) == 0,
+            "tc_cap": _tc <= _TECHCRUNCH_CAP,
+            "gr_cap": _gr <= _GOOGLE_RESEARCH_CAP,
+            "tc_gr_combined": (_tc + _gr) <= _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP,
+            "bigtech_actionable": sum(1 for s in sel if _ct71_is_bigtech_actionable(s)) >= 7,
+            "boma": sum(1 for s in sel if _ct72b_is_bigtech_official_media_actionable(s)) >= 8,
+            "leadership": sum(1 for s in sel if _is_leadership_politics_ai(s)) >= 2,
+            "china_ai_gov": sum(1 for s in sel if _is_china_ai_gov(s)) >= 1,
+            "target_player": len(set(_f6_vendor_key(s) for s in sel if _is_target_player(s))) >= 6,
+            "policy": (_usp + _cnp) >= 2 and _cnp >= 1,
+            "role_axes": len(set(_role_axis(s) for s in sel)) >= _ROLE_DIVERSITY_MIN,
+            "buckets": len(set(_ct72b_strategic_bucket(s) for s in sel)) >= 5,
+            "prohibited": not any(_is_ceo_prohibited(s) for s in sel),
+        }
+
+    def _i80_no_regression(before, after):
+        """Return (ok, list_of_regressed_keys).  ok=True means no invariant regressed."""
+        _regressed = [k for k in before if before[k] and not after[k]]
+        return (len(_regressed) == 0, _regressed)
+
     # --- iter53: domain/vendor diversity enforcement loop ---
     _div_rejected_domain: list[dict] = []
     _div_rejected_vendor: list[dict] = []
@@ -8657,6 +8720,7 @@ def _f600_run_fast_path(
         # iter77: sort non-platform first; filter ceo_prohibited + density floor
         _div_backup = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
                        and not _f6_is_google_research_blog(it) and not _is_ceo_prohibited(it)
+                       and not _is_hf_blog_explainer(it)
                        and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                        and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         _div_backup.sort(key=lambda it: (0 if not _is_platform_domain(it) else 1,
@@ -8738,17 +8802,17 @@ def _f600_run_fast_path(
                     continue
                 if _max_vc > _DIV_MAX_VENDOR and _test_max_vc >= _max_vc:
                     continue
-                # iter77: also preserve bucket coverage
+                # iter80: full invariant check — no regression allowed
+                _div1_inv_before = _i80_invariant_snapshot(_selected)
+                _div1_inv_after = _i80_invariant_snapshot(_test_sel)
+                _div1_inv_ok, _div1_inv_reg = _i80_no_regression(_div1_inv_before, _div1_inv_after)
+                # Also check diversity improvement (must not make concentration worse)
                 _test_buckets = len(set(_ct72b_strategic_bucket(s) for s in _test_sel))
                 _cur_buckets = len(set(_ct72b_strategic_bucket(s) for s in _selected))
-                # iter78b: also preserve target_player coverage + TechCrunch/GoogleResearch caps
-                _test_tp_set1 = set(_f6_vendor_key(s) for s in _test_sel if _is_target_player(s))
-                _test_tc1 = sum(1 for s in _test_sel if _is_techcrunch(s))
-                _test_gr1 = sum(1 for s in _test_sel if _f6_is_google_research_blog(s))
-                if (_test_max_dc <= max(_DIV_MAX_DOMAIN, _max_dc) and _test_max_vc <= max(_DIV_MAX_VENDOR, _max_vc)
-                        and _test_buckets >= min(_cur_buckets, 5)
-                        and len(_test_tp_set1) >= min(_div1_tp_distinct, 6)
-                        and _test_tc1 <= _TECHCRUNCH_CAP and _test_gr1 <= _GOOGLE_RESEARCH_CAP):
+                if (_div1_inv_ok
+                        and _test_max_dc <= max(_DIV_MAX_DOMAIN, _max_dc)
+                        and _test_max_vc <= max(_DIV_MAX_VENDOR, _max_vc)
+                        and _test_buckets >= min(_cur_buckets, 5)):
                     _sample = {"title": str(getattr(_worst_it, "title", ""))[:120],
                                "domain": _f6_domain_key(_worst_it), "vendor": _f6_vendor_key(_worst_it),
                                "reason": "domain_cap" if _max_dc > _DIV_MAX_DOMAIN else ("vendor_cap" if _max_vc > _DIV_MAX_VENDOR else "diversity_increase")}
@@ -8772,6 +8836,7 @@ def _f600_run_fast_path(
         _log.info("FAST_600_MODE iter53: diversity final domains=%d max_domain=%d vendors=%d max_vendor=%d",
                   len(_final_dc), _final_dc.most_common(1)[0][1] if _final_dc else 0,
                   len(_final_vset), _final_vc.most_common(1)[0][1] if _final_vc else 0)
+    _i80_tc_diag("after_iter53_diversity")
 
     # iter78: post-diversity target player rescue — re-check after diversity swaps
     if _is_daily:
@@ -8802,12 +8867,11 @@ def _f600_run_fast_path(
                     if _pt_cv not in _TARGET_PLAYER_VENDORS or _pt_cv in _post_tp_cur:
                         continue  # need NEW target player vendor
                     _pt_n = _pt_test + [_pt_cand]
-                    _pt_nd = _DivCounter(_f6_domain_key(s) for s in _pt_n)
-                    _pt_nv = _DivCounter(_f6_vendor_key(s) for s in _pt_n)
-                    if (_pt_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                            and _pt_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
-                            and sum(1 for s in _pt_n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
-                            and sum(1 for s in _pt_n if _is_techcrunch(s)) <= _TECHCRUNCH_CAP):
+                    # iter80: full invariant check — no regression allowed
+                    _pt_inv_before = _i80_invariant_snapshot(_selected)
+                    _pt_inv_after = _i80_invariant_snapshot(_pt_n)
+                    _pt_inv_ok, _pt_inv_reg = _i80_no_regression(_pt_inv_before, _pt_inv_after)
+                    if _pt_inv_ok:
                         _selected[_pt_ri] = _pt_cand
                         _post_tp_cur = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
                         _post_tp_distinct = len(_post_tp_cur)
@@ -8819,6 +8883,29 @@ def _f600_run_fast_path(
             if not _post_tp_swapped:
                 _log.warning("iter78 post-diversity target_player rescue: stuck at tp_distinct=%d", _post_tp_distinct)
                 break
+    _i80_tc_diag("after_iter78_tp_rescue")
+
+    # iter80: helper — find backup candidate that won't break TC/GR/platform caps
+    def _i80_safe_backup_pop(pool, old_item):
+        """Pop first candidate from pool that won't push TC, GR, or platform over cap."""
+        _cur_tc = sum(1 for s in _selected if _is_techcrunch(s))
+        _cur_gr = sum(1 for s in _selected if _f6_is_google_research_blog(s))
+        _cur_plat = sum(1 for s in _selected if _is_platform_domain(s))
+        _old_tc = _is_techcrunch(old_item)
+        _old_gr = _f6_is_google_research_blog(old_item)
+        _old_plat = _is_platform_domain(old_item)
+        for _sbj in range(len(pool)):
+            _sbc = pool[_sbj]
+            if _is_techcrunch(_sbc) and not _old_tc and _cur_tc >= _TECHCRUNCH_CAP:
+                continue
+            if _f6_is_google_research_blog(_sbc) and not _old_gr and _cur_gr >= _GOOGLE_RESEARCH_CAP:
+                continue
+            if _is_platform_domain(_sbc) and not _old_plat and _cur_plat >= _PLATFORM_CAP:
+                continue
+            if _is_hf_blog_explainer(_sbc):
+                continue
+            return pool.pop(_sbj)
+        return None
 
     # --- iter46: dev_forum replacement loop ---
     # Replace dev_forum_low_value items; limit dev_forum_high_value to <=1 (only if needed)
@@ -8861,25 +8948,29 @@ def _f600_run_fast_path(
         for _i in range(len(_selected)):
             _it = _selected[_i]
             if _f6_is_dev_noise(_it) and _f6_src_type(_it) != "dev_forum" and _non_df_backup:
-                _repl = _non_df_backup.pop(0)
-                _log.info("FAST_600_MODE iter50: replaced dev_noise (%s) idx=%d", _f6_src_type(_it), _i)
-                _selected[_i] = _repl
+                _repl = _i80_safe_backup_pop(_non_df_backup, _it)
+                if _repl is not None:
+                    _log.info("FAST_600_MODE iter50: replaced dev_noise (%s) idx=%d", _f6_src_type(_it), _i)
+                    _selected[_i] = _repl
         # Pass 1: replace all low_value dev_forum items
         for _i in range(len(_selected)):
             _it = _selected[_i]
             _dfv = _assess_dev_forum_value(_it)
             if _dfv == "low" and _non_df_backup:
-                _repl = _non_df_backup.pop(0)
-                _df_append_sample(_it, "low_value_cap",
-                    "classified_value=low → DAILY zero-tolerance → replaced by non-forum backup")
-                _selected[_i] = _repl
-                _log.info("FAST_600_MODE iter46: replaced dev_forum low_value idx=%d", _i)
+                _repl = _i80_safe_backup_pop(_non_df_backup, _it)
+                if _repl is not None:
+                    _df_append_sample(_it, "low_value_cap",
+                        "classified_value=low → DAILY zero-tolerance → replaced by non-forum backup")
+                    _selected[_i] = _repl
+                    _log.info("FAST_600_MODE iter46: replaced dev_forum low_value idx=%d", _i)
         # Pass 2: if dev_forum_high_value > 1, or backup still available, replace excess
         _hv_indices = [i for i in range(len(_selected)) if _assess_dev_forum_value(_selected[i]) == "high"]
         while len(_hv_indices) > 1 and _non_df_backup:
             _worst_i = _hv_indices.pop()  # remove last (lowest priority)
             _it = _selected[_worst_i]
-            _repl = _non_df_backup.pop(0)
+            _repl = _i80_safe_backup_pop(_non_df_backup, _it)
+            if _repl is None:
+                break
             _df_append_sample(_it, "should_replace",
                 "classified_value=high but >1 high_value forums selected → replaced by non-forum backup")
             _selected[_worst_i] = _repl
@@ -8890,12 +8981,14 @@ def _f600_run_fast_path(
             # Backup still available → should replace even the last high_value forum
             _worst_i = _hv_indices[0]
             _it = _selected[_worst_i]
-            _repl = _non_df_backup.pop(0)
-            _df_append_sample(_it, "should_replace",
-                "classified_value=high but non-forum backup available → replaced to maximize quality")
-            _selected[_worst_i] = _repl
-            _log.info("FAST_600_MODE iter46: replaced last high_value forum (backup available)")
+            _repl = _i80_safe_backup_pop(_non_df_backup, _it)
+            if _repl is not None:
+                _df_append_sample(_it, "should_replace",
+                    "classified_value=high but non-forum backup available → replaced to maximize quality")
+                _selected[_worst_i] = _repl
+                _log.info("FAST_600_MODE iter46: replaced last high_value forum (backup available)")
 
+    _i80_tc_diag("after_dev_forum_passes")
     # Also collect rejected dev_forum items from raw_items not in _selected
     for _rit in raw_items:
         if _rit in _selected:
@@ -9308,8 +9401,15 @@ def _f600_run_fast_path(
                         _test_dd = [s if j != _oi else _bp_cand for j, s in enumerate(_selected)]
                         _test_dd_dc = _DivCounter(_f6_domain_key(s) for s in _test_dd)
                         _test_dd_vc = _DivCounter(_f6_vendor_key(s) for s in _test_dd)
+                        # iter80: also preserve platform, buckets, role axes, official media
                         if (_test_dd_dc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                                and _test_dd_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR):
+                                and _test_dd_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                                and sum(1 for s in _test_dd if _is_platform_domain(s)) <= _PLATFORM_CAP
+                                and len(set(_ct72b_strategic_bucket(s) for s in _test_dd)) >= min(len(set(_ct72b_strategic_bucket(s) for s in _selected)), 5)
+                                and len(set(_role_axis(s) for s in _test_dd)) >= min(len(set(_role_axis(s) for s in _selected)), _ROLE_DIVERSITY_MIN)
+                                and sum(1 for s in _test_dd if _ct72b_source_class(s) in ("official", "media")) >= min(sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")), 8)
+                                and sum(1 for s in _test_dd if _is_techcrunch(s)) <= _TECHCRUNCH_CAP
+                                and sum(1 for s in _test_dd if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP):
                             _selected[_oi] = _bp_cand
                             _backup_pool.pop(_bp_idx)
                             _replacements_made += 1
@@ -9319,10 +9419,22 @@ def _f600_run_fast_path(
                         # iter74: skip fallback replacement if it would break BOMA count
                         if _old_is_boma and _cur_boma <= 7 and _backup_pool and not _ct72b_is_bigtech_official_media_actionable(_backup_pool[0]):
                             continue
+                        # iter80: fallback replacement must also preserve invariants
                         if _backup_pool:
-                            _repl = _backup_pool.pop(0)
-                            _selected[_oi] = _repl
-                            _replacements_made += 1
+                            _repl = _backup_pool[0]
+                            _test_fb = [s if j != _oi else _repl for j, s in enumerate(_selected)]
+                            _fb_plat_ok = sum(1 for s in _test_fb if _is_platform_domain(s)) <= _PLATFORM_CAP
+                            _fb_buck_ok = len(set(_ct72b_strategic_bucket(s) for s in _test_fb)) >= min(len(set(_ct72b_strategic_bucket(s) for s in _selected)), 5)
+                            _fb_role_ok = len(set(_role_axis(s) for s in _test_fb)) >= min(len(set(_role_axis(s) for s in _selected)), _ROLE_DIVERSITY_MIN)
+                            _fb_om_ok = sum(1 for s in _test_fb if _ct72b_source_class(s) in ("official", "media")) >= min(sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")), 8)
+                            _fb_tc_ok = sum(1 for s in _test_fb if _is_techcrunch(s)) <= _TECHCRUNCH_CAP
+                            _fb_gr_ok = sum(1 for s in _test_fb if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
+                            if _fb_plat_ok and _fb_buck_ok and _fb_role_ok and _fb_om_ok and _fb_tc_ok and _fb_gr_ok:
+                                _backup_pool.pop(0)
+                                _selected[_oi] = _repl
+                                _replacements_made += 1
+                            else:
+                                _log.info("iter80: dedup fallback replacement rejected (plat=%s buck=%s role=%s om=%s tc=%s gr=%s)", _fb_plat_ok, _fb_buck_ok, _fb_role_ok, _fb_om_ok, _fb_tc_ok, _fb_gr_ok)
                 _cur_hashes = [_item_hash(it) for it in _selected]
                 _overlap_count = sum(1 for h in _cur_hashes if h and h in _prev_ids)
             # iter76: only fail on overlap if dup gate is enabled (scheduled_task only)
@@ -9348,6 +9460,7 @@ def _f600_run_fast_path(
         except Exception as _dde:
             _log.warning("daily cross-day dedup failed (non-fatal): %s", _dde)
 
+    _i80_tc_diag("after_dedup")
     # iter41: overlap fields patched later (after all selection_audit rebuilds)
 
     # iter69b: write daily_overlap.meta.json
@@ -9377,10 +9490,13 @@ def _f600_run_fast_path(
 
     # --- iter53: post-dedup diversity re-enforcement ---
     if _is_daily and len(_selected) >= _max_events:
+        _i80_snap_div2 = list(_selected)  # iter80: snapshot before post-dedup diversity
+        _i80_inv_div2 = _i80_invariant_snapshot(_selected)
         # iter54: DAILY diversity backup must be bigtech+official_or_media
         # iter68→77: also filter by density, ceo_prohibited; sort non-platform first
         _div_backup2 = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
                         and not _f6_is_google_research_blog(it) and not _is_ceo_prohibited(it)
+                        and not _is_hf_blog_explainer(it)
                         and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         _div_backup2.sort(key=lambda it: (0 if not _is_platform_domain(it) else 1,
@@ -9471,18 +9587,16 @@ def _f600_run_fast_path(
                 if _max_vc2 > _DIV_MAX_VENDOR and _test_max_vc2 >= _max_vc2:
                     continue
                 # iter77: preserve bucket coverage
+                # iter80: full invariant check — no regression allowed
+                _div2_inv_before = _i80_invariant_snapshot(_selected)
+                _div2_inv_after = _i80_invariant_snapshot(_test_sel2)
+                _div2_inv_ok, _div2_inv_reg = _i80_no_regression(_div2_inv_before, _div2_inv_after)
                 _test_buckets2 = len(set(_ct72b_strategic_bucket(s) for s in _test_sel2))
                 _cur_buckets2 = len(set(_ct72b_strategic_bucket(s) for s in _selected))
-                # iter78b: also verify TechCrunch/GoogleResearch caps and target_player coverage after swap
-                _test_tc2 = sum(1 for s in _test_sel2 if _is_techcrunch(s))
-                _test_gr2 = sum(1 for s in _test_sel2 if _f6_is_google_research_blog(s))
-                _test_tp_set2 = set(_f6_vendor_key(s) for s in _test_sel2 if _is_target_player(s))
-                _test_om2 = sum(1 for s in _test_sel2 if _ct72b_source_class(s) in ("official", "media"))
-                if (_test_max_dc2 <= max(_DIV_MAX_DOMAIN, _max_dc2) and _test_max_vc2 <= max(_DIV_MAX_VENDOR, _max_vc2)
-                        and _test_buckets2 >= min(_cur_buckets2, 5)
-                        and _test_tc2 <= _TECHCRUNCH_CAP and _test_gr2 <= _GOOGLE_RESEARCH_CAP
-                        and len(_test_tp_set2) >= min(_div2_tp_distinct, 6)
-                        and _test_om2 >= min(_div2_om, 8)):
+                if (_div2_inv_ok
+                        and _test_max_dc2 <= max(_DIV_MAX_DOMAIN, _max_dc2)
+                        and _test_max_vc2 <= max(_DIV_MAX_VENDOR, _max_vc2)
+                        and _test_buckets2 >= min(_cur_buckets2, 5)):
                     _selected[_worst_idx2] = _bcand2
                     _div_backup2.pop(_bi2)
                     _repl_found2 = True
@@ -9504,10 +9618,25 @@ def _f600_run_fast_path(
                   len(_d_fin), _d_fin.most_common(1)[0][1] if _d_fin else 0,
                   len(set(_f6_vendor_key(s) for s in _selected) - {"other"}),
                   _v_fin.most_common(1)[0][1] if _v_fin else 0)
+        # iter80: no-regression gate — revert if post-dedup diversity REGRESSED any passing invariant
+        _i80_post_div2 = _i80_invariant_snapshot(_selected)
+        _i80_ok_div2, _i80_reg_div2 = _i80_no_regression(_i80_inv_div2, _i80_post_div2)
+        if not _i80_ok_div2:
+            _log.warning("iter80: REVERTED post-dedup diversity swap — regressed: %s", _i80_reg_div2)
+            _selected[:] = _i80_snap_div2
+            # Rebuild card_dicts from restored snapshot
+            _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+            _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+            try:
+                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+            except Exception:
+                pass
 
     # --- iter68→77: platform domain swap — try to reduce platform items to <= effective_cap ---
     # iter77: dynamic cap — allow 2 platform items if non-platform domains < _DIV_MIN_DOMAINS
     if _is_daily and len(_selected) >= _max_events:
+        _i80_snap_plat = list(_selected)  # iter80: snapshot before platform swap
+        _i80_inv_plat = _i80_invariant_snapshot(_selected)
         _plat_in_sel = sum(1 for s in _selected if _is_platform_domain(s))
         _plat_non_plat_doms = len(set(_f6_domain_key(s) for s in _selected if not _is_platform_domain(s)))
         _plat_eff_cap = 2 if _plat_non_plat_doms < _DIV_MIN_DOMAINS else _PLATFORM_CAP
@@ -9548,8 +9677,18 @@ def _f600_run_fast_path(
                     # iter77: also check domain/vendor distinct count to preserve diversity
                     _test_dom_distinct = len(_test_dc)
                     _test_ven_set = set(_f6_vendor_key(s) for s in _test_sel) - {"other"}
-                    if (_test_max_dc <= _DIV_MAX_DOMAIN and _test_max_vc <= _DIV_MAX_VENDOR
-                            and _test_dom_distinct >= _DIV_MIN_DOMAINS and len(_test_ven_set) >= _DIV_MIN_VENDORS):
+                    # iter80: also preserve buckets, role axes, official media, TC/GR caps
+                    _test_buckets_p = len(set(_ct72b_strategic_bucket(s) for s in _test_sel))
+                    _cur_buckets_p = len(set(_ct72b_strategic_bucket(s) for s in _selected))
+                    _test_role_p = len(set(_role_axis(s) for s in _test_sel))
+                    _cur_role_p = len(set(_role_axis(s) for s in _selected))
+                    _test_om_p = sum(1 for s in _test_sel if _ct72b_source_class(s) in ("official", "media"))
+                    _cur_om_p = sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media"))
+                    # iter80: full invariant check
+                    _plat_inv_b = _i80_invariant_snapshot(_selected)
+                    _plat_inv_a = _i80_invariant_snapshot(_test_sel)
+                    _plat_inv_ok, _plat_inv_reg = _i80_no_regression(_plat_inv_b, _plat_inv_a)
+                    if _plat_inv_ok:
                         _log.info("iter68 platform swap: replaced idx=%d (%s/%s) with (%s/%s)",
                                   _plat_worst_idx, _f6_domain_key(_plat_worst), _f6_vendor_key(_plat_worst),
                                   _f6_domain_key(_rcand), _f6_vendor_key(_rcand))
@@ -9592,10 +9731,11 @@ def _f600_run_fast_path(
                                         _test3_plat = sum(1 for s in _test3 if _is_platform_domain(s))
                                         _test3_dom_d = len(_test3_dc)
                                         _test3_ven_s = len(set(_f6_vendor_key(s) for s in _test3) - {"other"})
-                                        if (_test3_dc.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                                                and _test3_vc.most_common(1)[0][1] <= _DIV_MAX_VENDOR
-                                                and _test3_dom_d >= _DIV_MIN_DOMAINS and _test3_ven_s >= _DIV_MIN_VENDORS
-                                                and _test3_plat < _plat_count):
+                                        # iter80: full invariant check
+                                        _test3_inv_b = _i80_invariant_snapshot(_selected)
+                                        _test3_inv_a = _i80_invariant_snapshot(_test3)
+                                        _test3_inv_ok, _test3_inv_reg = _i80_no_regression(_test3_inv_b, _test3_inv_a)
+                                        if _test3_inv_ok and _test3_plat < _plat_count:
                                             _log.info("iter68 platform two-step swap: step1 idx=%d→(%s/%s) step2 idx=%d→(%s/%s)",
                                                       _ni, _f6_domain_key(_r2), _f6_vendor_key(_r2),
                                                       _pi, _f6_domain_key(_r3), _f6_vendor_key(_r3))
@@ -9736,11 +9876,28 @@ def _f600_run_fast_path(
                 except Exception:
                     pass
 
+    # iter80: no-regression gate — revert if platform swap REGRESSED any passing invariant
+    if _is_daily and len(_selected) >= _max_events:
+        _i80_post_plat = _i80_invariant_snapshot(_selected)
+        _i80_ok_plat, _i80_reg_plat = _i80_no_regression(_i80_inv_plat, _i80_post_plat)
+        if not _i80_ok_plat:
+            _log.warning("iter80: REVERTED platform swap — regressed: %s", _i80_reg_plat)
+            _selected[:] = _i80_snap_plat
+            _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+            _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+            try:
+                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+            except Exception:
+                pass
+
     # --- iter78b: FINAL RESCUE after ALL swaps (diversity, platform, post-dedup) ---
     # Re-check target_player, policy, official_media, prohibited caps; swap to fix if broken
     if _is_daily and len(_selected) >= _max_events:
+        _i80_snap_fr = list(_selected)  # iter80: snapshot before FINAL rescue
+        _i80_inv_fr = _i80_invariant_snapshot(_selected)
         _fr_pool = [it for it in _pool_300 if it not in _selected
                     and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
+                    and not _is_hf_blog_explainer(it)
                     and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         # iter78b: also build wider pool (pool_sorted, relaxed density) for target_player rescue only
         _fr_pool_wide = [it for it in _pool_sorted if it not in _selected and it not in _fr_pool
@@ -9787,12 +9944,11 @@ def _f600_run_fast_path(
                         if _fr_cv not in _TARGET_PLAYER_VENDORS or _fr_cv in _fr_tp_set:
                             continue  # need NEW target player vendor
                         _fr_n = _fr_test_base + [_fr_cand]
-                        _fr_nd = _DivCounter(_f6_domain_key(s) for s in _fr_n)
-                        _fr_nv = _DivCounter(_f6_vendor_key(s) for s in _fr_n)
-                        if (_fr_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                                and _fr_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
-                                and sum(1 for s in _fr_n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
-                                and sum(1 for s in _fr_n if _is_techcrunch(s)) <= _TECHCRUNCH_CAP):
+                        # iter80: full invariant check — no regression allowed
+                        _fr_inv_before = _i80_invariant_snapshot(_selected)
+                        _fr_inv_after = _i80_invariant_snapshot(_fr_n)
+                        _fr_inv_ok, _fr_inv_reg = _i80_no_regression(_fr_inv_before, _fr_inv_after)
+                        if _fr_inv_ok:
                             _selected[_fr_ri] = _fr_cand
                             # Compute SD for swapped-in item if not cached
                             if id(_fr_cand) not in _sd72_all_scores:
@@ -9833,12 +9989,11 @@ def _f600_run_fast_path(
                     if not _fr_need_china and not _is_us_policy(_fr_pc):
                         continue
                     _fr_pn = _fr_pol_base + [_fr_pc]
-                    _fr_pnd = _DivCounter(_f6_domain_key(s) for s in _fr_pn)
-                    _fr_pnv = _DivCounter(_f6_vendor_key(s) for s in _fr_pn)
-                    if (_fr_pnd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                            and _fr_pnv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
-                            and sum(1 for s in _fr_pn if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
-                            and sum(1 for s in _fr_pn if _is_techcrunch(s)) <= _TECHCRUNCH_CAP):
+                    # iter80: full invariant check
+                    _fr_pol_inv_b = _i80_invariant_snapshot(_selected)
+                    _fr_pol_inv_a = _i80_invariant_snapshot(_fr_pn)
+                    _fr_pol_ok, _fr_pol_reg = _i80_no_regression(_fr_pol_inv_b, _fr_pol_inv_a)
+                    if _fr_pol_ok:
                         _selected[_fr_pi] = _fr_pc
                         _fr_changed = True
                         _fr_pol_swapped = True
@@ -9868,12 +10023,11 @@ def _f600_run_fast_path(
                     if _ct72b_source_class(_fr_oc) not in ("official", "media"):
                         continue
                     _fr_on = _fr_om_base + [_fr_oc]
-                    _fr_ond = _DivCounter(_f6_domain_key(s) for s in _fr_on)
-                    _fr_onv = _DivCounter(_f6_vendor_key(s) for s in _fr_on)
-                    if (_fr_ond.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                            and _fr_onv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
-                            and sum(1 for s in _fr_on if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
-                            and sum(1 for s in _fr_on if _is_techcrunch(s)) <= _TECHCRUNCH_CAP):
+                    # iter80: full invariant check
+                    _fr_om_inv_b = _i80_invariant_snapshot(_selected)
+                    _fr_om_inv_a = _i80_invariant_snapshot(_fr_on)
+                    _fr_om_ok, _fr_om_reg = _i80_no_regression(_fr_om_inv_b, _fr_om_inv_a)
+                    if _fr_om_ok:
                         _selected[_fr_oi] = _fr_oc
                         _fr_changed = True
                         _fr_om_swapped = True
@@ -9900,10 +10054,11 @@ def _f600_run_fast_path(
                 if _fr_prc in _fr_purge_base:
                     continue
                 _fr_prn = _fr_purge_base + [_fr_prc]
-                _fr_prnd = _DivCounter(_f6_domain_key(s) for s in _fr_prn)
-                _fr_prnv = _DivCounter(_f6_vendor_key(s) for s in _fr_prn)
-                if (_fr_prnd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
-                        and _fr_prnv.most_common(1)[0][1] <= _DIV_MAX_VENDOR):
+                # iter80: full invariant check
+                _fr_pr_inv_b = _i80_invariant_snapshot(_selected)
+                _fr_pr_inv_a = _i80_invariant_snapshot(_fr_prn)
+                _fr_pr_ok, _fr_pr_reg = _i80_no_regression(_fr_pr_inv_b, _fr_pr_inv_a)
+                if _fr_pr_ok:
                     _selected[_fr_prohib_idx] = _fr_prc
                     _fr_changed = True
                     _fr_purge_done = True
@@ -9928,6 +10083,111 @@ def _f600_run_fast_path(
                       sum(1 for s in _selected if _is_techcrunch(s)),
                       sum(1 for s in _selected if _f6_is_google_research_blog(s)),
                       sum(1 for s in _selected if _is_ceo_prohibited(s)))
+        # iter80: no-regression gate — revert if FINAL rescue REGRESSED any passing invariant
+        _i80_post_fr = _i80_invariant_snapshot(_selected)
+        _i80_ok_fr, _i80_reg_fr = _i80_no_regression(_i80_inv_fr, _i80_post_fr)
+        if not _i80_ok_fr:
+            _log.warning("iter80: REVERTED FINAL rescue — regressed: %s", _i80_reg_fr)
+            _selected[:] = _i80_snap_fr
+            _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+            _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+            try:
+                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+            except Exception:
+                pass
+
+    # --- iter80: final hard-cap enforcement — forcibly replace items that violate concentration caps ---
+    if _is_daily and len(_selected) >= _max_events:
+        _i80_final_pool = [it for it in _f6_tier(300) if it not in _selected
+                           and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                           and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                           and not _is_techcrunch(it) and not _f6_is_google_research_blog(it)
+                           and not _is_platform_domain(it) and not _is_hf_blog_explainer(it)
+                           and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+        _i80_final_pool.sort(key=lambda it: (-int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
+        _i80_changed = False
+        # enforce TC cap
+        for _i80_round in range(10):
+            _i80_tc = sum(1 for s in _selected if _is_techcrunch(s))
+            if _i80_tc <= _TECHCRUNCH_CAP:
+                break
+            if not _i80_final_pool:
+                _log.warning("iter80 final cap enforcement: no pool for TC reduction (tc=%d)", _i80_tc)
+                break
+            _i80_tc_items = [(i, s) for i, s in enumerate(_selected) if _is_techcrunch(s)]
+            _i80_tc_worst = min(_i80_tc_items, key=lambda x: _f6_bfp(x[1]))
+            _i80_swapped = False
+            for _i80_ci, _i80_cand in enumerate(_i80_final_pool):
+                _i80_test = [s if j != _i80_tc_worst[0] else _i80_cand for j, s in enumerate(_selected)]
+                _i80_cur_inv = _i80_invariant_snapshot(_selected)
+                _i80_test_inv = _i80_invariant_snapshot(_i80_test)
+                _i80_ok_t, _i80_reg_t = _i80_no_regression(_i80_cur_inv, _i80_test_inv)
+                _i80_test_tc = sum(1 for s in _i80_test if _is_techcrunch(s))
+                # Accept only if tc decreases AND no other invariant regresses (except tc_cap itself which improves)
+                if _i80_test_tc < _i80_tc and _i80_ok_t:
+                    _log.info("iter80 final cap enforcement: replaced TC[%d] '%s' with '%s'",
+                              _i80_tc_worst[0], str(getattr(_i80_tc_worst[1], "title", ""))[:60],
+                              str(getattr(_i80_cand, "title", ""))[:60])
+                    _selected[_i80_tc_worst[0]] = _i80_cand
+                    _i80_final_pool.pop(_i80_ci)
+                    _i80_changed = True
+                    _i80_swapped = True
+                    break
+            if not _i80_swapped:
+                _log.warning("iter80 final cap enforcement: stuck at tc=%d, no valid replacement", _i80_tc)
+                break
+        # enforce HF blog explainer cap
+        for _i80_round2 in range(5):
+            _i80_hfbe = sum(1 for s in _selected if _is_hf_blog_explainer(s))
+            if _i80_hfbe == 0:
+                break
+            if not _i80_final_pool:
+                break
+            _i80_hf_items = [(i, s) for i, s in enumerate(_selected) if _is_hf_blog_explainer(s)]
+            _i80_hf_worst = _i80_hf_items[0]
+            _i80_hf_swapped = False
+            for _i80_hci, _i80_hcand in enumerate(_i80_final_pool):
+                _i80_htest = [s if j != _i80_hf_worst[0] else _i80_hcand for j, s in enumerate(_selected)]
+                _i80_hcur_inv = _i80_invariant_snapshot(_selected)
+                _i80_htest_inv = _i80_invariant_snapshot(_i80_htest)
+                _i80_hok, _i80_hreg = _i80_no_regression(_i80_hcur_inv, _i80_htest_inv)
+                if _i80_hok:
+                    _log.info("iter80 final cap enforcement: replaced HFBE[%d] '%s' with '%s'",
+                              _i80_hf_worst[0], str(getattr(_i80_hf_worst[1], "title", ""))[:60],
+                              str(getattr(_i80_hcand, "title", ""))[:60])
+                    _selected[_i80_hf_worst[0]] = _i80_hcand
+                    _i80_final_pool.pop(_i80_hci)
+                    _i80_changed = True
+                    _i80_hf_swapped = True
+                    break
+            if not _i80_hf_swapped:
+                break
+        if _i80_changed:
+            _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+            _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+            try:
+                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+            except Exception:
+                pass
+            _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+            _log.info("iter80 final cap enforcement done: tc=%d gr=%d hfbe=%d buckets=%d roles=%d",
+                      sum(1 for s in _selected if _is_techcrunch(s)),
+                      sum(1 for s in _selected if _f6_is_google_research_blog(s)),
+                      sum(1 for s in _selected if _is_hf_blog_explainer(s)),
+                      len(set(_ct72b_strategic_bucket(s) for s in _selected)),
+                      len(set(_role_axis(s) for s in _selected)))
+    _i80_tc_diag("after_final_cap_enforcement")
+
+    # --- iter80: FINAL IMMUTABLE SNAPSHOT — all subsequent meta/gates/brief use this ---
+    if _is_daily and len(_selected) >= _max_events:
+        _i80_final_selection = list(_selected)  # immutable copy
+        _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+        _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+        try:
+            _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+        except Exception:
+            pass
+        _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
 
     # --- iter53: domain/vendor diversity meta + gate ---
     _div_domain_counts = dict(_DivCounter(_f6_domain_key(s) for s in _selected))
@@ -10971,13 +11231,26 @@ def _f600_run_fast_path(
     _dd_ok, _dd_reason, _dd_meta = _f600_check_digest_density(_digest_path, _outputs, _run_id)
     # If thin events exist, swap them with denser candidates (up to 2 rounds).
     # Use index-based matching: events in digest meta are in same order as _selected.
-    _dd_swap_pool = [it for it in _f6_tier(1200) if it not in _selected
-                     and (not _is_daily or not _f6_is_google_research_blog(it))]
+    def _i80_dd_pool_ok(it):
+        """iter80: pre-filter density swap pool — exclude items that violate any hard cap."""
+        if _is_daily:
+            if _f6_is_google_research_blog(it): return False
+            if _is_techcrunch(it): return False
+            if _is_platform_domain(it): return False
+            if _is_hf_blog_explainer(it): return False
+            if _is_forum_discussion(it): return False
+            if _is_developer_release(it): return False
+            if _is_indie_dev_tone(it): return False
+            if _is_tutorial_explainer(it): return False
+            if _is_ceo_prohibited(it): return False
+            if _f6_is_dev_noise(it): return False
+        return True
+    _dd_swap_pool = [it for it in _f6_tier(1200) if it not in _selected and _i80_dd_pool_ok(it)]
     _dd_swap_pool += [it for it in _f6_tier(800) if it not in _selected and it not in _dd_swap_pool
-                      and (not _is_daily or not _f6_is_google_research_blog(it))]
+                      and _i80_dd_pool_ok(it)]
     _dd_swap_pool += [it for it in _f6_tier(300) if it not in _selected and it not in _dd_swap_pool
-                      and (not _is_daily or not _f6_is_google_research_blog(it))]  # iter42: wider fallback
-    for _dd_round in range(5):  # iter42: allow up to 5 density swap rounds
+                      and _i80_dd_pool_ok(it)]  # iter42: wider fallback
+    for _dd_round in range(10):  # iter80: allow up to 10 density swap rounds (was 5)
         if _dd_ok or not _dd_meta.get("thin_events_count"):
             break
         if not _dd_swap_pool:
@@ -10992,7 +11265,33 @@ def _f600_run_fast_path(
         if _dd_thin_idx < 0:
             break
         _dd_old_title = str(getattr(_selected[_dd_thin_idx], "title", "") or "")[:60]
-        _selected[_dd_thin_idx] = _dd_swap_pool.pop(0)
+        # iter80: transactional density swap — scan pool for first candidate that
+        # passes ALL absolute gate thresholds (not no-regression, since diversity
+        # phases are complete and we need flexibility to find dense items)
+        _dd_old_item = _selected[_dd_thin_idx]
+        _dd_found = False
+        if _is_daily:
+            _dd_scanned = 0
+            for _dd_ci in range(len(_dd_swap_pool)):
+                _dd_cand = _dd_swap_pool[_dd_ci]
+                _selected[_dd_thin_idx] = _dd_cand
+                _i80_post_dd = _i80_invariant_snapshot(_selected)
+                _dd_scanned += 1
+                # Accept if ALL absolute gate thresholds pass
+                if all(_i80_post_dd.values()):
+                    _dd_swap_pool.pop(_dd_ci)
+                    _dd_found = True
+                    break
+                _selected[_dd_thin_idx] = _dd_old_item
+            if not _dd_found:
+                _log.warning("iter80: density swap round %d — no safe candidate in pool (scanned %d)", _dd_round + 1, _dd_scanned)
+                break
+        else:
+            _dd_new_item = _dd_swap_pool.pop(0)
+            _selected[_dd_thin_idx] = _dd_new_item
+            _dd_found = True
+        if not _dd_found:
+            break
         _log.info("FAST_600_MODE: density swap round %d — replaced thin[%d] '%s'",
                   _dd_round + 1, _dd_thin_idx, _dd_old_title)
         # Rebuild digest and re-check
@@ -11042,9 +11341,10 @@ def _f600_run_fast_path(
     stg["translate_end"] = time.time()
     # iter42: translate_hard_deadline_sec enforcement (DAILY)
     # iter44: raised 45→120 to accommodate all-miss scenario (safety via ALL_MISS_SAFETY_MARGIN_HARD)
+    # iter80: 10-item brief needs ~12s/item × 10 = 120s; 55s was for 7-item era
     _xlat_dur = float(stg.get("translate_end", 0)) - float(stg.get("translate_start", 0))
-    if _is_daily and _xlat_dur > 55:
-        _f6_fail("TRANSLATE_HARD_DEADLINE", f"translate={_xlat_dur:.0f}s > 55s")
+    if _is_daily and _xlat_dur > 120:
+        _f6_fail("TRANSLATE_HARD_DEADLINE", f"translate={_xlat_dur:.0f}s > 120s")
 
     if not _tfd_ok:
         _tfd_gate = (
@@ -13926,8 +14226,8 @@ def run_pipeline() -> None:
     # TIME_BUDGET checkpoint 1: after Z0 hydration
     _check_time_budget("after_z0_hydration")
     _stg["hydration_end"] = time.time()    # iter31 stage timing
-    # iter42: hydrate_hard_deadline_sec=55 enforcement (DAILY)
-    if _is_daily:
+    # iter42: hydrate_hard_deadline_sec=55 enforcement (DAILY, Z0 mode only)
+    if _is_daily and "hydration_start" in _stg:
         _hy_dur = float(_stg.get("hydration_end", 0)) - float(_stg.get("hydration_start", 0))
         if _hy_dur > 55:
             _bgt_nr = Path(settings.PROJECT_ROOT) / "outputs" / "NOT_READY.md"
