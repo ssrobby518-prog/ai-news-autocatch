@@ -10008,6 +10008,11 @@ def _f600_run_fast_path(
                                 (not _fr_inv_before[k]) or (k in _fr_cap_deferrable)
                                 for k in _fr_inv_reg
                             )
+                        if not _fr_inv_ok and _fr_round == 0:
+                            _log.info("iter81 FR-1 diag: ri=%d rv=%s cv=%s regressed=%s before={%s}",
+                                      _fr_ri, _fr_rv, _fr_cv,
+                                      _fr_inv_reg,
+                                      ", ".join(f"{k}={v}" for k, v in _fr_inv_before.items() if not v))
                         if _fr_inv_ok:
                             _selected[_fr_ri] = _fr_cand
                             # Compute SD for swapped-in item if not cached
