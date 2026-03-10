@@ -8467,11 +8467,16 @@ def _f600_run_fast_path(
             _p78_tp_attempts += 1
             _p78_tp_cur = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
             _p78_tp_swapped = False
-            # try swapping a non-target-player item for a target player from a new vendor
+            # try swapping a non-target-player or multi-item target player for a new vendor
+            _p78_vc = {}
+            for _p78s in _selected:
+                _p78vk = _f6_vendor_key(_p78s)
+                _p78_vc[_p78vk] = _p78_vc.get(_p78vk, 0) + 1
             for _p78_ri in range(len(_selected)):
                 _p78_rv = _f6_vendor_key(_selected[_p78_ri])
-                if _p78_rv in _TARGET_PLAYER_VENDORS:
-                    continue  # don't swap out a target player
+                # iter80b: allow swapping target-player items if their vendor has 2+ items
+                if _p78_rv in _TARGET_PLAYER_VENDORS and _p78_vc.get(_p78_rv, 0) <= 1:
+                    continue  # don't swap out a sole target player
                 _p78_test = [s for j, s in enumerate(_selected) if j != _p78_ri]
                 for _p78_cand in _p73_all_pools:
                     if _p78_cand in _p78_test or _is_ceo_prohibited(_p78_cand):
