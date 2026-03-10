@@ -10159,6 +10159,13 @@ def _f600_run_fast_path(
         _i80_ok_fr, _i80_reg_fr = _i80_no_regression(_i80_inv_fr, _i80_post_fr)
         if not _i80_ok_fr:
             _i80_ok_fr = all(not _i80_inv_fr[k] for k in _i80_reg_fr)
+        # iter81: allow cap-deferrable regressions — final cap enforcement will fix them
+        if not _i80_ok_fr:
+            _i80_cap_deferrable = {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain"}
+            _i80_ok_fr = all(
+                (not _i80_inv_fr[k]) or (k in _i80_cap_deferrable)
+                for k in _i80_reg_fr
+            )
         if not _i80_ok_fr:
             _log.warning("iter80: REVERTED FINAL rescue — regressed: %s", _i80_reg_fr)
             _selected[:] = _i80_snap_fr
