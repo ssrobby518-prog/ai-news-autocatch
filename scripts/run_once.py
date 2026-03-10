@@ -8921,6 +8921,13 @@ def _f600_run_fast_path(
                 continue
             if _is_hf_blog_explainer(_sbc):
                 continue
+            # iter80b-fix: block all zero-cap categories
+            if _is_developer_release(_sbc) or _is_indie_dev_tone(_sbc):
+                continue
+            if _is_forum_discussion(_sbc) or _is_tutorial_explainer(_sbc):
+                continue
+            if _is_ceo_prohibited(_sbc):
+                continue
             return pool.pop(_sbj)
         return None
 
@@ -9426,7 +9433,10 @@ def _f600_run_fast_path(
                                 and len(set(_role_axis(s) for s in _test_dd)) >= min(len(set(_role_axis(s) for s in _selected)), _ROLE_DIVERSITY_MIN)
                                 and sum(1 for s in _test_dd if _ct72b_source_class(s) in ("official", "media")) >= min(sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")), 8)
                                 and sum(1 for s in _test_dd if _is_techcrunch(s)) <= _TECHCRUNCH_CAP
-                                and sum(1 for s in _test_dd if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP):
+                                and sum(1 for s in _test_dd if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
+                                and not _is_developer_release(_bp_cand) and not _is_indie_dev_tone(_bp_cand)
+                                and not _is_forum_discussion(_bp_cand) and not _is_tutorial_explainer(_bp_cand)
+                                and not _is_hf_blog_explainer(_bp_cand) and not _is_ceo_prohibited(_bp_cand)):
                             _selected[_oi] = _bp_cand
                             _backup_pool.pop(_bp_idx)
                             _replacements_made += 1
@@ -9446,7 +9456,8 @@ def _f600_run_fast_path(
                             _fb_om_ok = sum(1 for s in _test_fb if _ct72b_source_class(s) in ("official", "media")) >= min(sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")), 8)
                             _fb_tc_ok = sum(1 for s in _test_fb if _is_techcrunch(s)) <= _TECHCRUNCH_CAP
                             _fb_gr_ok = sum(1 for s in _test_fb if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
-                            if _fb_plat_ok and _fb_buck_ok and _fb_role_ok and _fb_om_ok and _fb_tc_ok and _fb_gr_ok:
+                            _fb_devrel_ok = not _is_developer_release(_repl) and not _is_indie_dev_tone(_repl) and not _is_forum_discussion(_repl) and not _is_tutorial_explainer(_repl) and not _is_hf_blog_explainer(_repl) and not _is_ceo_prohibited(_repl)
+                            if _fb_plat_ok and _fb_buck_ok and _fb_role_ok and _fb_om_ok and _fb_tc_ok and _fb_gr_ok and _fb_devrel_ok:
                                 _backup_pool.pop(0)
                                 _selected[_oi] = _repl
                                 _replacements_made += 1
