@@ -7604,7 +7604,7 @@ def _f600_run_fast_path(
         r'|白宮|國會|商務部|國防部|出口管制|採購|國安|聯邦|AI政策)\b', _ct71_re.I)
 
     def _is_us_policy(it) -> bool:
-        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or "")[:2000]
+        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or getattr(it, "full_text", "") or "")[:2000]
         return bool(_US_POLICY_RE.search(_blob))
 
     # iter78: China policy classifier
@@ -7620,12 +7620,12 @@ def _f600_run_fast_path(
         r'|funding|valuation|revenue|partnership|acquisition|security|safety)\b', _ct71_re.I)
 
     def _is_china_policy(it) -> bool:
-        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or "")[:2000]
+        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or getattr(it, "full_text", "") or "")[:2000]
         if _CHINA_POLICY_RE.search(_blob):
             return True
-        # iter78: China geo items with ANY AI/tech/business signal count as china_policy
-        # (Chinese AI company activity IS policy-relevant in current geopolitical context)
-        if _geo_class(it) == "china" and _CHINA_POLICY_SIGNAL_RE.search(_blob):
+        # iter78→80b: China geo items are always policy-relevant
+        # (any item classified as china-geo by LLM is about Chinese AI activity)
+        if _geo_class(it) == "china":
             return True
         return False
 
