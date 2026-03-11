@@ -8755,6 +8755,9 @@ def _f600_run_fast_path(
             _max_vc = _v_counts.most_common(1)[0][1] if _v_counts else 0
             _dist_doms = len(_d_counts)
             _dist_vens = len(set(_f6_vendor_key(s) for s in _selected) - {"other"})
+            _log.info("iter81 div-swap DIAG round=%d: dc=%s vc=%s max_dc=%d max_vc=%d doms=%d vens=%d",
+                      _div_round, dict(_d_counts.most_common()), dict(_v_counts.most_common()),
+                      _max_dc, _max_vc, _dist_doms, _dist_vens)
             if _max_dc <= _DIV_MAX_DOMAIN and _max_vc <= _DIV_MAX_VENDOR and _dist_doms >= _DIV_MIN_DOMAINS and _dist_vens >= _DIV_MIN_VENDORS:
                 break
             if not _div_backup:
@@ -10409,6 +10412,36 @@ def _f600_run_fast_path(
                               and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
                 if _i80b_pool:
                     _log.info("iter81: domain diversity pool relaxed density (>=%d→>=8), pool=%d", _HDF_NEW_DENSITY_MIN, len(_i80b_pool))
+            # iter81: include any eligible items from NEW domains for domain diversity
+            _i80b_cur_doms_check = set(_f6_domain_key(s) for s in _selected)
+            _i80b_has_new_dom = any(_f6_domain_key(it) not in _i80b_cur_doms_check for it in _i80b_pool)
+            if not _i80b_has_new_dom:
+                # Widen: drop bigtech+source_type requirements, keep density and prohibitions
+                _i80b_wide_pool = [it for it in _f6_tier(300) if it not in _selected
+                                   and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                                   and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                                   and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                                   and not _is_tutorial_explainer(it)
+                                   and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                                   and _f6_domain_key(it) not in _i80b_cur_doms_check]
+                if not _i80b_wide_pool:
+                    # Further relax density floor
+                    _i80b_wide_pool = [it for it in _f6_tier(300) if it not in _selected
+                                       and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                                       and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                                       and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                                       and not _is_tutorial_explainer(it)
+                                       and _f6_domain_key(it) not in _i80b_cur_doms_check]
+                if _i80b_wide_pool:
+                    _i80b_pool.extend(_i80b_wide_pool)
+                    _log.info("iter81: domain diversity pool widened (dropped bigtech/type req), new_dom_candidates=%d domains=%s",
+                              len(_i80b_wide_pool), list(set(_f6_domain_key(it) for it in _i80b_wide_pool))[:10])
+                else:
+                    # Log diagnostic: why no new-domain items exist
+                    _i80b_all_doms = set(_f6_domain_key(it) for it in _f6_tier(300) if it not in _selected)
+                    _i80b_new_doms = _i80b_all_doms - _i80b_cur_doms_check
+                    _log.info("iter81: domain diversity EMPTY wide pool. existing=%d new_doms_in_pool=%d new_dom_names=%s",
+                              len(_i80b_all_doms), len(_i80b_new_doms), list(_i80b_new_doms)[:15])
             # Sort: prefer items from NEW domains (not currently in selected)
             _i80b_cur_doms = set(_f6_domain_key(s) for s in _selected)
             _i80b_pool.sort(key=lambda it: (0 if _f6_domain_key(it) not in _i80b_cur_doms else 1,
