@@ -8444,8 +8444,10 @@ def _f600_run_fast_path(
                     _p78_n = _p78_test + [_p78_cand]
                     _p78_nd = _DivCounter(_f6_domain_key(s) for s in _p78_n)
                     _p78_nv = _DivCounter(_f6_vendor_key(s) for s in _p78_n)
+                    _p78b_nb = len(set(_ct72b_strategic_bucket(s) for s in _p78_n))
                     if (_p78_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
                             and _p78_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _p78b_nb >= 5  # iter81: preserve bucket coverage
                             and _hdf_all_scores.get(id(_p78_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and sum(1 for s in _p78_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8
                             and sum(1 for s in _p78_n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP):
@@ -8488,8 +8490,10 @@ def _f600_run_fast_path(
                     _p78_n = _p78_test + [_p78_cand]
                     _p78_nd = _DivCounter(_f6_domain_key(s) for s in _p78_n)
                     _p78_nv = _DivCounter(_f6_vendor_key(s) for s in _p78_n)
+                    _p78_nb = len(set(_ct72b_strategic_bucket(s) for s in _p78_n))
                     if (_p78_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
                             and _p78_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _p78_nb >= 5  # iter81: preserve bucket coverage
                             and _hdf_all_scores.get(id(_p78_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and sum(1 for s in _p78_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8
                             and sum(1 for s in _p78_n if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
@@ -8535,8 +8539,10 @@ def _f600_run_fast_path(
                     _p79_n = _p79_test + [_p79_cand]
                     _p79_nd = _DivCounter(_f6_domain_key(s) for s in _p79_n)
                     _p79_nv = _DivCounter(_f6_vendor_key(s) for s in _p79_n)
+                    _p79_nb = len(set(_ct72b_strategic_bucket(s) for s in _p79_n))
                     if (_p79_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
                             and _p79_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _p79_nb >= 5  # iter81: preserve bucket coverage
                             and _hdf_all_scores.get(id(_p79_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and sum(1 for s in _p79_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8):
                         _selected[_p79_ri] = _p79_cand
@@ -8583,8 +8589,10 @@ def _f600_run_fast_path(
                     _p79_n = _p79_test + [_p79_cand]
                     _p79_nd = _DivCounter(_f6_domain_key(s) for s in _p79_n)
                     _p79_nv = _DivCounter(_f6_vendor_key(s) for s in _p79_n)
+                    _p79e_nb = len(set(_ct72b_strategic_bucket(s) for s in _p79_n))
                     if (_p79_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
                             and _p79_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                            and _p79e_nb >= 5  # iter81: preserve bucket coverage
                             and _hdf_all_scores.get(id(_p79_cand), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and sum(1 for s in _p79_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8
                             and sum(1 for s in _p79_n if _is_techcrunch(s)) <= _TECHCRUNCH_CAP
