@@ -10390,6 +10390,17 @@ def _f600_run_fast_path(
                           and not _is_tutorial_explainer(it)
                           and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                           and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+            # iter81: relaxed density fallback if pool empty
+            if not _i80b_pool:
+                _i80b_pool = [it for it in _f6_tier(300) if it not in _selected
+                              and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                              and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                              and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                              and not _is_tutorial_explainer(it)
+                              and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                              and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
+                if _i80b_pool:
+                    _log.info("iter81: domain diversity pool relaxed density (>=%d→>=8), pool=%d", _HDF_NEW_DENSITY_MIN, len(_i80b_pool))
             # Sort: prefer items from NEW domains (not currently in selected)
             _i80b_cur_doms = set(_f6_domain_key(s) for s in _selected)
             _i80b_pool.sort(key=lambda it: (0 if _f6_domain_key(it) not in _i80b_cur_doms else 1,
@@ -10407,31 +10418,43 @@ def _f600_run_fast_path(
                 _i80b_dom_count = _i80b_dc.most_common(1)[0][1]
                 if _i80b_dom_count <= 1:
                     break  # can't reduce further
-                _i80b_dom_items = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _i80b_worst_dom]
-                _i80b_worst_item = min(_i80b_dom_items, key=lambda x: _f6_bfp(x[1]))
+                # iter81: try ALL items from worst domain (not just lowest-priority)
+                _i80b_dom_items = sorted(
+                    [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _i80b_worst_dom],
+                    key=lambda x: _f6_bfp(x[1])
+                )
                 _i80b_swapped = False
-                for _i80b_ci, _i80b_cand in enumerate(_i80b_pool):
-                    _i80b_cdom = _f6_domain_key(_i80b_cand)
-                    if _i80b_cdom == _i80b_worst_dom:
-                        continue
-                    if _i80b_cdom in _i80b_cur_doms:
-                        continue  # must be NEW domain
-                    _i80b_test = [s if j != _i80b_worst_item[0] else _i80b_cand for j, s in enumerate(_selected)]
-                    _i80b_inv_b = _i80_invariant_snapshot(_selected)
-                    _i80b_inv_a = _i80_invariant_snapshot(_i80b_test)
-                    _i80b_ok, _i80b_reg = _i80_no_regression(_i80b_inv_b, _i80b_inv_a)
-                    if not _i80b_ok:
-                        # Relaxed: accept if all regressed invariants were already failing
-                        _i80b_ok = all(not _i80b_inv_b[k] for k in _i80b_reg)
-                    if _i80b_ok:
-                        _log.info("iter80b domain diversity: replaced '%s'[%d] with '%s' (new domain)",
-                                  _i80b_worst_dom, _i80b_worst_item[0], _i80b_cdom)
-                        _selected[_i80b_worst_item[0]] = _i80b_cand
-                        _i80b_pool.pop(_i80b_ci)
-                        _i80b_cur_doms = set(_f6_domain_key(s) for s in _selected)
-                        _i80b_changed = True
-                        _i80b_swapped = True
+                for _i80b_dom_idx, _i80b_dom_it in _i80b_dom_items:
+                    if _i80b_swapped:
                         break
+                    for _i80b_ci, _i80b_cand in enumerate(_i80b_pool):
+                        _i80b_cdom = _f6_domain_key(_i80b_cand)
+                        if _i80b_cdom == _i80b_worst_dom:
+                            continue
+                        if _i80b_cdom in _i80b_cur_doms:
+                            continue  # must be NEW domain
+                        _i80b_test = [s if j != _i80b_dom_idx else _i80b_cand for j, s in enumerate(_selected)]
+                        _i80b_inv_b = _i80_invariant_snapshot(_selected)
+                        _i80b_inv_a = _i80_invariant_snapshot(_i80b_test)
+                        _i80b_ok, _i80b_reg = _i80_no_regression(_i80b_inv_b, _i80b_inv_a)
+                        if not _i80b_ok:
+                            # Relaxed: accept if all regressed invariants were already failing
+                            _i80b_ok = all(not _i80b_inv_b[k] for k in _i80b_reg)
+                        # iter81: cap-deferrable logic for domain diversity
+                        if not _i80b_ok:
+                            _i80b_ok = all(
+                                (not _i80b_inv_b[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined"})
+                                for k in _i80b_reg
+                            )
+                        if _i80b_ok:
+                            _log.info("iter80b domain diversity: replaced '%s'[%d] with '%s' (new domain)",
+                                      _i80b_worst_dom, _i80b_dom_idx, _i80b_cdom)
+                            _selected[_i80b_dom_idx] = _i80b_cand
+                            _i80b_pool.pop(_i80b_ci)
+                            _i80b_cur_doms = set(_f6_domain_key(s) for s in _selected)
+                            _i80b_changed = True
+                            _i80b_swapped = True
+                            break
                 if not _i80b_swapped:
                     _log.warning("iter80b domain diversity: stuck at dist_doms=%d", _i80b_dist)
                     break
