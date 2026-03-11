@@ -8765,6 +8765,20 @@ def _f600_run_fast_path(
                        and not _is_hf_blog_explainer(it)
                        and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                        and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+        # iter81: if backup pool has no items from new domains, expand with relaxed density
+        _div_cur_doms = set(_f6_domain_key(s) for s in _selected)
+        _div_has_new = any(_f6_domain_key(it) not in _div_cur_doms for it in _div_backup)
+        if not _div_has_new and len(_div_cur_doms) < _DIV_MIN_DOMAINS:
+            _div_extra = [it for it in _f6_tier(300) if it not in _selected and it not in _div_backup
+                          and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                          and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                          and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                          and not _is_tutorial_explainer(it)
+                          and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                          and _f6_domain_key(it) not in _div_cur_doms]
+            if _div_extra:
+                _div_backup.extend(_div_extra)
+                _log.info("iter81 div-swap: expanded backup pool with %d new-domain items (relaxed density)", len(_div_extra))
         _div_backup.sort(key=lambda it: (0 if not _is_platform_domain(it) else 1,
                                          -int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
         for _div_round in range(30):
