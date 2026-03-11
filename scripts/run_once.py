@@ -8133,6 +8133,17 @@ def _f600_run_fast_path(
                         _sel_append(it)
                         _p73_f5 = True
                         break
+            # iter81: 5a2: domain-diversity-first — prefer items from new domains when domains < 5
+            if not _p73_f5:
+                _p73_cd = set(_f6_domain_key(s) for s in _selected)
+                if len(_p73_cd) < _DIV_MIN_DOMAINS:
+                    for it in _p72_pool_boma:
+                        if it not in _selected and _f6_domain_key(it) not in _p73_cd and _div_can_add(it, _selected) and not _is_platform_domain(it):
+                            _sel_append(it)
+                            _p73_f5 = True
+                            _log.info("iter81 Phase-5a2: added new-domain item (domain=%s), doms=%d",
+                                      _f6_domain_key(it), len(set(_f6_domain_key(s) for s in _selected)))
+                            break
             if not _p73_f5:
                 for it in _p72_pool_boma:
                     if it not in _selected and _div_can_add(it, _selected) and not _is_platform_domain(it):
@@ -11629,6 +11640,9 @@ def _f600_run_fast_path(
                 _selected[_dd_thin_idx] = _dd_cand
                 _i80_post_dd = _i80_invariant_snapshot(_selected)
                 _i80_ok_dd, _i80_reg_dd = _i80_no_regression(_i80_inv_dd, _i80_post_dd)
+                # iter81: relaxed — accept if all regressed invariants were already failing
+                if not _i80_ok_dd:
+                    _i80_ok_dd = all(not _i80_inv_dd[k] for k in _i80_reg_dd)
                 _dd_scanned += 1
                 if _i80_ok_dd:
                     _dd_swap_pool.pop(_dd_ci)
