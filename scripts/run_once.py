@@ -9949,11 +9949,15 @@ def _f600_run_fast_path(
                     and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
                     and not _is_hf_blog_explainer(it)
                     and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+        # iter81: sort FR pool so non-TC items come first (FR-1 picks first match → avoids TC bloat)
+        _fr_pool.sort(key=lambda it: (1 if _is_techcrunch(it) else 0, -_f6_bfp(it)))
         # iter78b: also build wider pool (pool_sorted, relaxed density) for target_player rescue only
         _fr_pool_wide = [it for it in _pool_sorted if it not in _selected and it not in _fr_pool
                          and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
                          and _is_target_player(it)
                          and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
+        # iter81: sort wider pool too — prefer non-TC
+        _fr_pool_wide.sort(key=lambda it: (1 if _is_techcrunch(it) else 0, -_f6_bfp(it)))
         _fr_changed = False
         _fr_pre_tp = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
         _fr_pre_usp = sum(1 for s in _selected if _is_us_policy(s))
@@ -10060,6 +10064,12 @@ def _f600_run_fast_path(
                     _fr_pol_ok, _fr_pol_reg = _i80_no_regression(_fr_pol_inv_b, _fr_pol_inv_a)
                     if not _fr_pol_ok:
                         _fr_pol_ok = all(not _fr_pol_inv_b[k] for k in _fr_pol_reg)
+                    # iter81: cap-deferrable for FR-2
+                    if not _fr_pol_ok:
+                        _fr_pol_ok = all(
+                            (not _fr_pol_inv_b[k]) or (k in {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain"})
+                            for k in _fr_pol_reg
+                        )
                     if _fr_pol_ok:
                         _selected[_fr_pi] = _fr_pc
                         _fr_changed = True
@@ -10184,6 +10194,16 @@ def _f600_run_fast_path(
                            and not _is_techcrunch(it) and not _f6_is_google_research_blog(it)
                            and not _is_platform_domain(it) and not _is_hf_blog_explainer(it)
                            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+        # iter81: if pool empty, try relaxed density (>=8) to avoid "no pool" deadlock
+        if not _i80_final_pool:
+            _i80_final_pool = [it for it in _f6_tier(300) if it not in _selected
+                               and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                               and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                               and not _is_techcrunch(it) and not _f6_is_google_research_blog(it)
+                               and not _is_platform_domain(it) and not _is_hf_blog_explainer(it)
+                               and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
+            if _i80_final_pool:
+                _log.info("iter81: final cap pool relaxed density (>=%d→>=8), pool=%d", _HDF_NEW_DENSITY_MIN, len(_i80_final_pool))
         _i80_final_pool.sort(key=lambda it: (-int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
         _i80_changed = False
         # enforce TC cap
