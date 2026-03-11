@@ -8906,6 +8906,24 @@ def _f600_run_fast_path(
                               _div_round, _worst_idx, _f6_domain_key(_worst_it), _f6_vendor_key(_worst_it),
                               _cand_dk, _cand_vk)
                     break
+            if not _repl_found and _div_round == 0:
+                # iter81: diagnostic — test first new-dom candidate to see what fails
+                _diag_cur_doms = set(_f6_domain_key(s) for s in _selected)
+                for _diag_b in _div_backup:
+                    if _f6_domain_key(_diag_b) in _diag_cur_doms:
+                        continue
+                    _diag_test = [s for j, s in enumerate(_selected) if j != _worst_idx] + [_diag_b]
+                    _diag_inv_b = _i80_invariant_snapshot(_selected)
+                    _diag_inv_a = _i80_invariant_snapshot(_diag_test)
+                    _diag_ok, _diag_reg = _i80_no_regression(_diag_inv_b, _diag_inv_a)
+                    _diag_test_dc = _DivCounter(_f6_domain_key(s) for s in _diag_test)
+                    _diag_test_vc = _DivCounter(_f6_vendor_key(s) for s in _diag_test)
+                    _log.info("iter81 div-swap DIAG candidate: dom=%s ven=%s regressed=%s before_fail={%s} test_max_dc=%d test_max_vc=%d test_doms=%d test_buckets=%d",
+                              _f6_domain_key(_diag_b), _f6_vendor_key(_diag_b), _diag_reg,
+                              {k: v for k, v in _diag_inv_b.items() if not v},
+                              _diag_test_dc.most_common(1)[0][1], _diag_test_vc.most_common(1)[0][1],
+                              len(_diag_test_dc), len(set(_ct72b_strategic_bucket(s) for s in _diag_test)))
+                    break
             if not _repl_found:
                 # iter81: diagnostic — why couldn't we find a replacement?
                 _div_new_in_pool = [it for it in _div_backup if _f6_domain_key(it) not in set(_f6_domain_key(s) for s in _selected)]
