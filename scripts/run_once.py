@@ -10450,6 +10450,9 @@ def _f600_run_fast_path(
                     _i80b_new_doms = _i80b_all_doms - _i80b_cur_doms_check
                     _log.info("iter81: domain diversity EMPTY wide pool. existing=%d new_doms_in_pool=%d new_dom_names=%s",
                               len(_i80b_all_doms), len(_i80b_new_doms), list(_i80b_new_doms)[:15])
+            _log.info("iter81 i80b pool: total=%d has_new_dom=%s new_dom_items=%d",
+                      len(_i80b_pool), _i80b_has_new_dom,
+                      sum(1 for it in _i80b_pool if _f6_domain_key(it) not in _i80b_cur_doms_check))
             # Sort: prefer items from NEW domains (not currently in selected)
             _i80b_cur_doms = set(_f6_domain_key(s) for s in _selected)
             _i80b_pool.sort(key=lambda it: (0 if _f6_domain_key(it) not in _i80b_cur_doms else 1,
@@ -10504,6 +10507,11 @@ def _f600_run_fast_path(
                             _i80b_changed = True
                             _i80b_swapped = True
                             break
+                        else:
+                            if _i80b_ci < 3:  # log first few rejections for diagnostics
+                                _log.info("iter81 i80b REJECT: dom=%s reg=%s before={%s}",
+                                          _i80b_cdom, _i80b_reg,
+                                          {k: v for k, v in _i80b_inv_b.items() if not v or k in (_i80b_reg or [])})
                 if not _i80b_swapped:
                     _log.warning("iter80b domain diversity: stuck at dist_doms=%d", _i80b_dist)
                     break
