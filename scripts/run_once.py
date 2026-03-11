@@ -10242,7 +10242,20 @@ def _f600_run_fast_path(
                     _i80_swapped = True
                     break
             if not _i80_swapped:
-                _log.warning("iter80 final cap enforcement: stuck at tc=%d, no valid replacement", _i80_tc)
+                # iter81 diag: log why candidates were rejected
+                _log.warning("iter80 final cap enforcement: stuck at tc=%d, no valid replacement (pool=%d, worst_idx=%d '%s')",
+                             _i80_tc, len(_i80_final_pool), _i80_tc_worst[0],
+                             str(getattr(_i80_tc_worst[1], "title", ""))[:50])
+                # Log first 3 rejections
+                for _i80_di, _i80_dcand in enumerate(_i80_final_pool[:3]):
+                    _i80_dtest = [s if j != _i80_tc_worst[0] else _i80_dcand for j, s in enumerate(_selected)]
+                    _i80_dcur = _i80_invariant_snapshot(_selected)
+                    _i80_dtst = _i80_invariant_snapshot(_i80_dtest)
+                    _i80_dok2, _i80_dreg2 = _i80_no_regression(_i80_dcur, _i80_dtst)
+                    _log.info("iter81 TC diag[%d]: cand='%s' ok=%s reg=%s cur_failing={%s}",
+                              _i80_di, str(getattr(_i80_dcand, "title", ""))[:50],
+                              _i80_dok2, _i80_dreg2,
+                              ", ".join(f"{k}={v}" for k, v in _i80_dcur.items() if not v))
                 break
         # enforce HF blog explainer cap
         for _i80_round2 in range(5):
