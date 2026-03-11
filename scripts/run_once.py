@@ -8867,9 +8867,17 @@ def _f600_run_fast_path(
                 _div1_inv_ok, _div1_inv_reg = _i80_no_regression(_div1_inv_before, _div1_inv_after)
                 # iter80b: if strict check fails, allow swap if it IMPROVES diversity
                 # and only regresses invariants that were already failing
-                if not _div1_inv_ok and (_test_max_dc < _max_dc or _test_max_vc < _max_vc):
+                _div1_diversity_improving = (_test_max_dc < _max_dc or _test_max_vc < _max_vc
+                                             or len(_test_dc) > _dist_doms or len(_test_vc) > _dist_vens)
+                if not _div1_inv_ok and _div1_diversity_improving:
                     # all regressed keys were already False → tolerable
                     _div1_inv_ok = all(not _div1_inv_before[k] for k in _div1_inv_reg)
+                # iter81: cap-deferrable for domain diversity — tc_cap/gr_cap can be fixed later
+                if not _div1_inv_ok and _div1_diversity_improving:
+                    _div1_inv_ok = all(
+                        (not _div1_inv_before[k]) or (k in {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain", "max_vendor"})
+                        for k in _div1_inv_reg
+                    )
                 # Also check diversity improvement (must not make concentration worse)
                 _test_buckets = len(set(_ct72b_strategic_bucket(s) for s in _test_sel))
                 _cur_buckets = len(set(_ct72b_strategic_bucket(s) for s in _selected))
@@ -8899,6 +8907,12 @@ def _f600_run_fast_path(
                               _cand_dk, _cand_vk)
                     break
             if not _repl_found:
+                # iter81: diagnostic — why couldn't we find a replacement?
+                _div_new_in_pool = [it for it in _div_backup if _f6_domain_key(it) not in set(_f6_domain_key(s) for s in _selected)]
+                _log.warning("iter81 div-swap STUCK round=%d: worst=%s/%s pool=%d new_dom_in_pool=%d new_doms=%s",
+                             _div_round, _f6_domain_key(_worst_it), _f6_vendor_key(_worst_it),
+                             len(_div_backup), len(_div_new_in_pool),
+                             list(set(_f6_domain_key(it) for it in _div_new_in_pool))[:10])
                 break
         # Log final diversity state
         _final_dc = _DivCounter(_f6_domain_key(s) for s in _selected)
