@@ -11689,6 +11689,14 @@ def _f600_run_fast_path(
                 # iter81: relaxed — accept if all regressed invariants were already failing
                 if not _i80_ok_dd:
                     _i80_ok_dd = all(not _i80_inv_dd[k] for k in _i80_reg_dd)
+                # iter81: cap-deferrable — tc_cap/gr_cap/max_domain can be fixed by later phases
+                if not _i80_ok_dd:
+                    _i80_ok_dd = all(
+                        (not _i80_inv_dd[k]) or (k in {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain", "max_vendor"})
+                        for k in _i80_reg_dd
+                    )
+                if not _i80_ok_dd and _dd_scanned <= 3:
+                    _log.info("iter81 dd-swap REJECT[%d]: dom=%s reg=%s", _dd_scanned, _f6_domain_key(_dd_cand), _i80_reg_dd)
                 _dd_scanned += 1
                 if _i80_ok_dd:
                     _dd_swap_pool.pop(_dd_ci)
