@@ -8839,11 +8839,15 @@ def _f600_run_fast_path(
                 _cur_buckets = len(set(_ct72b_strategic_bucket(s) for s in _selected))
                 _test_dist_doms = len(_test_dc)
                 _cur_dist_doms = len(_DivCounter(_f6_domain_key(s) for s in _selected))
+                _dom_floor = min(_cur_dist_doms, _DIV_MIN_DOMAINS)
+                if _test_dist_doms < _dom_floor:
+                    _log.info("iter81 div-swap BLOCKED: test_doms=%d < floor=%d (removing %s, adding %s)",
+                              _test_dist_doms, _dom_floor, _f6_domain_key(_worst_it), _cand_dk)
+                    continue
                 if (_div1_inv_ok
                         and _test_max_dc <= max(_DIV_MAX_DOMAIN, _max_dc)
                         and _test_max_vc <= max(_DIV_MAX_VENDOR, _max_vc)
-                        and _test_buckets >= min(_cur_buckets, 5)
-                        and _test_dist_doms >= min(_cur_dist_doms, _DIV_MIN_DOMAINS)):
+                        and _test_buckets >= min(_cur_buckets, 5)):
                     _sample = {"title": str(getattr(_worst_it, "title", ""))[:120],
                                "domain": _f6_domain_key(_worst_it), "vendor": _f6_vendor_key(_worst_it),
                                "reason": "domain_cap" if _max_dc > _DIV_MAX_DOMAIN else ("vendor_cap" if _max_vc > _DIV_MAX_VENDOR else "diversity_increase")}
