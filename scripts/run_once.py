@@ -7510,7 +7510,7 @@ def _f600_run_fast_path(
         "langchain-ai/langchain", "run-llama/llama_index", "vllm-project/vllm",
         "ollama/ollama",
     })
-    _DEVREL_URL_PATH_RE = _ct71_re.compile(r'/(?:releases|pull|commit|issues|discussions)/\d', _ct71_re.I)
+    _DEVREL_URL_PATH_RE = _ct71_re.compile(r'/(?:releases|pull|commit|issues|discussions)/(?:\d|tag/)', _ct71_re.I)
     # Title-only patterns: very specific to repo changelogs, not product launches
     _DEVREL_TITLE_RE = _ct71_re.compile(
         r'(?:'
@@ -7520,6 +7520,7 @@ def _f600_run_fast_path(
         r'|\bfix(?:ed|es)?(?:\s+(?:a\s+)?bug|\s+#\d|\s+issue\s+#|\s+crash(?:es)?)\b'
         r'|\bremoved\s+\w+Agent\b|\bstop_reason\s+field\b'
         r'|\bcontributor(?:s)?\s+(?:guide|list|update)\b'
+        r'|^v\d+\.\d+(?:\.\d+)?$'
         r')', _ct71_re.I)
 
     def _is_developer_release(it) -> bool:
