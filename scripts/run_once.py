@@ -10204,6 +10204,13 @@ def _f600_run_fast_path(
                 _i80_ok_t, _i80_reg_t = _i80_no_regression(_i80_cur_inv, _i80_test_inv)
                 if not _i80_ok_t:
                     _i80_ok_t = all(not _i80_cur_inv[k] for k in _i80_reg_t)
+                # iter81: also allow max_domain regression (we're actively fixing concentration)
+                if not _i80_ok_t:
+                    _i80_cap_defer = {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined"}
+                    _i80_ok_t = all(
+                        (not _i80_cur_inv[k]) or (k in _i80_cap_defer)
+                        for k in _i80_reg_t
+                    )
                 _i80_test_tc = sum(1 for s in _i80_test if _is_techcrunch(s))
                 if _i80_test_tc < _i80_tc and _i80_ok_t:
                     _log.info("iter80 final cap enforcement: replaced TC[%d] '%s' with '%s'",
@@ -10263,6 +10270,12 @@ def _f600_run_fast_path(
                 _i80_gok, _i80_greg = _i80_no_regression(_i80_gcur_inv, _i80_gtest_inv)
                 if not _i80_gok:
                     _i80_gok = all(not _i80_gcur_inv[k] for k in _i80_greg)
+                # iter81: cap-deferrable logic for GR enforcement
+                if not _i80_gok:
+                    _i80_gok = all(
+                        (not _i80_gcur_inv[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined"})
+                        for k in _i80_greg
+                    )
                 _i80_gtest_gr = sum(1 for s in _i80_gtest if _f6_is_google_research_blog(s))
                 if _i80_gtest_gr < _i80_gr and _i80_gok:
                     _log.info("iter80b final cap: replaced GR[%d] '%s' with '%s'",
@@ -10298,6 +10311,12 @@ def _f600_run_fast_path(
                 _i80_dok, _i80_dreg = _i80_no_regression(_i80_dcur_inv, _i80_dtest_inv)
                 if not _i80_dok:
                     _i80_dok = all(not _i80_dcur_inv[k] for k in _i80_dreg)
+                # iter81: cap-deferrable logic for domain enforcement
+                if not _i80_dok:
+                    _i80_dok = all(
+                        (not _i80_dcur_inv[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined"})
+                        for k in _i80_dreg
+                    )
                 if _i80_dok:
                     _log.info("iter80b final cap: replaced domain '%s'[%d] with '%s'",
                               _i80_worst_dom, _i80_dom_worst[0], _f6_domain_key(_i80_dcand))
