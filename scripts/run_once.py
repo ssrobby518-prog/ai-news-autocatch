@@ -10206,7 +10206,7 @@ def _f600_run_fast_path(
                 _log.info("iter81: final cap pool relaxed density (>=%d→>=8), pool=%d", _HDF_NEW_DENSITY_MIN, len(_i80_final_pool))
         _i80_final_pool.sort(key=lambda it: (-int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
         _i80_changed = False
-        # enforce TC cap
+        # enforce TC cap — iter81: try ALL TC items (sorted worst-first), not just the single worst
         for _i80_round in range(10):
             _i80_tc = sum(1 for s in _selected if _is_techcrunch(s))
             if _i80_tc <= _TECHCRUNCH_CAP:
@@ -10214,48 +10214,41 @@ def _f600_run_fast_path(
             if not _i80_final_pool:
                 _log.warning("iter80 final cap enforcement: no pool for TC reduction (tc=%d)", _i80_tc)
                 break
-            _i80_tc_items = [(i, s) for i, s in enumerate(_selected) if _is_techcrunch(s)]
-            _i80_tc_worst = min(_i80_tc_items, key=lambda x: _f6_bfp(x[1]))
+            _i80_tc_items = sorted(
+                [(i, s) for i, s in enumerate(_selected) if _is_techcrunch(s)],
+                key=lambda x: _f6_bfp(x[1])
+            )  # worst-first
             _i80_swapped = False
-            for _i80_ci, _i80_cand in enumerate(_i80_final_pool):
-                _i80_test = [s if j != _i80_tc_worst[0] else _i80_cand for j, s in enumerate(_selected)]
-                _i80_cur_inv = _i80_invariant_snapshot(_selected)
-                _i80_test_inv = _i80_invariant_snapshot(_i80_test)
-                _i80_ok_t, _i80_reg_t = _i80_no_regression(_i80_cur_inv, _i80_test_inv)
-                if not _i80_ok_t:
-                    _i80_ok_t = all(not _i80_cur_inv[k] for k in _i80_reg_t)
-                # iter81: also allow max_domain regression (we're actively fixing concentration)
-                if not _i80_ok_t:
-                    _i80_cap_defer = {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined"}
-                    _i80_ok_t = all(
-                        (not _i80_cur_inv[k]) or (k in _i80_cap_defer)
-                        for k in _i80_reg_t
-                    )
-                _i80_test_tc = sum(1 for s in _i80_test if _is_techcrunch(s))
-                if _i80_test_tc < _i80_tc and _i80_ok_t:
-                    _log.info("iter80 final cap enforcement: replaced TC[%d] '%s' with '%s'",
-                              _i80_tc_worst[0], str(getattr(_i80_tc_worst[1], "title", ""))[:60],
-                              str(getattr(_i80_cand, "title", ""))[:60])
-                    _selected[_i80_tc_worst[0]] = _i80_cand
-                    _i80_final_pool.pop(_i80_ci)
-                    _i80_changed = True
-                    _i80_swapped = True
+            for _i80_tc_idx, _i80_tc_item in _i80_tc_items:
+                if _i80_swapped:
                     break
+                for _i80_ci, _i80_cand in enumerate(_i80_final_pool):
+                    _i80_test = [s if j != _i80_tc_idx else _i80_cand for j, s in enumerate(_selected)]
+                    _i80_cur_inv = _i80_invariant_snapshot(_selected)
+                    _i80_test_inv = _i80_invariant_snapshot(_i80_test)
+                    _i80_ok_t, _i80_reg_t = _i80_no_regression(_i80_cur_inv, _i80_test_inv)
+                    if not _i80_ok_t:
+                        _i80_ok_t = all(not _i80_cur_inv[k] for k in _i80_reg_t)
+                    # iter81: also allow max_domain regression (we're actively fixing concentration)
+                    if not _i80_ok_t:
+                        _i80_cap_defer = {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined"}
+                        _i80_ok_t = all(
+                            (not _i80_cur_inv[k]) or (k in _i80_cap_defer)
+                            for k in _i80_reg_t
+                        )
+                    _i80_test_tc = sum(1 for s in _i80_test if _is_techcrunch(s))
+                    if _i80_test_tc < _i80_tc and _i80_ok_t:
+                        _log.info("iter80 final cap enforcement: replaced TC[%d] '%s' with '%s'",
+                                  _i80_tc_idx, str(getattr(_i80_tc_item, "title", ""))[:60],
+                                  str(getattr(_i80_cand, "title", ""))[:60])
+                        _selected[_i80_tc_idx] = _i80_cand
+                        _i80_final_pool.pop(_i80_ci)
+                        _i80_changed = True
+                        _i80_swapped = True
+                        break
             if not _i80_swapped:
-                # iter81 diag: log why candidates were rejected
-                _log.warning("iter80 final cap enforcement: stuck at tc=%d, no valid replacement (pool=%d, worst_idx=%d '%s')",
-                             _i80_tc, len(_i80_final_pool), _i80_tc_worst[0],
-                             str(getattr(_i80_tc_worst[1], "title", ""))[:50])
-                # Log first 3 rejections
-                for _i80_di, _i80_dcand in enumerate(_i80_final_pool[:3]):
-                    _i80_dtest = [s if j != _i80_tc_worst[0] else _i80_dcand for j, s in enumerate(_selected)]
-                    _i80_dcur = _i80_invariant_snapshot(_selected)
-                    _i80_dtst = _i80_invariant_snapshot(_i80_dtest)
-                    _i80_dok2, _i80_dreg2 = _i80_no_regression(_i80_dcur, _i80_dtst)
-                    _log.info("iter81 TC diag[%d]: cand='%s' ok=%s reg=%s cur_failing={%s}",
-                              _i80_di, str(getattr(_i80_dcand, "title", ""))[:50],
-                              _i80_dok2, _i80_dreg2,
-                              ", ".join(f"{k}={v}" for k, v in _i80_dcur.items() if not v))
+                _log.warning("iter80 final cap enforcement: stuck at tc=%d, no valid replacement (pool=%d, tried %d TC items)",
+                             _i80_tc, len(_i80_final_pool), len(_i80_tc_items))
                 break
         # enforce HF blog explainer cap
         for _i80_round2 in range(5):
@@ -10332,32 +10325,37 @@ def _f600_run_fast_path(
                 _log.warning("iter80b final cap: no pool for domain reduction (max_dom=%d)", _i80_dom_max)
                 break
             _i80_worst_dom = _i80_dom_c.most_common(1)[0][0]
-            _i80_dom_items = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _i80_worst_dom]
-            _i80_dom_worst = min(_i80_dom_items, key=lambda x: _f6_bfp(x[1]))
+            _i80_dom_items = sorted(
+                [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _i80_worst_dom],
+                key=lambda x: _f6_bfp(x[1])
+            )  # iter81: try all items from worst domain (worst-first)
             _i80_dom_swapped = False
-            for _i80_dci, _i80_dcand in enumerate(_i80_final_pool):
-                if _f6_domain_key(_i80_dcand) == _i80_worst_dom:
-                    continue
-                _i80_dtest = [s if j != _i80_dom_worst[0] else _i80_dcand for j, s in enumerate(_selected)]
-                _i80_dcur_inv = _i80_invariant_snapshot(_selected)
-                _i80_dtest_inv = _i80_invariant_snapshot(_i80_dtest)
-                _i80_dok, _i80_dreg = _i80_no_regression(_i80_dcur_inv, _i80_dtest_inv)
-                if not _i80_dok:
-                    _i80_dok = all(not _i80_dcur_inv[k] for k in _i80_dreg)
-                # iter81: cap-deferrable logic for domain enforcement
-                if not _i80_dok:
-                    _i80_dok = all(
-                        (not _i80_dcur_inv[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined"})
-                        for k in _i80_dreg
-                    )
-                if _i80_dok:
-                    _log.info("iter80b final cap: replaced domain '%s'[%d] with '%s'",
-                              _i80_worst_dom, _i80_dom_worst[0], _f6_domain_key(_i80_dcand))
-                    _selected[_i80_dom_worst[0]] = _i80_dcand
-                    _i80_final_pool.pop(_i80_dci)
-                    _i80_changed = True
-                    _i80_dom_swapped = True
+            for _i80_dom_idx, _i80_dom_item in _i80_dom_items:
+                if _i80_dom_swapped:
                     break
+                for _i80_dci, _i80_dcand in enumerate(_i80_final_pool):
+                    if _f6_domain_key(_i80_dcand) == _i80_worst_dom:
+                        continue
+                    _i80_dtest = [s if j != _i80_dom_idx else _i80_dcand for j, s in enumerate(_selected)]
+                    _i80_dcur_inv = _i80_invariant_snapshot(_selected)
+                    _i80_dtest_inv = _i80_invariant_snapshot(_i80_dtest)
+                    _i80_dok, _i80_dreg = _i80_no_regression(_i80_dcur_inv, _i80_dtest_inv)
+                    if not _i80_dok:
+                        _i80_dok = all(not _i80_dcur_inv[k] for k in _i80_dreg)
+                    # iter81: cap-deferrable logic for domain enforcement
+                    if not _i80_dok:
+                        _i80_dok = all(
+                            (not _i80_dcur_inv[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined"})
+                            for k in _i80_dreg
+                        )
+                    if _i80_dok:
+                        _log.info("iter80b final cap: replaced domain '%s'[%d] with '%s'",
+                                  _i80_worst_dom, _i80_dom_idx, _f6_domain_key(_i80_dcand))
+                        _selected[_i80_dom_idx] = _i80_dcand
+                        _i80_final_pool.pop(_i80_dci)
+                        _i80_changed = True
+                        _i80_dom_swapped = True
+                        break
             if not _i80_dom_swapped:
                 _log.warning("iter80b final cap: stuck at domain '%s'=%d", _i80_worst_dom, _i80_dom_max)
                 break
