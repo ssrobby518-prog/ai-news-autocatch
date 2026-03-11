@@ -11664,53 +11664,53 @@ def _f600_run_fast_path(
             break
         if not _dd_swap_pool:
             break
-        # Find first thin event by index
-        _dd_thin_idx = -1
+        # iter81: try ALL thin events (not just first) — some positions may have valid replacements
+        _dd_thin_indices = []
         for _di, _ddev in enumerate(_dd_meta.get("events", [])):
             if _ddev.get("bullet_count", 0) < 5 and _ddev.get("chars", 0) < 1200:
                 if _di < len(_selected):
-                    _dd_thin_idx = _di
-                    break
-        if _dd_thin_idx < 0:
+                    _dd_thin_indices.append(_di)
+        if not _dd_thin_indices:
             break
-        _dd_old_title = str(getattr(_selected[_dd_thin_idx], "title", "") or "")[:60]
-        # iter80b: transactional density swap — no-regression check (don't worsen
-        # any gate that currently passes; tolerate pre-existing failures like buckets<5)
-        _dd_old_item = _selected[_dd_thin_idx]
         _dd_found = False
-        if _is_daily:
-            _i80_inv_dd = _i80_invariant_snapshot(_selected)
-            _dd_scanned = 0
-            for _dd_ci in range(len(_dd_swap_pool)):
-                _dd_cand = _dd_swap_pool[_dd_ci]
-                _selected[_dd_thin_idx] = _dd_cand
-                _i80_post_dd = _i80_invariant_snapshot(_selected)
-                _i80_ok_dd, _i80_reg_dd = _i80_no_regression(_i80_inv_dd, _i80_post_dd)
-                # iter81: relaxed — accept if all regressed invariants were already failing
-                if not _i80_ok_dd:
-                    _i80_ok_dd = all(not _i80_inv_dd[k] for k in _i80_reg_dd)
-                # iter81: cap-deferrable — tc_cap/gr_cap/max_domain can be fixed by later phases
-                if not _i80_ok_dd:
-                    _i80_ok_dd = all(
-                        (not _i80_inv_dd[k]) or (k in {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain", "max_vendor"})
-                        for k in _i80_reg_dd
-                    )
-                if not _i80_ok_dd and _dd_scanned <= 3:
-                    _log.info("iter81 dd-swap REJECT[%d]: dom=%s reg=%s", _dd_scanned, _f6_domain_key(_dd_cand), _i80_reg_dd)
-                _dd_scanned += 1
-                if _i80_ok_dd:
-                    _dd_swap_pool.pop(_dd_ci)
-                    _dd_found = True
+        for _dd_thin_idx in _dd_thin_indices:
+            _dd_old_title = str(getattr(_selected[_dd_thin_idx], "title", "") or "")[:60]
+            _dd_old_item = _selected[_dd_thin_idx]
+            if _is_daily:
+                _i80_inv_dd = _i80_invariant_snapshot(_selected)
+                _dd_scanned = 0
+                for _dd_ci in range(len(_dd_swap_pool)):
+                    _dd_cand = _dd_swap_pool[_dd_ci]
+                    _selected[_dd_thin_idx] = _dd_cand
+                    _i80_post_dd = _i80_invariant_snapshot(_selected)
+                    _i80_ok_dd, _i80_reg_dd = _i80_no_regression(_i80_inv_dd, _i80_post_dd)
+                    # iter81: relaxed — accept if all regressed invariants were already failing
+                    if not _i80_ok_dd:
+                        _i80_ok_dd = all(not _i80_inv_dd[k] for k in _i80_reg_dd)
+                    # iter81: cap-deferrable — tc_cap/gr_cap/max_domain can be fixed by later phases
+                    if not _i80_ok_dd:
+                        _i80_ok_dd = all(
+                            (not _i80_inv_dd[k]) or (k in {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain", "max_vendor"})
+                            for k in _i80_reg_dd
+                        )
+                    if not _i80_ok_dd and _dd_scanned <= 3:
+                        _log.info("iter81 dd-swap REJECT[%d]: idx=%d dom=%s reg=%s", _dd_scanned, _dd_thin_idx, _f6_domain_key(_dd_cand), _i80_reg_dd)
+                    _dd_scanned += 1
+                    if _i80_ok_dd:
+                        _dd_swap_pool.pop(_dd_ci)
+                        _dd_found = True
+                        break
+                    _selected[_dd_thin_idx] = _dd_old_item
+                if _dd_found:
                     break
-                _selected[_dd_thin_idx] = _dd_old_item
-            if not _dd_found:
-                _log.warning("iter80: density swap round %d — no safe candidate in pool (scanned %d)", _dd_round + 1, _dd_scanned)
+                _log.info("iter81: density swap round %d idx=%d — no safe candidate (scanned %d), trying next thin", _dd_round + 1, _dd_thin_idx, _dd_scanned)
+            else:
+                _dd_new_item = _dd_swap_pool.pop(0)
+                _selected[_dd_thin_idx] = _dd_new_item
+                _dd_found = True
                 break
-        else:
-            _dd_new_item = _dd_swap_pool.pop(0)
-            _selected[_dd_thin_idx] = _dd_new_item
-            _dd_found = True
         if not _dd_found:
+            _log.warning("iter80: density swap round %d — no safe candidate for any thin event", _dd_round + 1)
             break
         _log.info("FAST_600_MODE: density swap round %d — replaced thin[%d] '%s'",
                   _dd_round + 1, _dd_thin_idx, _dd_old_title)
