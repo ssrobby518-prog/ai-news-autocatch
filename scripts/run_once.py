@@ -11889,7 +11889,7 @@ def _f600_run_fast_path(
             _selected[_thin_idx] = _old_item
             return False, _unresolved
 
-        _scan_cap = min(len(_dd_swap_pool), 60)
+        _scan_cap = min(len(_dd_swap_pool), 24)
         for _ri, _rs in enumerate(_selected):
             if _ri == _thin_idx:
                 continue
