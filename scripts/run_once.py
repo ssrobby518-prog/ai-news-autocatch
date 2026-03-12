@@ -11828,6 +11828,7 @@ def _f600_run_fast_path(
         """iter81b: pre-filter density swap pool — exclude items that violate hard caps.
         TC/GR/platform no longer pre-excluded; invariant snapshot catches them."""
         if _is_daily:
+            if not _f6_is_bigtech(it): return False  # iter83: DAILY_BIGTECH_ONLY requires all bigtech
             if _is_hf_blog_explainer(it): return False
             if _is_forum_discussion(it): return False
             if _is_developer_release(it): return False
