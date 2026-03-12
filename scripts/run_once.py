@@ -12145,6 +12145,249 @@ def _f600_run_fast_path(
         except Exception:
             pass
 
+    # --- iter83: CANONICAL SNAPSHOT — rewrite content_mix.meta.json from FINAL _selected ---
+    # Root cause: content_mix written at line ~11388 BEFORE density swap; selection_audit
+    # rebuilt at line ~12119 AFTER density swap.  This section re-derives ALL content totals
+    # from the definitive post-swap _selected list so both meta files are consistent.
+    _SELECTION_FINALIZED = True  # guard: no _selected mutations past this point
+    if _is_daily:
+        try:
+            _i83_bt_actionable   = sum(1 for s in _selected if _ct71_is_bigtech_actionable(s))
+            _i83_bt_om           = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
+            _i83_rt_total        = sum(1 for s in _selected if _ct71_is_research_tutorial(s))
+            _i83_lp_count        = sum(1 for s in _selected if _is_leadership_politics_ai(s))
+            _i83_china_count     = sum(1 for s in _selected if _is_china_ai_gov(s))
+            _i83_gr_total        = sum(1 for s in _selected if _f6_is_google_research_blog(s))
+            _i83_devrel_total    = sum(1 for s in _selected if _is_developer_release(s))
+            _i83_indie_total     = sum(1 for s in _selected if _is_indie_dev_tone(s))
+            _i83_forum_total     = sum(1 for s in _selected if _is_forum_discussion(s))
+            _i83_tutorial_total  = sum(1 for s in _selected if _is_tutorial_explainer(s))
+            _i83_om_count        = sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media"))
+            _i83_tc_total        = sum(1 for s in _selected if _is_techcrunch(s))
+            _i83_hfbe_total      = sum(1 for s in _selected if _is_hf_blog_explainer(s))
+            _i83_tp_list         = sorted(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s)))
+            _i83_tp_distinct     = len(_i83_tp_list)
+            _i83_usp_count       = sum(1 for s in _selected if _is_us_policy(s))
+            _i83_cnp_count       = sum(1 for s in _selected if _is_china_policy(s))
+            _i83_tc_gr_combined  = _i83_tc_total + _i83_gr_total
+            _i83_role_axes       = sorted(set(_role_axis(s) for s in _selected))
+            _i83_role_distinct   = len(_i83_role_axes)
+            _i83_tc_rumor_total  = sum(1 for s in _selected if _is_techcrunch_rumor_speculation(s))
+            _i83_nsgr_total      = sum(1 for s in _selected if _is_non_strategic_google_research(s))
+            _i83_exec_total      = sum(1 for s in _selected if _is_executive_signal(s))
+            _i83_plat_total      = sum(1 for s in _selected if _is_platform_domain(s))
+            _i83_buckets         = sorted(set(_ct72b_strategic_bucket(s) for s in _selected))
+            _i83_buckets_distinct = len(_i83_buckets)
+
+            # Rebuild per-item data from final _selected
+            _i83_per_item = []
+            for _i83_s in _selected:
+                _i83_sd = _sd72_all_scores.get(id(_i83_s), {})
+                _i83_per_item.append({
+                    "title": str(getattr(_i83_s, "title", "") or "")[:120],
+                    "url": str(getattr(_i83_s, "url", "") or getattr(_i83_s, "link", "") or "")[:200],
+                    "vendor": _f6_vendor_key(_i83_s),
+                    "domain": _f6_domain_key(_i83_s),
+                    "content_type": _ct71_classify(_i83_s),
+                    "strategic_bucket": _ct72b_strategic_bucket(_i83_s),
+                    "source_class": _ct72b_source_class(_i83_s),
+                    "geo_class": _geo_class(_i83_s),
+                    "bigtech_actionable": _ct71_is_bigtech_actionable(_i83_s),
+                    "bigtech_official_media_actionable": _ct72b_is_bigtech_official_media_actionable(_i83_s),
+                    "leadership_politics_ai": _is_leadership_politics_ai(_i83_s),
+                    "china_ai_gov": _is_china_ai_gov(_i83_s),
+                    "is_platform": _is_platform_domain(_i83_s),
+                    "is_research_tutorial": _ct71_is_research_tutorial(_i83_s),
+                    "is_google_research_blog": _f6_is_google_research_blog(_i83_s),
+                    "google_research_item": _f6_is_google_research_blog(_i83_s),
+                    "developer_release_item": _is_developer_release(_i83_s),
+                    "indie_dev_tone_item": _is_indie_dev_tone(_i83_s),
+                    "forum_discussion_item": _is_forum_discussion(_i83_s),
+                    "tutorial_explainer_item": _is_tutorial_explainer(_i83_s),
+                    "techcrunch_item": _is_techcrunch(_i83_s),
+                    "hf_blog_explainer_item": _is_hf_blog_explainer(_i83_s),
+                    "target_player_item": _is_target_player(_i83_s),
+                    "us_policy_item": _is_us_policy(_i83_s),
+                    "china_policy_item": _is_china_policy(_i83_s),
+                    "role_axis": _role_axis(_i83_s),
+                    "techcrunch_rumor_speculation_item": _is_techcrunch_rumor_speculation(_i83_s),
+                    "non_strategic_google_research_item": _is_non_strategic_google_research(_i83_s),
+                    "executive_signal_item": _is_executive_signal(_i83_s),
+                    "strategic_density_score": _i83_sd.get("strategic_density_score", 0),
+                    "strategic_density_floor_pass": _i83_sd.get("strategic_density_score", 0) >= _cm73_sd_floor,
+                })
+
+            # Apply INJECT_ overrides for gate-check values (same as pre-swap section)
+            _i83_plat_check = int(os.environ["INJECT_PLATFORM_DOMAIN_TOTAL"]) if os.environ.get("INJECT_PLATFORM_DOMAIN_TOTAL") else _i83_plat_total
+            _i83_rt_check   = int(os.environ["INJECT_RESEARCH_TUTORIAL_TOTAL"]) if os.environ.get("INJECT_RESEARCH_TUTORIAL_TOTAL") else _i83_rt_total
+            _i83_bom_check  = int(os.environ["INJECT_BIGTECH_OFFICIAL_MEDIA_COUNT"]) if os.environ.get("INJECT_BIGTECH_OFFICIAL_MEDIA_COUNT") else _i83_bt_om
+            _i83_lp_chk     = int(os.environ["INJECT_LEADERSHIP_POLITICS_AI_COUNT"]) if os.environ.get("INJECT_LEADERSHIP_POLITICS_AI_COUNT") else _i83_lp_count
+            _i83_china_chk  = int(os.environ["INJECT_CHINA_AI_GOV_COUNT"]) if os.environ.get("INJECT_CHINA_AI_GOV_COUNT") else _i83_china_count
+            _i83_gr_check   = int(os.environ["INJECT_GOOGLE_RESEARCH_TOTAL"]) if os.environ.get("INJECT_GOOGLE_RESEARCH_TOTAL") else _i83_gr_total
+            _i83_tc_check   = int(os.environ["INJECT_TECHCRUNCH_TOTAL"]) if os.environ.get("INJECT_TECHCRUNCH_TOTAL") else _i83_tc_total
+            _i83_hfbe_chk   = int(os.environ["INJECT_HF_BLOG_EXPLAINER_TOTAL"]) if os.environ.get("INJECT_HF_BLOG_EXPLAINER_TOTAL") else _i83_hfbe_total
+            _i83_tp_chk     = int(os.environ["INJECT_TARGET_PLAYER_DISTINCT"]) if os.environ.get("INJECT_TARGET_PLAYER_DISTINCT") else _i83_tp_distinct
+            _i83_usp_chk    = int(os.environ["INJECT_US_POLICY_COUNT"]) if os.environ.get("INJECT_US_POLICY_COUNT") else _i83_usp_count
+            _i83_cnp_chk    = int(os.environ["INJECT_CHINA_POLICY_COUNT"]) if os.environ.get("INJECT_CHINA_POLICY_COUNT") else _i83_cnp_count
+            _i83_tcgr_chk   = int(os.environ["INJECT_TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_TOTAL"]) if os.environ.get("INJECT_TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_TOTAL") else _i83_tc_gr_combined
+            _i83_role_chk   = int(os.environ["INJECT_ROLE_AXES_DISTINCT"]) if os.environ.get("INJECT_ROLE_AXES_DISTINCT") else _i83_role_distinct
+            _i83_tcr_chk    = int(os.environ["INJECT_TECHCRUNCH_RUMOR_SPECULATION_TOTAL"]) if os.environ.get("INJECT_TECHCRUNCH_RUMOR_SPECULATION_TOTAL") else _i83_tc_rumor_total
+            _i83_nsgr_chk   = int(os.environ["INJECT_NON_STRATEGIC_GOOGLE_RESEARCH_TOTAL"]) if os.environ.get("INJECT_NON_STRATEGIC_GOOGLE_RESEARCH_TOTAL") else _i83_nsgr_total
+            _i83_exec_chk   = int(os.environ["INJECT_EXECUTIVE_SIGNAL_TOTAL"]) if os.environ.get("INJECT_EXECUTIVE_SIGNAL_TOTAL") else _i83_exec_total
+            _i83_devrel_chk = int(os.environ["INJECT_DEVELOPER_RELEASE_TOTAL"]) if os.environ.get("INJECT_DEVELOPER_RELEASE_TOTAL") else _i83_devrel_total
+            _i83_indie_chk  = int(os.environ["INJECT_INDIE_DEV_TONE_TOTAL"]) if os.environ.get("INJECT_INDIE_DEV_TONE_TOTAL") else _i83_indie_total
+            _i83_forum_chk  = int(os.environ["INJECT_FORUM_DISCUSSION_TOTAL"]) if os.environ.get("INJECT_FORUM_DISCUSSION_TOTAL") else _i83_forum_total
+            _i83_tut_chk    = int(os.environ["INJECT_TUTORIAL_EXPLAINER_TOTAL"]) if os.environ.get("INJECT_TUTORIAL_EXPLAINER_TOTAL") else _i83_tutorial_total
+
+            # Recompute gate pass/fail from canonical values
+            _i83_cm_path = _outputs / "content_mix.meta.json"
+            _i83_cm = {
+                "run_id": _run_id,
+                "canonical_snapshot": True,
+                "selected_events": len(_selected),
+                "total_events_min": 10,
+                "total_events_pass": len(_selected) >= 10,
+                "bigtech_actionable_count": _i83_bt_actionable,
+                "bigtech_actionable_min": 7,
+                "bigtech_actionable_min_pass": _i83_bt_actionable >= 7,
+                "bigtech_official_media_count": _i83_bom_check,
+                "bigtech_official_media_min": 8,
+                "bigtech_official_media_min_pass": _i83_bom_check >= 8,
+                "leadership_politics_ai_count": _i83_lp_chk,
+                "leadership_politics_ai_min": 2,
+                "leadership_politics_ai_min_pass": _i83_lp_chk >= 2,
+                "china_ai_gov_count": _i83_china_chk,
+                "china_ai_gov_min": 1,
+                "china_ai_gov_min_pass": _i83_china_chk >= 1,
+                "platform_total": _i83_plat_check,
+                "platform_cap": _pdc_effective_cap,
+                "platform_cap_pass": _i83_plat_check <= _pdc_effective_cap,
+                "research_tutorial_total": _i83_rt_check,
+                "research_tutorial_cap": 1,
+                "research_tutorial_cap_pass": _i83_rt_check <= 1,
+                "google_research_total": _i83_gr_check,
+                "google_research_cap": _GOOGLE_RESEARCH_CAP,
+                "google_research_cap_pass": _i83_gr_check <= _GOOGLE_RESEARCH_CAP,
+                "google_research_target_band": "2-3",
+                "google_research_target_soft_hit": (2 <= _i83_gr_check <= 3),
+                "developer_release_total": _i83_devrel_chk,
+                "developer_release_cap": 0,
+                "developer_release_cap_pass": _i83_devrel_chk <= 0,
+                "indie_dev_tone_total": _i83_indie_chk,
+                "indie_dev_tone_cap": 0,
+                "indie_dev_tone_cap_pass": _i83_indie_chk <= 0,
+                "forum_discussion_total": _i83_forum_chk,
+                "forum_discussion_cap": 0,
+                "forum_discussion_cap_pass": _i83_forum_chk <= 0,
+                "tutorial_explainer_total": _i83_tut_chk,
+                "tutorial_explainer_cap": 0,
+                "tutorial_explainer_cap_pass": _i83_tut_chk <= 0,
+                "techcrunch_total": _i83_tc_check,
+                "techcrunch_cap": _TECHCRUNCH_CAP,
+                "techcrunch_cap_pass": _i83_tc_check <= _TECHCRUNCH_CAP,
+                "techcrunch_google_research_total": _i83_tcgr_chk,
+                "techcrunch_google_research_combined_cap": _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP,
+                "techcrunch_google_research_combined_cap_pass": _i83_tcgr_chk <= _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP,
+                "hf_blog_explainer_total": _i83_hfbe_chk,
+                "hf_blog_explainer_cap": _HF_BLOG_EXPLAINER_CAP,
+                "hf_blog_explainer_cap_pass": _i83_hfbe_chk <= _HF_BLOG_EXPLAINER_CAP,
+                "techcrunch_rumor_speculation_total": _i83_tcr_chk,
+                "techcrunch_rumor_speculation_cap": _TECHCRUNCH_RUMOR_SPEC_CAP,
+                "techcrunch_rumor_speculation_cap_pass": _i83_tcr_chk <= _TECHCRUNCH_RUMOR_SPEC_CAP,
+                "non_strategic_google_research_total": _i83_nsgr_chk,
+                "non_strategic_google_research_cap": _NON_STRATEGIC_GR_CAP,
+                "non_strategic_google_research_cap_pass": _i83_nsgr_chk <= _NON_STRATEGIC_GR_CAP,
+                "executive_signal_total": _i83_exec_chk,
+                "target_player_distinct": _i83_tp_chk,
+                "target_players": _i83_tp_list,
+                "target_player_coverage_min": 6,
+                "target_player_coverage_pass": _i83_tp_chk >= 6,
+                "us_policy_count": _i83_usp_chk,
+                "china_policy_count": _i83_cnp_chk,
+                "us_china_policy_min": 2,
+                "us_china_policy_min_pass": (_i83_usp_chk + _i83_cnp_chk) >= 2 and _i83_cnp_chk >= 1,
+                "official_media_count": _i83_om_count,
+                "selected_strategic_buckets": _i83_buckets,
+                "selected_strategic_buckets_distinct": _i83_buckets_distinct,
+                "strategic_bucket_coverage_min": 5,
+                "strategic_bucket_coverage_pass": _i83_buckets_distinct >= 5,
+                "per_item_strategic_density_floor": _cm73_sd_floor,
+                "per_item_strategic_density_pass": _cm73_per_item_sd_pass,
+                "per_item_strategic_density_failures": _cm73_per_item_sd_failures,
+                "selected_role_axes": _i83_role_axes,
+                "selected_role_axes_distinct": _i83_role_chk,
+                "role_diversity_min": _ROLE_DIVERSITY_MIN,
+                "role_diversity_pass": _i83_role_chk >= _ROLE_DIVERSITY_MIN,
+                "bucket_rescue_attempts": _p6c_rescue_attempts if _is_daily else 0,
+                "bucket_rescue_successes": _p6c_rescue_successes if _is_daily else 0,
+                "strategic_bucket_per_item": [p["strategic_bucket"] for p in _i83_per_item],
+                "content_type_per_item": [p["content_type"] for p in _i83_per_item],
+                "source_class_per_item": [p["source_class"] for p in _i83_per_item],
+                "geo_class_per_item": [p["geo_class"] for p in _i83_per_item],
+                "selected_content_types": _i83_per_item,
+            }
+
+            # Carry forward injection flags from env
+            for _i83_ik, _i83_iv in [
+                ("INJECT_RESEARCH_TUTORIAL_TOTAL", "research_tutorial_test_injected"),
+                ("INJECT_PLATFORM_DOMAIN_TOTAL", "platform_test_injected"),
+                ("INJECT_BIGTECH_OFFICIAL_MEDIA_COUNT", "bigtech_official_media_test_injected"),
+                ("INJECT_LEADERSHIP_POLITICS_AI_COUNT", "leadership_politics_ai_test_injected"),
+                ("INJECT_CHINA_AI_GOV_COUNT", "china_ai_gov_test_injected"),
+                ("INJECT_GOOGLE_RESEARCH_TOTAL", "google_research_test_injected"),
+                ("INJECT_DEVELOPER_RELEASE_TOTAL", "developer_release_test_injected"),
+                ("INJECT_INDIE_DEV_TONE_TOTAL", "indie_dev_tone_test_injected"),
+                ("INJECT_FORUM_DISCUSSION_TOTAL", "forum_discussion_test_injected"),
+                ("INJECT_TUTORIAL_EXPLAINER_TOTAL", "tutorial_explainer_test_injected"),
+                ("INJECT_TECHCRUNCH_TOTAL", "techcrunch_test_injected"),
+                ("INJECT_HF_BLOG_EXPLAINER_TOTAL", "hf_blog_explainer_test_injected"),
+                ("INJECT_TARGET_PLAYER_DISTINCT", "target_player_test_injected"),
+                ("INJECT_US_POLICY_COUNT", "us_policy_test_injected"),
+                ("INJECT_CHINA_POLICY_COUNT", "china_policy_test_injected"),
+                ("INJECT_TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_TOTAL", "techcrunch_google_research_combined_test_injected"),
+                ("INJECT_ROLE_AXES_DISTINCT", "role_diversity_test_injected"),
+                ("INJECT_TECHCRUNCH_RUMOR_SPECULATION_TOTAL", "techcrunch_rumor_speculation_test_injected"),
+                ("INJECT_NON_STRATEGIC_GOOGLE_RESEARCH_TOTAL", "non_strategic_google_research_test_injected"),
+                ("INJECT_EXECUTIVE_SIGNAL_TOTAL", "executive_signal_test_injected"),
+            ]:
+                _i83_env_val = os.environ.get(_i83_ik, "")
+                if _i83_env_val:
+                    _i83_cm[_i83_iv] = True
+                    _i83_cm[f"injected_{_i83_iv.replace('_test_injected', '')}_{'count' if 'count' in _i83_ik.lower() else 'total'}"] = _i83_env_val
+
+            _i83_cm_path.write_text(_f6_j.dumps(_i83_cm, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            # Also patch selection_audit.meta.json with canonical content totals
+            _i83_sa_path = _outputs / "selection_audit.meta.json"
+            if _i83_sa_path.exists():
+                _i83_sa = _f6_j.loads(_i83_sa_path.read_text(encoding="utf-8"))
+                _i83_sa["canonical_snapshot"] = True
+                _i83_sa["forum_discussion_total"] = _i83_forum_total
+                _i83_sa["developer_release_total"] = _i83_devrel_total
+                _i83_sa["indie_dev_tone_total"] = _i83_indie_total
+                _i83_sa["tutorial_explainer_total"] = _i83_tutorial_total
+                _i83_sa["google_research_total"] = _i83_gr_total
+                _i83_sa["official_media_count"] = _i83_om_count
+                _i83_sa["techcrunch_total"] = _i83_tc_total
+                _i83_sa["hf_blog_explainer_total"] = _i83_hfbe_total
+                _i83_sa["target_player_distinct"] = _i83_tp_distinct
+                _i83_sa["target_players"] = _i83_tp_list
+                _i83_sa["us_policy_count"] = _i83_usp_count
+                _i83_sa["china_policy_count"] = _i83_cnp_count
+                _i83_sa["techcrunch_google_research_total"] = _i83_tc_gr_combined
+                _i83_sa["selected_role_axes_distinct"] = _i83_role_distinct
+                _i83_sa["techcrunch_rumor_speculation_total"] = _i83_tc_rumor_total
+                _i83_sa["non_strategic_google_research_total"] = _i83_nsgr_total
+                _i83_sa["executive_signal_total"] = _i83_exec_total
+                _i83_sa_path.write_text(_f6_j.dumps(_i83_sa, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            _log.info("iter83 CANONICAL SNAPSHOT FINALIZED: events=%d bt_act=%d bom=%d tc=%d gr=%d doms=%d tp=%d buckets=%d roles=%d",
+                      len(_selected), _i83_bt_actionable, _i83_bt_om, _i83_tc_total, _i83_gr_total,
+                      len(dict(_DivCounter(_f6_domain_key(s) for s in _selected))),
+                      _i83_tp_distinct, _i83_buckets_distinct, _i83_role_distinct)
+        except Exception as _i83_exc:
+            _log.warning("iter83 canonical snapshot rebuild failed: %s", _i83_exc)
+
     # --- Step 7: translate digest → latest_brief.md (iter40: singleflight + hard timeout) ---
     _tfd_endpoint = os.environ.get("LLAMA_HOST", "http://127.0.0.1:8080")
     _tfd_model = "unknown"

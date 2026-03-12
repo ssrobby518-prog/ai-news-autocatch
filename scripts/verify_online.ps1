@@ -5285,6 +5285,8 @@ if ($_fast300Daily) {
             $_cmRtTotal   = if ($_cmMeta.PSObject.Properties['research_tutorial_total']) { [int]$_cmMeta.research_tutorial_total } else { 0 }
             $_cmRtPass    = if ($_cmMeta.PSObject.Properties['research_tutorial_cap_pass']) { $_cmMeta.research_tutorial_cap_pass } else { $false }
             $_cmSelEvents = if ($_cmMeta.PSObject.Properties['selected_events']) { [int]$_cmMeta.selected_events } else { 0 }
+            $_cmCanonical = if ($_cmMeta.PSObject.Properties['canonical_snapshot']) { $_cmMeta.canonical_snapshot } else { $false }
+            Write-Output ("  canonical_snapshot          : {0}" -f $_cmCanonical)
             Write-Output ("  selected_events             : {0}" -f $_cmSelEvents)
             Write-Output ("  bigtech_actionable_count    : {0}" -f $_cmBtAct)
             Write-Output ("  bigtech_actionable_pass     : {0}" -f $_cmBtActPass)
