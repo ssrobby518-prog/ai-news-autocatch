@@ -9488,17 +9488,25 @@ def _f600_run_fast_path(
             _overlap_items = [(i, h) for i, h in enumerate(_cur_hashes) if h and h in _prev_ids]
             _overlap_count = len(_overlap_items)
             if _overlap_count > 2:
+                # iter81b: also require fulltext >= 300 chars to avoid introducing thin digest items
                 _backup_pool_all = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
                                 and not _f6_is_google_research_blog(it)
                                 and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
-                                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+                                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                                and len(str(getattr(it, 'full_text', '') or getattr(it, 'body', '') or '')) >= 300]
                 # iter69b: prefer non-overlap replacements (items NOT in prev daily)
                 _backup_nonoverlap = [it for it in _backup_pool_all if _item_hash(it) not in _prev_ids]
                 _backup_overlap = [it for it in _backup_pool_all if _item_hash(it) in _prev_ids]
                 _backup_nonoverlap.sort(key=_f6_sort_key, reverse=True)
                 _backup_overlap.sort(key=_f6_sort_key, reverse=True)
                 _backup_pool = _backup_nonoverlap + _backup_overlap
-                for _oi, _oh in sorted(_overlap_items[2:], key=lambda x: _f6_bfp(_selected[x[0]])):
+                # iter81b: try removing ANY overlap item (sorted by lowest score first)
+                # Previously only tried _overlap_items[2:] — now tries ALL, stops when enough removed
+                _need_dedup_remove = _overlap_count - 2
+                _dedup_removed_count = 0
+                for _oi, _oh in sorted(_overlap_items, key=lambda x: _f6_bfp(_selected[x[0]])):
+                    if _dedup_removed_count >= _need_dedup_remove:
+                        break
                     if not _backup_pool:
                         break
                     # iter68: pick replacement that respects diversity constraints
@@ -9528,29 +9536,42 @@ def _f600_run_fast_path(
                             _selected[_oi] = _bp_cand
                             _backup_pool.pop(_bp_idx)
                             _replacements_made += 1
+                            _dedup_removed_count += 1
                             _dedup_replaced = True
                             break
                     if not _dedup_replaced:
-                        # iter74: skip fallback replacement if it would break BOMA count
-                        if _old_is_boma and _cur_boma <= 7 and _backup_pool and not _ct72b_is_bigtech_official_media_actionable(_backup_pool[0]):
-                            continue
-                        # iter80: fallback replacement must also preserve invariants
-                        if _backup_pool:
-                            _repl = _backup_pool[0]
-                            _test_fb = [s if j != _oi else _repl for j, s in enumerate(_selected)]
+                        # iter81b: try ALL backup pool candidates (not just first)
+                        _dedup_fb_done = False
+                        for _fb_ci, _fb_cand in enumerate(_backup_pool):
+                            # iter74: skip if replacing BOMA item with non-BOMA and count would drop
+                            if _old_is_boma and not _ct72b_is_bigtech_official_media_actionable(_fb_cand) and _cur_boma <= 7:
+                                continue
+                            _test_fb = [s if j != _oi else _fb_cand for j, s in enumerate(_selected)]
                             _fb_plat_ok = sum(1 for s in _test_fb if _is_platform_domain(s)) <= _PLATFORM_CAP
                             _fb_buck_ok = len(set(_ct72b_strategic_bucket(s) for s in _test_fb)) >= min(len(set(_ct72b_strategic_bucket(s) for s in _selected)), 5)
                             _fb_role_ok = len(set(_role_axis(s) for s in _test_fb)) >= min(len(set(_role_axis(s) for s in _selected)), _ROLE_DIVERSITY_MIN)
                             _fb_om_ok = sum(1 for s in _test_fb if _ct72b_source_class(s) in ("official", "media")) >= min(sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")), 8)
                             _fb_tc_ok = sum(1 for s in _test_fb if _is_techcrunch(s)) <= _TECHCRUNCH_CAP
                             _fb_gr_ok = sum(1 for s in _test_fb if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
-                            _fb_devrel_ok = not _is_developer_release(_repl) and not _is_indie_dev_tone(_repl) and not _is_forum_discussion(_repl) and not _is_tutorial_explainer(_repl) and not _is_hf_blog_explainer(_repl) and not _is_ceo_prohibited(_repl)
+                            _fb_devrel_ok = not _is_developer_release(_fb_cand) and not _is_indie_dev_tone(_fb_cand) and not _is_forum_discussion(_fb_cand) and not _is_tutorial_explainer(_fb_cand) and not _is_hf_blog_explainer(_fb_cand) and not _is_ceo_prohibited(_fb_cand)
                             if _fb_plat_ok and _fb_buck_ok and _fb_role_ok and _fb_om_ok and _fb_tc_ok and _fb_gr_ok and _fb_devrel_ok:
-                                _backup_pool.pop(0)
-                                _selected[_oi] = _repl
+                                _backup_pool.pop(_fb_ci)
+                                _selected[_oi] = _fb_cand
                                 _replacements_made += 1
-                            else:
-                                _log.info("iter80: dedup fallback replacement rejected (plat=%s buck=%s role=%s om=%s tc=%s gr=%s)", _fb_plat_ok, _fb_buck_ok, _fb_role_ok, _fb_om_ok, _fb_tc_ok, _fb_gr_ok)
+                                _dedup_removed_count += 1
+                                _dedup_fb_done = True
+                                break
+                        if not _dedup_fb_done and _backup_pool:
+                            _repl0 = _backup_pool[0]
+                            _test_fb0 = [s if j != _oi else _repl0 for j, s in enumerate(_selected)]
+                            _log.info("iter81b: dedup fallback exhausted pool=%d (plat=%s buck=%s role=%s om=%s tc=%s gr=%s)",
+                                      len(_backup_pool),
+                                      sum(1 for s in _test_fb0 if _is_platform_domain(s)) <= _PLATFORM_CAP,
+                                      len(set(_ct72b_strategic_bucket(s) for s in _test_fb0)) >= min(len(set(_ct72b_strategic_bucket(s) for s in _selected)), 5),
+                                      len(set(_role_axis(s) for s in _test_fb0)) >= min(len(set(_role_axis(s) for s in _selected)), _ROLE_DIVERSITY_MIN),
+                                      sum(1 for s in _test_fb0 if _ct72b_source_class(s) in ("official", "media")) >= min(sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")), 8),
+                                      sum(1 for s in _test_fb0 if _is_techcrunch(s)) <= _TECHCRUNCH_CAP,
+                                      sum(1 for s in _test_fb0 if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP)
                 _cur_hashes = [_item_hash(it) for it in _selected]
                 _overlap_count = sum(1 for h in _cur_hashes if h and h in _prev_ids)
             # iter76: only fail on overlap if dup gate is enabled (scheduled_task only)
@@ -9671,14 +9692,25 @@ def _f600_run_fast_path(
                 elif _ven_items2:
                     _worst_idx2, _worst_it2 = min(_ven_items2, key=lambda x: _f6_bfp(x[1]))
             elif _dist_doms2 < _DIV_MIN_DOMAINS or _dist_vens2 < _DIV_MIN_VENDORS:
-                _worst_dom2 = _d_counts2.most_common(1)[0][0]
-                _dom_items2 = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _worst_dom2]
-                if len(_dom_items2) > 1:
-                    _safe_dom_items2b = [(i, s) for i, s in _dom_items2 if _div2_safe_to_remove(s)]
-                    if _safe_dom_items2b:
-                        _worst_idx2, _worst_it2 = min(_safe_dom_items2b, key=lambda x: _f6_bfp(x[1]))
-                    else:
-                        _worst_idx2, _worst_it2 = min(_dom_items2, key=lambda x: _f6_bfp(x[1]))
+                # iter81c: try ALL over-concentrated domains (not just worst)
+                for _wdom2_name, _wdom2_cnt in _d_counts2.most_common():
+                    if _wdom2_cnt <= 1:
+                        break
+                    _dom_items2 = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _wdom2_name]
+                    if len(_dom_items2) > 1:
+                        _safe_dom_items2b = [(i, s) for i, s in _dom_items2 if _div2_safe_to_remove(s)]
+                        if _safe_dom_items2b:
+                            _worst_idx2, _worst_it2 = min(_safe_dom_items2b, key=lambda x: _f6_bfp(x[1]))
+                            break
+                        # unsafe from this domain — try next domain before falling back
+                        continue
+                    # domain count=1, can't reduce — try next
+                if _worst_it2 is None:
+                    # fallback: pick from most-concentrated even if unsafe
+                    _fb_dom2 = _d_counts2.most_common(1)[0][0]
+                    _fb_dom_items2 = [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _fb_dom2]
+                    if len(_fb_dom_items2) > 1:
+                        _worst_idx2, _worst_it2 = min(_fb_dom_items2, key=lambda x: _f6_bfp(x[1]))
             if _worst_it2 is None or _worst_idx2 < 0:
                 break
             _repl_found2 = False
@@ -10522,53 +10554,56 @@ def _f600_run_fast_path(
                     break
                 if not _i80b_pool:
                     break
-                # Find item from most-concentrated domain to replace
-                _i80b_worst_dom = _i80b_dc.most_common(1)[0][0]
-                _i80b_dom_count = _i80b_dc.most_common(1)[0][1]
-                if _i80b_dom_count <= 1:
-                    break  # can't reduce further
-                # iter81: try ALL items from worst domain (not just lowest-priority)
-                _i80b_dom_items = sorted(
-                    [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _i80b_worst_dom],
-                    key=lambda x: _f6_bfp(x[1])
-                )
+                # iter81c: try ALL over-concentrated domains (not just worst)
+                # When the worst domain's items all fail target_player checks,
+                # try next-worst domain (e.g. aws.amazon.com where Amazon has 3 items)
+                _i80b_vc_cur = _DivCounter(_f6_vendor_key(s) for s in _selected)
                 _i80b_swapped = False
-                for _i80b_dom_idx, _i80b_dom_it in _i80b_dom_items:
+                for _i80b_worst_dom, _i80b_dom_count in _i80b_dc.most_common():
+                    if _i80b_dom_count <= 1:
+                        break  # no more over-concentrated domains
                     if _i80b_swapped:
                         break
-                    for _i80b_ci, _i80b_cand in enumerate(_i80b_pool):
-                        _i80b_cdom = _f6_domain_key(_i80b_cand)
-                        if _i80b_cdom == _i80b_worst_dom:
-                            continue
-                        if _i80b_cdom in _i80b_cur_doms:
-                            continue  # must be NEW domain
-                        _i80b_test = [s if j != _i80b_dom_idx else _i80b_cand for j, s in enumerate(_selected)]
-                        _i80b_inv_b = _i80_invariant_snapshot(_selected)
-                        _i80b_inv_a = _i80_invariant_snapshot(_i80b_test)
-                        _i80b_ok, _i80b_reg = _i80_no_regression(_i80b_inv_b, _i80b_inv_a)
-                        if not _i80b_ok:
-                            # Relaxed: accept if all regressed invariants were already failing
-                            _i80b_ok = all(not _i80b_inv_b[k] for k in _i80b_reg)
-                        # iter81: cap-deferrable logic for domain diversity
-                        if not _i80b_ok:
-                            _i80b_ok = all(
-                                (not _i80b_inv_b[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined"})
-                                for k in _i80b_reg
-                            )
-                        if _i80b_ok:
-                            _log.info("iter80b domain diversity: replaced '%s'[%d] with '%s' (new domain)",
-                                      _i80b_worst_dom, _i80b_dom_idx, _i80b_cdom)
-                            _selected[_i80b_dom_idx] = _i80b_cand
-                            _i80b_pool.pop(_i80b_ci)
-                            _i80b_cur_doms = set(_f6_domain_key(s) for s in _selected)
-                            _i80b_changed = True
-                            _i80b_swapped = True
+                    _i80b_dom_items = sorted(
+                        [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _i80b_worst_dom],
+                        key=lambda x: (-_i80b_vc_cur.get(_f6_vendor_key(x[1]), 0), _f6_bfp(x[1]))
+                    )
+                    for _i80b_dom_idx, _i80b_dom_it in _i80b_dom_items:
+                        if _i80b_swapped:
                             break
-                        else:
-                            if _i80b_ci < 3:  # log first few rejections for diagnostics
-                                _log.info("iter81 i80b REJECT: dom=%s reg=%s before={%s}",
-                                          _i80b_cdom, _i80b_reg,
-                                          {k: v for k, v in _i80b_inv_b.items() if not v or k in (_i80b_reg or [])})
+                        for _i80b_ci, _i80b_cand in enumerate(_i80b_pool):
+                            _i80b_cdom = _f6_domain_key(_i80b_cand)
+                            if _i80b_cdom == _i80b_worst_dom:
+                                continue
+                            if _i80b_cdom in _i80b_cur_doms:
+                                continue  # must be NEW domain
+                            _i80b_test = [s if j != _i80b_dom_idx else _i80b_cand for j, s in enumerate(_selected)]
+                            _i80b_inv_b = _i80_invariant_snapshot(_selected)
+                            _i80b_inv_a = _i80_invariant_snapshot(_i80b_test)
+                            _i80b_ok, _i80b_reg = _i80_no_regression(_i80b_inv_b, _i80b_inv_a)
+                            if not _i80b_ok:
+                                # Relaxed: accept if all regressed invariants were already failing
+                                _i80b_ok = all(not _i80b_inv_b[k] for k in _i80b_reg)
+                            # iter81: cap-deferrable logic for domain diversity
+                            if not _i80b_ok:
+                                _i80b_ok = all(
+                                    (not _i80b_inv_b[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined"})
+                                    for k in _i80b_reg
+                                )
+                            if _i80b_ok:
+                                _log.info("iter80b domain diversity: replaced '%s'[%d] with '%s' (new domain)",
+                                          _i80b_worst_dom, _i80b_dom_idx, _i80b_cdom)
+                                _selected[_i80b_dom_idx] = _i80b_cand
+                                _i80b_pool.pop(_i80b_ci)
+                                _i80b_cur_doms = set(_f6_domain_key(s) for s in _selected)
+                                _i80b_changed = True
+                                _i80b_swapped = True
+                                break
+                            else:
+                                if _i80b_ci < 3:  # log first few rejections for diagnostics
+                                    _log.info("iter81c i80b REJECT: try_dom=%s cand_dom=%s reg=%s before={%s}",
+                                              _i80b_worst_dom, _i80b_cdom, _i80b_reg,
+                                              {k: v for k, v in _i80b_inv_b.items() if not v or k in (_i80b_reg or [])})
                 if not _i80b_swapped:
                     _log.warning("iter80b domain diversity: stuck at dist_doms=%d", _i80b_dist)
                     break
@@ -11641,11 +11676,9 @@ def _f600_run_fast_path(
     # If thin events exist, swap them with denser candidates (up to 2 rounds).
     # Use index-based matching: events in digest meta are in same order as _selected.
     def _i80_dd_pool_ok(it):
-        """iter80: pre-filter density swap pool — exclude items that violate any hard cap."""
+        """iter81b: pre-filter density swap pool — exclude items that violate hard caps.
+        TC/GR/platform no longer pre-excluded; invariant snapshot catches them."""
         if _is_daily:
-            if _f6_is_google_research_blog(it): return False
-            if _is_techcrunch(it): return False
-            if _is_platform_domain(it): return False
             if _is_hf_blog_explainer(it): return False
             if _is_forum_discussion(it): return False
             if _is_developer_release(it): return False
@@ -11659,6 +11692,10 @@ def _f600_run_fast_path(
                       and _i80_dd_pool_ok(it)]
     _dd_swap_pool += [it for it in _f6_tier(300) if it not in _selected and it not in _dd_swap_pool
                       and _i80_dd_pool_ok(it)]  # iter42: wider fallback
+    # iter81b: last-resort pool — bigtech items with any fulltext
+    _dd_swap_pool += [it for it in raw_items if it not in _selected and it not in _dd_swap_pool
+                      and _i80_dd_pool_ok(it) and _f6_is_bigtech(it)
+                      and len(str(getattr(it, 'full_text', '') or getattr(it, 'body', '') or '')) >= 100]
     for _dd_round in range(10):  # iter80: allow up to 10 density swap rounds (was 5)
         if _dd_ok or not _dd_meta.get("thin_events_count"):
             break
@@ -11678,6 +11715,19 @@ def _f600_run_fast_path(
             _dd_old_item = _selected[_dd_thin_idx]
             if _is_daily:
                 _i80_inv_dd = _i80_invariant_snapshot(_selected)
+                # iter81c: diagnostic — show thin item details
+                _dd_thin_dom = _f6_domain_key(_dd_old_item)
+                _dd_thin_ven = _f6_vendor_key(_dd_old_item)
+                _dd_thin_ft = len(str(getattr(_dd_old_item, 'full_text', '') or getattr(_dd_old_item, 'body', '') or ''))
+                _dd_thin_tp = _is_target_player(_dd_old_item)
+                _log.info("iter81c dd-thin-diag idx=%d dom=%s ven=%s ft=%d tp=%s inv={%s}",
+                          _dd_thin_idx, _dd_thin_dom, _dd_thin_ven, _dd_thin_ft, _dd_thin_tp,
+                          {k: v for k, v in _i80_inv_dd.items() if not v})
+                # iter81c: sort pool — same-domain+long-fulltext first, then longest fulltext overall
+                # (same-domain with short fulltext will still produce thin digest, so prefer long fulltext)
+                _dd_swap_pool.sort(key=lambda it: (
+                    0 if _f6_domain_key(it) == _dd_thin_dom and int(getattr(it, "fulltext_len", 0) or 0) >= 800 else 1,
+                    -int(getattr(it, "fulltext_len", 0) or 0)))
                 _dd_scanned = 0
                 for _dd_ci in range(len(_dd_swap_pool)):
                     _dd_cand = _dd_swap_pool[_dd_ci]
@@ -11687,10 +11737,12 @@ def _f600_run_fast_path(
                     # iter81: relaxed — accept if all regressed invariants were already failing
                     if not _i80_ok_dd:
                         _i80_ok_dd = all(not _i80_inv_dd[k] for k in _i80_reg_dd)
-                    # iter81: cap-deferrable — tc_cap/gr_cap/max_domain can be fixed by later phases
+                    # iter81c: cap-deferrable — min_domains fixable by post-density domain rescue
+                    _DD_DEFERRABLE = {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain", "max_vendor",
+                                      "min_domains"}
                     if not _i80_ok_dd:
                         _i80_ok_dd = all(
-                            (not _i80_inv_dd[k]) or (k in {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain", "max_vendor"})
+                            (not _i80_inv_dd[k]) or (k in _DD_DEFERRABLE)
                             for k in _i80_reg_dd
                         )
                     if not _i80_ok_dd and _dd_scanned <= 3:
@@ -11710,8 +11762,79 @@ def _f600_run_fast_path(
                 _dd_found = True
                 break
         if not _dd_found:
-            _log.warning("iter80: density swap round %d — no safe candidate for any thin event", _dd_round + 1)
-            break
+            # iter81c: coordinated 2-item swap — replace thin item with thick non-TP,
+            # then find a thick TP item for another position to restore coverage
+            _dd_coord_done = False
+            for _dd_thin_idx2 in _dd_thin_indices:
+                if _dd_coord_done:
+                    break
+                _dd_old2 = _selected[_dd_thin_idx2]
+                _dd_thin_ven2 = _f6_vendor_key(_dd_old2)
+                _dd_thin_tp2 = _is_target_player(_dd_old2)
+                if not _dd_thin_tp2:
+                    continue  # only needed when thin item IS a target player
+                # Step 1: find a thick non-TP candidate (allow target_player regression)
+                for _dd_c1i, _dd_c1 in enumerate(_dd_swap_pool):
+                    _selected[_dd_thin_idx2] = _dd_c1
+                    _inv_a1 = _i80_invariant_snapshot(_selected)
+                    _inv_b1 = _i80_invariant_snapshot([_dd_old2 if j == _dd_thin_idx2 else s for j, s in enumerate(_selected)])
+                    # Allow only target_player regression (must pass everything else)
+                    _reg1 = [k for k in _inv_b1 if _inv_b1[k] and not _inv_a1[k]]
+                    _ok1 = all(k in {"target_player"} | _DD_DEFERRABLE for k in _reg1) if _reg1 else True
+                    if not _ok1:
+                        _selected[_dd_thin_idx2] = _dd_old2
+                        continue
+                    if "target_player" not in _reg1:
+                        # No TP regression — accept directly
+                        _dd_swap_pool.pop(_dd_c1i)
+                        _dd_found = True
+                        _dd_coord_done = True
+                        _log.info("iter81c density coord-swap: replaced thin[%d] (no TP regression)", _dd_thin_idx2)
+                        break
+                    # Step 2: find a thick TP item from the missing vendor to add
+                    _missing_ven = _dd_thin_ven2
+                    _dd_coord_ok = False
+                    for _dd_ri, _dd_rs in enumerate(_selected):
+                        if _dd_ri == _dd_thin_idx2:
+                            continue
+                        if _is_target_player(_dd_rs):
+                            continue  # don't replace another TP
+                        _dd_rs_ven = _f6_vendor_key(_dd_rs)
+                        # Find a thick TP item from _missing_ven to put here
+                        for _dd_c2i, _dd_c2 in enumerate(_dd_swap_pool):
+                            if _dd_c2i == _dd_c1i:
+                                continue
+                            if _f6_vendor_key(_dd_c2) != _missing_ven:
+                                continue
+                            if not _is_target_player(_dd_c2):
+                                continue
+                            _dd_c2_ft = len(str(getattr(_dd_c2, 'full_text', '') or getattr(_dd_c2, 'body', '') or ''))
+                            if _dd_c2_ft < 500:
+                                continue
+                            _selected[_dd_ri] = _dd_c2
+                            _inv_coord = _i80_invariant_snapshot(_selected)
+                            _coord_ok = all(inv_v for inv_v in _inv_coord.values())
+                            if not _coord_ok:
+                                _reg_c = [k for k in _inv_coord if not _inv_coord[k]]
+                                _coord_ok = all(k in _DD_DEFERRABLE for k in _reg_c)
+                            if _coord_ok:
+                                _dd_swap_pool.pop(max(_dd_c1i, _dd_c2i))
+                                _dd_swap_pool.pop(min(_dd_c1i, _dd_c2i) if _dd_c2i != _dd_c1i else _dd_c1i)
+                                _dd_found = True
+                                _dd_coord_done = True
+                                _dd_coord_ok = True
+                                _log.info("iter81c density coord-swap: thin[%d]→%s + [%d]→%s(ven=%s)",
+                                          _dd_thin_idx2, _f6_domain_key(_dd_c1), _dd_ri,
+                                          _f6_domain_key(_dd_c2), _missing_ven)
+                                break
+                            _selected[_dd_ri] = _dd_rs
+                        if _dd_coord_ok:
+                            break
+                    if not _dd_coord_ok:
+                        _selected[_dd_thin_idx2] = _dd_old2
+            if not _dd_found:
+                _log.warning("iter80: density swap round %d — no safe candidate for any thin event", _dd_round + 1)
+                break
         _log.info("FAST_600_MODE: density swap round %d — replaced thin[%d] '%s'",
                   _dd_round + 1, _dd_thin_idx, _dd_old_title)
         # Rebuild digest and re-check
@@ -11724,6 +11847,154 @@ def _f600_run_fast_path(
             _dd_reason,
             next_steps="全文不足/水化過薄，請調整 targeted hydration 取得完整內容後再翻譯",
         )
+
+    # --- iter81c: post-density-swap domain diversity rescue ---
+    # Density swap may have deferred min_domains regression; fix it now
+    if _is_daily and len(_selected) >= _max_events:
+        _pdd_dc = _DivCounter(_f6_domain_key(s) for s in _selected)
+        _pdd_dist = len(_pdd_dc)
+        if _pdd_dist < _DIV_MIN_DOMAINS:
+            _log.info("iter81c post-density domain rescue: dist_doms=%d < %d, attempting fix", _pdd_dist, _DIV_MIN_DOMAINS)
+            _pdd_pool = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
+                         and not _is_ceo_prohibited(it) and not _is_hf_blog_explainer(it)
+                         and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                         and len(str(getattr(it, 'full_text', '') or getattr(it, 'body', '') or '')) >= 500]
+            _pdd_cur_doms = set(_f6_domain_key(s) for s in _selected)
+            _pdd_pool.sort(key=lambda it: (0 if _f6_domain_key(it) not in _pdd_cur_doms else 1,
+                                           -int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
+            for _pdd_round in range(5):
+                _pdd_dc2 = _DivCounter(_f6_domain_key(s) for s in _selected)
+                if len(_pdd_dc2) >= _DIV_MIN_DOMAINS:
+                    break
+                _pdd_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
+                _pdd_swapped = False
+                for _pdd_wdom, _pdd_wcnt in _pdd_dc2.most_common():
+                    if _pdd_wcnt <= 1 or _pdd_swapped:
+                        break
+                    _pdd_dom_items = sorted(
+                        [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _pdd_wdom],
+                        key=lambda x: (-_pdd_vc.get(_f6_vendor_key(x[1]), 0), _f6_bfp(x[1]))
+                    )
+                    for _pdd_di, _pdd_dit in _pdd_dom_items:
+                        if _pdd_swapped:
+                            break
+                        for _pdd_ci, _pdd_cand in enumerate(_pdd_pool):
+                            _pdd_cdom = _f6_domain_key(_pdd_cand)
+                            if _pdd_cdom in _pdd_cur_doms:
+                                continue
+                            _pdd_test = [s if j != _pdd_di else _pdd_cand for j, s in enumerate(_selected)]
+                            _pdd_inv_b = _i80_invariant_snapshot(_selected)
+                            _pdd_inv_a = _i80_invariant_snapshot(_pdd_test)
+                            _pdd_ok, _pdd_reg = _i80_no_regression(_pdd_inv_b, _pdd_inv_a)
+                            if not _pdd_ok:
+                                _pdd_ok = all(not _pdd_inv_b[k] for k in _pdd_reg)
+                            if not _pdd_ok:
+                                _pdd_ok = all(
+                                    (not _pdd_inv_b[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined", "target_player"})
+                                    for k in _pdd_reg
+                                )
+                            if _pdd_ok:
+                                _log.info("iter81c post-density domain rescue: replaced '%s'[%d] with '%s' (new domain)",
+                                          _pdd_wdom, _pdd_di, _pdd_cdom)
+                                _selected[_pdd_di] = _pdd_cand
+                                _pdd_pool.pop(_pdd_ci)
+                                _pdd_cur_doms = set(_f6_domain_key(s) for s in _selected)
+                                _pdd_swapped = True
+                                break
+                if not _pdd_swapped:
+                    _log.warning("iter81c post-density domain rescue: stuck at dist_doms=%d", len(_pdd_dc2))
+                    break
+            # Rebuild digest after domain rescue + re-run density check
+            _pdd_dc_final = _DivCounter(_f6_domain_key(s) for s in _selected)
+            if len(_pdd_dc_final) != _pdd_dist:
+                _log.info("iter81c post-density domain rescue: domains %d → %d", _pdd_dist, len(_pdd_dc_final))
+                _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+                _digest_path = _generate_digest_md(_card_dicts, _run_id)
+                _dd_ok2, _dd_reason2, _dd_meta2 = _f600_check_digest_density(_digest_path, _outputs, _run_id)
+                # iter81c: if domain rescue introduced thin items, do another density swap pass
+                for _pdd_ds_round in range(5):
+                    if _dd_ok2:
+                        break
+                    _pdd_thin_indices = []
+                    for _pdi, _pddev in enumerate(_dd_meta2.get("events", [])):
+                        if _pddev.get("bullet_count", 0) < 5 and _pddev.get("chars", 0) < 1200:
+                            if _pdi < len(_selected):
+                                _pdd_thin_indices.append(_pdi)
+                    if not _pdd_thin_indices:
+                        break
+                    _pdd_ds_done = False
+                    for _pdd_ti in _pdd_thin_indices:
+                        _pdd_old = _selected[_pdd_ti]
+                        _pdd_inv0 = _i80_invariant_snapshot(_selected)
+                        for _pdd_sci, _pdd_sc in enumerate(_dd_swap_pool):
+                            _selected[_pdd_ti] = _pdd_sc
+                            _pdd_inv1 = _i80_invariant_snapshot(_selected)
+                            _pdd_ds_ok, _pdd_ds_reg = _i80_no_regression(_pdd_inv0, _pdd_inv1)
+                            if not _pdd_ds_ok:
+                                _pdd_ds_ok = all(not _pdd_inv0[k] for k in _pdd_ds_reg)
+                            if not _pdd_ds_ok:
+                                _pdd_ds_ok = all(
+                                    (not _pdd_inv0[k]) or (k in _DD_DEFERRABLE)
+                                    for k in _pdd_ds_reg
+                                )
+                            if _pdd_ds_ok:
+                                _dd_swap_pool.pop(_pdd_sci)
+                                _pdd_ds_done = True
+                                _log.info("iter81c post-domain density swap: round=%d idx=%d replaced", _pdd_ds_round + 1, _pdd_ti)
+                                break
+                            _selected[_pdd_ti] = _pdd_old
+                        if _pdd_ds_done:
+                            break
+                    if not _pdd_ds_done:
+                        break
+                    _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+                    _digest_path = _generate_digest_md(_card_dicts, _run_id)
+                    _dd_ok2, _dd_reason2, _dd_meta2 = _f600_check_digest_density(_digest_path, _outputs, _run_id)
+                if not _dd_ok2:
+                    _f6_fail("DIGEST_DENSITY_FLOOR_HARD", _dd_reason2,
+                             next_steps="全文不足/水化過薄，請調整 targeted hydration 取得完整內容後再翻譯")
+                # Update meta files
+                _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+                try:
+                    _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                except Exception:
+                    pass
+                _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+
+    # --- iter81c: final meta rebuild after all density/diversity swaps ---
+    if _is_daily:
+        _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+        _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+        try:
+            _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+        except Exception:
+            pass
+        _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+        # Re-patch diversity fields into selection_audit.meta.json (density swap may have changed selection)
+        try:
+            _fmr_sa_path = _outputs / "selection_audit.meta.json"
+            if _fmr_sa_path.exists():
+                _fmr_sa = _f6_j.loads(_fmr_sa_path.read_text(encoding="utf-8"))
+                _fmr_dc = dict(_DivCounter(_f6_domain_key(s) for s in _selected))
+                _fmr_vc = dict(_DivCounter(_f6_vendor_key(s) for s in _selected))
+                _fmr_vs = set(_f6_vendor_key(s) for s in _selected) - {"other"}
+                _fmr_sa["selected_domains_distinct"] = len(_fmr_dc)
+                _fmr_sa["selected_vendors_distinct"] = len(_fmr_vs)
+                _fmr_sa["domain_counts"] = _fmr_dc
+                _fmr_sa["vendor_counts"] = _fmr_vc
+                _fmr_sa["max_domain_count"] = max(_fmr_dc.values()) if _fmr_dc else 0
+                _fmr_sa["max_vendor_count"] = max(_fmr_vc.values()) if _fmr_vc else 0
+                _fmr_sa["diversity_pass"] = (
+                    len(_fmr_dc) >= _DIV_MIN_DOMAINS and max(_fmr_dc.values(), default=99) <= _DIV_MAX_DOMAIN
+                    and len(_fmr_vs) >= _DIV_MIN_VENDORS and max(_fmr_vc.values(), default=99) <= _DIV_MAX_VENDOR
+                )
+                _fmr_sa_path.write_text(_f6_j.dumps(_fmr_sa, ensure_ascii=False, indent=2), encoding="utf-8")
+                _log.info("iter81c final meta rebuild: domains=%d vendors=%d max_dom=%d max_ven=%d pass=%s",
+                          len(_fmr_dc), len(_fmr_vs), max(_fmr_dc.values(), default=0),
+                          max(_fmr_vc.values(), default=0), _fmr_sa["diversity_pass"])
+        except Exception:
+            pass
 
     # --- Step 7: translate digest → latest_brief.md (iter40: singleflight + hard timeout) ---
     _tfd_endpoint = os.environ.get("LLAMA_HOST", "http://127.0.0.1:8080")
