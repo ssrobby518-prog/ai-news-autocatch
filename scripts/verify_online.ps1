@@ -54,7 +54,7 @@ $_fast300Daily = ($env:FAST_300_DAILY -eq "1")
 # iter39: FAST_300_MODE — hard cap 300s, auto-enables FAST_600_MODE
 $_fast300Mode = ($env:FAST_300_MODE -eq "1") -or $_fast300Daily
 if ($_fast300Daily) {
-    $_voBudgetSec = if ($_voUserBudgetOverride) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 230 }  # iter73: DAILY default 230s (verification acceptance)
+    $_voBudgetSec = if ($_voUserBudgetOverride) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 250 }  # iter82: DAILY default 250s (10 items need ~240s all-miss at 25 tok/s)
     $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec
     $env:FAST_600_MODE = "1"
     $env:FAST_300_DAILY = "1"
@@ -5593,6 +5593,70 @@ if ($_fast300Daily) {
         }
     } else {
         Write-Output "  HF_BLOG_EXPLAINER_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter82: TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY — tc_rumor <= 1
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_tcrMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY:"
+    if (Test-Path $_tcrMetaPath) {
+        try {
+            $_tcrMeta = Get-Content $_tcrMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_tcrCount  = if ($_tcrMeta.PSObject.Properties['techcrunch_rumor_speculation_total']) { [int]$_tcrMeta.techcrunch_rumor_speculation_total } else { 0 }
+            $_tcrPass   = if ($_tcrMeta.PSObject.Properties['techcrunch_rumor_speculation_cap_pass']) { $_tcrMeta.techcrunch_rumor_speculation_cap_pass } else { $false }
+            $_tcrInjected = if ($_tcrMeta.PSObject.Properties['techcrunch_rumor_speculation_test_injected']) { $_tcrMeta.techcrunch_rumor_speculation_test_injected } else { $false }
+            Write-Output ("  tc_rumor_speculation_total : {0}" -f $_tcrCount)
+            Write-Output ("  tc_rumor_speculation_pass  : {0}" -f $_tcrPass)
+            if ($_tcrInjected) {
+                Write-Output "  test_injected              : True"
+            }
+            if (-not $_tcrPass) {
+                $_tcrFail = ("TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY_FAIL: tc_rumor_total={0} > 1" -f $_tcrCount)
+                Write-Output ("  => FAIL: {0}" -f $_tcrFail)
+                Invoke-VerifyOnlineFailFast -Gate "TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY" -Reason $_tcrFail
+            }
+            Write-Output "  => TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter82: NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY — nsgr <= 1
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_nsgrMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY:"
+    if (Test-Path $_nsgrMetaPath) {
+        try {
+            $_nsgrMeta = Get-Content $_nsgrMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_nsgrCount  = if ($_nsgrMeta.PSObject.Properties['non_strategic_google_research_total']) { [int]$_nsgrMeta.non_strategic_google_research_total } else { 0 }
+            $_nsgrPass   = if ($_nsgrMeta.PSObject.Properties['non_strategic_google_research_cap_pass']) { $_nsgrMeta.non_strategic_google_research_cap_pass } else { $false }
+            $_nsgrInjected = if ($_nsgrMeta.PSObject.Properties['non_strategic_google_research_test_injected']) { $_nsgrMeta.non_strategic_google_research_test_injected } else { $false }
+            Write-Output ("  non_strategic_gr_total : {0}" -f $_nsgrCount)
+            Write-Output ("  non_strategic_gr_pass  : {0}" -f $_nsgrPass)
+            if ($_nsgrInjected) {
+                Write-Output "  test_injected          : True"
+            }
+            if (-not $_nsgrPass) {
+                $_nsgrFail = ("NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: nsgr_total={0} > 1" -f $_nsgrCount)
+                Write-Output ("  => FAIL: {0}" -f $_nsgrFail)
+                Invoke-VerifyOnlineFailFast -Gate "NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY" -Reason $_nsgrFail
+            }
+            Write-Output "  => NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY: WARN (content_mix.meta.json not found)"
     }
 }
 Write-Output ""

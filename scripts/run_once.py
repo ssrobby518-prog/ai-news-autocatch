@@ -7574,9 +7574,12 @@ def _f600_run_fast_path(
     _HF_BLOG_EXPLAINER_RE = _ct71_re.compile(
         r'(?:\btutorial\b|\bdeploy(?:ment|ing)?\b|\bexplainer\b|\bhow[\-\s]to\b|\bguide\b'
         r'|\bwalkthrough\b|\bgetting[\-\s]started\b|\bintroduction\s+to\b|\bdeep[\-\s]dive\b'
-        r'|\bframework\b|\bquickstart\b)', _ct71_re.I)
+        r'|\bframework\b|\bquickstart\b'
+        r'|\becosystem\b|\bopen[\-\s]source\s+ai\b|\bthe\s+future\s+of\b'
+        r'|\bone\s+year\s+since\b|\bretrospective\b|\bcommentary\b)', _ct71_re.I)
 
     def _is_hf_blog_explainer(it) -> bool:
+        """iter82: expanded HF blog explainer — includes ecosystem/retrospective/commentary + fulltext."""
         _dk = _f6_domain_key(it)
         if _dk != "huggingface.co":
             return False
@@ -7585,7 +7588,67 @@ def _f600_run_fast_path(
             return False
         _title = str(getattr(it, "title", "") or "")
         _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
-        return bool(_HF_BLOG_EXPLAINER_RE.search(_title + " " + _snippet))
+        _ft = str(getattr(it, "full_text", "") or getattr(it, "body", "") or "")[:2000]
+        return bool(_HF_BLOG_EXPLAINER_RE.search(_title + " " + _snippet + " " + _ft))
+
+    # iter82: TechCrunch rumor/speculation classifier
+    _TC_RUMOR_SPEC_RE = _ct71_re.compile(
+        r'(?:\brumor\b|\bspeculat(?:ion|e|ed|ing)\b|\bcould\b|\bmight\b'
+        r'|\bright\s*\?\b|\breportedly\b|\bsaid\s+to\b|\bexpected\s+to\b'
+        r'|\bunconfirmed\b|\b傳聞\b|\b猜測\b|\b未證實\b)', _ct71_re.I)
+
+    def _is_techcrunch_rumor_speculation(it) -> bool:
+        """iter82: True if TechCrunch + rumor/speculation/unconfirmed content."""
+        if not _is_techcrunch(it):
+            return False
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        return bool(_TC_RUMOR_SPEC_RE.search(_title + " " + _snippet))
+
+    # iter82: non-strategic Google Research classifier
+    _GR_STRATEGIC_RE = _ct71_re.compile(
+        r'(?:\blaunch\b|\brollout\b|\bpartner(?:ship|ed|ing)\b|\bdistribut(?:ion|ed|ing)\b'
+        r'|\bpric(?:e|ing)\b|\benterprise\b|\bpolicy\b|\bregulat(?:ion|ory|ed)\b'
+        r'|\bgovernance\b|\bsecurity\b|\bCVE\b|\bprivacy\b|\bcompliance\b'
+        r'|\bearnings\b|\bcapex\b|\bcommercial\b|\bstatement\b|\bleadership\b'
+        r'|\borganizat(?:ion|ional)\b|\bGemini\b|\bGemma\b|\bVertex\b|\bCloud\b'
+        r'|\bAPI\b|\bSDK\b|\bGA\b|\bgeneral\s+availab(?:le|ility)\b'
+        r'|\bexport\s+control\b|\blawsuit\b|\bhearing\b)', _ct71_re.I)
+
+    def _is_non_strategic_google_research(it) -> bool:
+        """iter82: True if Google Research blog + non-strategic content (method/bench/paper)."""
+        if not _f6_is_google_research_blog(it):
+            return False
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        _ft = str(getattr(it, "full_text", "") or getattr(it, "body", "") or "")[:2000]
+        _text = _title + " " + _snippet + " " + _ft
+        # If it matches strategic signals, it's NOT non-strategic
+        if _GR_STRATEGIC_RE.search(_text):
+            return False
+        return True  # no strategic signal → non-strategic
+
+    # iter82: executive signal classifier
+    _EXEC_SIGNAL_RE = _ct71_re.compile(
+        r'(?:\blaunch(?:es|ed|ing)?\b|\brollout\b|\bannounce[sd]?\b'
+        r'|\bpartner(?:ship|ed|ing)\b|\bdistribut(?:ion|ed|ing)\b'
+        r'|\bpric(?:e|ing)\b|\benterprise\b|\bGA\b|\bgeneral\s+availab(?:le|ility)\b'
+        r'|\bearnings\b|\bcapex\b|\brevenue\b|\bquarter(?:ly)?\b'
+        r'|\bexport\s+control\b|\blawsuit\b|\bhearing\b|\bregulat(?:ion|ory)\b'
+        r'|\bcompliance\b|\bpolicy\b|\bgovernance\b'
+        r'|\bstatement\b|\btestif(?:y|ied|ies)\b|\bboard\b'
+        r'|\bCEO\b|\bCTO\b|\bCIO\b|\bVP\b|\bPresident\b'
+        r'|\bacquisit(?:ion|ed)\b|\bmerger\b|\bIPO\b'
+        r'|\bAPI\b|\bSDK\b|\bmodel\s+release\b)', _ct71_re.I)
+
+    def _is_executive_signal(it) -> bool:
+        """iter82: True if item has CEO-grade executive/strategic signal."""
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        return bool(_EXEC_SIGNAL_RE.search(_title + " " + _snippet))
+
+    _TECHCRUNCH_RUMOR_SPEC_CAP = 1  # iter82
+    _NON_STRATEGIC_GR_CAP = 1  # iter82
 
     # iter78: target player classifier — vendor in CEO-grade AI player set
     _TARGET_PLAYER_VENDORS = frozenset({
@@ -10910,6 +10973,9 @@ def _f600_run_fast_path(
     _cm79_tc_gr_combined = _cm78_tc_total + _cm74_google_research_total  # iter79: combined TC+GR
     _cm79_role_axes = sorted(set(_role_axis(s) for s in _selected))  # iter79: role axes
     _cm79_role_axes_distinct = len(_cm79_role_axes)  # iter79
+    _cm82_tc_rumor_total = sum(1 for s in _selected if _is_techcrunch_rumor_speculation(s))  # iter82
+    _cm82_nsgr_total = sum(1 for s in _selected if _is_non_strategic_google_research(s))  # iter82
+    _cm82_exec_signal_total = sum(1 for s in _selected if _is_executive_signal(s))  # iter82
 
     # iter77: patch selection_audit.meta.json with prohibited-type totals (AFTER counts are computed)
     try:
@@ -10930,6 +10996,9 @@ def _f600_run_fast_path(
             _sa77_d["china_policy_count"] = _cm78_china_policy_count  # iter78
             _sa77_d["techcrunch_google_research_total"] = _cm79_tc_gr_combined  # iter79
             _sa77_d["selected_role_axes_distinct"] = _cm79_role_axes_distinct  # iter79
+            _sa77_d["techcrunch_rumor_speculation_total"] = _cm82_tc_rumor_total  # iter82
+            _sa77_d["non_strategic_google_research_total"] = _cm82_nsgr_total  # iter82
+            _sa77_d["executive_signal_total"] = _cm82_exec_signal_total  # iter82
             _sa77.write_text(_f6_j.dumps(_sa77_d, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -10966,6 +11035,9 @@ def _f600_run_fast_path(
             "us_policy_item": _is_us_policy(_cm71_s),  # iter78
             "china_policy_item": _is_china_policy(_cm71_s),  # iter78
             "role_axis": _role_axis(_cm71_s),  # iter79
+            "techcrunch_rumor_speculation_item": _is_techcrunch_rumor_speculation(_cm71_s),  # iter82
+            "non_strategic_google_research_item": _is_non_strategic_google_research(_cm71_s),  # iter82
+            "executive_signal_item": _is_executive_signal(_cm71_s),  # iter82
             "strategic_density_score": _sd_item.get("strategic_density_score", 0),
             "strategic_density_floor_pass": _sd_item.get("strategic_density_score", 0) >= _cm73_sd_floor,
         })
@@ -10988,6 +11060,9 @@ def _f600_run_fast_path(
     _cm78_inject_cnp = os.environ.get("INJECT_CHINA_POLICY_COUNT", "")  # iter78
     _cm79_inject_tc_gr = os.environ.get("INJECT_TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_TOTAL", "")  # iter79
     _cm79_inject_role = os.environ.get("INJECT_ROLE_AXES_DISTINCT", "")  # iter79
+    _cm82_inject_tc_rumor = os.environ.get("INJECT_TECHCRUNCH_RUMOR_SPECULATION_TOTAL", "")  # iter82
+    _cm82_inject_nsgr = os.environ.get("INJECT_NON_STRATEGIC_GOOGLE_RESEARCH_TOTAL", "")  # iter82
+    _cm82_inject_exec = os.environ.get("INJECT_EXECUTIVE_SIGNAL_TOTAL", "")  # iter82
     _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
     _cm71_rt_total_check = _cm71_rt_total
     _cm72_bom_check = _cm72_bt_om_actionable
@@ -11005,6 +11080,9 @@ def _f600_run_fast_path(
     _cm78_cnp_check = _cm78_china_policy_count
     _cm79_tc_gr_check = _cm79_tc_gr_combined  # iter79
     _cm79_role_check = _cm79_role_axes_distinct  # iter79
+    _cm82_tc_rumor_check = _cm82_tc_rumor_total  # iter82
+    _cm82_nsgr_check = _cm82_nsgr_total  # iter82
+    _cm82_exec_check = _cm82_exec_signal_total  # iter82
     _cm71_rt_is_injected = bool(_cm71_inject_rt)
     _cm72_bom_is_injected = bool(_cm72_inject_bom)
     _cm73_lp_is_injected = bool(_cm73_inject_lp)
@@ -11021,6 +11099,9 @@ def _f600_run_fast_path(
     _cm78_cnp_is_injected = bool(_cm78_inject_cnp)
     _cm79_tc_gr_is_injected = bool(_cm79_inject_tc_gr)  # iter79
     _cm79_role_is_injected = bool(_cm79_inject_role)  # iter79
+    _cm82_tc_rumor_is_injected = bool(_cm82_inject_tc_rumor)  # iter82
+    _cm82_nsgr_is_injected = bool(_cm82_inject_nsgr)  # iter82
+    _cm82_exec_is_injected = bool(_cm82_inject_exec)  # iter82
     if _cm78_tc_is_injected:
         try:
             _cm78_tc_check = int(_cm78_inject_tc)
@@ -11117,6 +11198,24 @@ def _f600_run_fast_path(
         except ValueError:
             pass
         _log.info("INJECT_GOOGLE_RESEARCH_TOTAL=%s: google_research_total overridden", _cm74_inject_grt)
+    if _cm82_tc_rumor_is_injected:
+        try:
+            _cm82_tc_rumor_check = int(_cm82_inject_tc_rumor)
+        except ValueError:
+            pass
+        _log.info("INJECT_TECHCRUNCH_RUMOR_SPECULATION_TOTAL=%s: tc_rumor overridden", _cm82_inject_tc_rumor)
+    if _cm82_nsgr_is_injected:
+        try:
+            _cm82_nsgr_check = int(_cm82_inject_nsgr)
+        except ValueError:
+            pass
+        _log.info("INJECT_NON_STRATEGIC_GOOGLE_RESEARCH_TOTAL=%s: nsgr overridden", _cm82_inject_nsgr)
+    if _cm82_exec_is_injected:
+        try:
+            _cm82_exec_check = int(_cm82_inject_exec)
+        except ValueError:
+            pass
+        _log.info("INJECT_EXECUTIVE_SIGNAL_TOTAL=%s: executive_signal overridden", _cm82_inject_exec)
 
     _cm71_bt_act_pass = (_cm71_bt_actionable >= 7)  # iter73: was 6
     _cm72_bom_pass = (_cm72_bom_check >= 8)  # iter77: raised from 7 to 8
@@ -11137,6 +11236,8 @@ def _f600_run_fast_path(
     _cm78_tp_pass = (_cm78_tp_check >= 6)  # iter78: target_player_distinct >= 6
     _cm78_usp_cnp_pass = ((_cm78_usp_check + _cm78_cnp_check) >= 2 and _cm78_cnp_check >= 1)  # iter78
     _cm73_total_pass = (len(_selected) >= 10)  # iter73: new
+    _cm82_tc_rumor_pass = (_cm82_tc_rumor_check <= _TECHCRUNCH_RUMOR_SPEC_CAP)  # iter82: rumor TC <= 1
+    _cm82_nsgr_pass = (_cm82_nsgr_check <= _NON_STRATEGIC_GR_CAP)  # iter82: non-strategic GR <= 1
 
     try:
         _cm71_path = _outputs / "content_mix.meta.json"
@@ -11189,6 +11290,13 @@ def _f600_run_fast_path(
             "hf_blog_explainer_total": _cm78_hfbe_check,  # iter78
             "hf_blog_explainer_cap": _HF_BLOG_EXPLAINER_CAP,
             "hf_blog_explainer_cap_pass": _cm78_hfbe_pass,
+            "techcrunch_rumor_speculation_total": _cm82_tc_rumor_check,  # iter82
+            "techcrunch_rumor_speculation_cap": _TECHCRUNCH_RUMOR_SPEC_CAP,
+            "techcrunch_rumor_speculation_cap_pass": _cm82_tc_rumor_pass,
+            "non_strategic_google_research_total": _cm82_nsgr_check,  # iter82
+            "non_strategic_google_research_cap": _NON_STRATEGIC_GR_CAP,
+            "non_strategic_google_research_cap_pass": _cm82_nsgr_pass,
+            "executive_signal_total": _cm82_exec_check,  # iter82
             "target_player_distinct": _cm78_tp_check,  # iter78
             "target_players": _cm78_target_players,
             "target_player_coverage_min": 6,
@@ -11268,6 +11376,15 @@ def _f600_run_fast_path(
         if _cm79_role_is_injected:
             _cm71_meta["role_diversity_test_injected"] = True
             _cm71_meta["injected_role_axes_distinct"] = _cm79_inject_role
+        if _cm82_tc_rumor_is_injected:
+            _cm71_meta["techcrunch_rumor_speculation_test_injected"] = True
+            _cm71_meta["injected_techcrunch_rumor_speculation_total"] = _cm82_inject_tc_rumor
+        if _cm82_nsgr_is_injected:
+            _cm71_meta["non_strategic_google_research_test_injected"] = True
+            _cm71_meta["injected_non_strategic_google_research_total"] = _cm82_inject_nsgr
+        if _cm82_exec_is_injected:
+            _cm71_meta["executive_signal_test_injected"] = True
+            _cm71_meta["injected_executive_signal_total"] = _cm82_inject_exec
         _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _cm71_exc:
         _log.warning("content_mix.meta.json write failed: %s", _cm71_exc)
@@ -11462,6 +11579,36 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("HF_BLOG_EXPLAINER_CAP_HARD_DAILY", _cm78_hfbe_fail)
+
+    # iter82: TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY gate — rumor TC <= 1
+    if _is_daily and not _cm82_tc_rumor_pass:
+        _cm82_tc_rumor_fail = f"TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY_FAIL: tc_rumor_total={_cm82_tc_rumor_check} > {_TECHCRUNCH_RUMOR_SPEC_CAP}"
+        if _cm82_tc_rumor_is_injected:
+            _cm82_tc_rumor_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY",
+            _cm82_tc_rumor_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY", _cm82_tc_rumor_fail)
+
+    # iter82: NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY gate — non-strategic GR <= 1
+    if _is_daily and not _cm82_nsgr_pass:
+        _cm82_nsgr_fail = f"NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY_FAIL: nsgr_total={_cm82_nsgr_check} > {_NON_STRATEGIC_GR_CAP}"
+        if _cm82_nsgr_is_injected:
+            _cm82_nsgr_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY",
+            _cm82_nsgr_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("NON_STRATEGIC_GOOGLE_RESEARCH_CAP_HARD_DAILY", _cm82_nsgr_fail)
 
     # iter78: TARGET_PLAYER_COVERAGE_HARD_DAILY gate — target_player_distinct >= 6
     if _is_daily and not _cm78_tp_pass:
@@ -11924,6 +12071,8 @@ def _f600_run_fast_path(
                     if not _pdd_thin_indices:
                         break
                     _pdd_ds_done = False
+                    # iter82: post-domain density swap must NOT defer min_domains (just rescued)
+                    _PDD_DEFERRABLE = _DD_DEFERRABLE - {"min_domains"}
                     for _pdd_ti in _pdd_thin_indices:
                         _pdd_old = _selected[_pdd_ti]
                         _pdd_inv0 = _i80_invariant_snapshot(_selected)
@@ -11935,7 +12084,7 @@ def _f600_run_fast_path(
                                 _pdd_ds_ok = all(not _pdd_inv0[k] for k in _pdd_ds_reg)
                             if not _pdd_ds_ok:
                                 _pdd_ds_ok = all(
-                                    (not _pdd_inv0[k]) or (k in _DD_DEFERRABLE)
+                                    (not _pdd_inv0[k]) or (k in _PDD_DEFERRABLE)
                                     for k in _pdd_ds_reg
                                 )
                             if _pdd_ds_ok:
