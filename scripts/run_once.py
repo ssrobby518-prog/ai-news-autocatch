@@ -11887,8 +11887,8 @@ def _f600_run_fast_path(
                     if not _i80_ok_dd:
                         _i80_ok_dd = all(not _i80_inv_dd[k] for k in _i80_reg_dd)
                     # iter81c: cap-deferrable — min_domains fixable by post-density domain rescue
-                    _DD_DEFERRABLE = {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain", "max_vendor",
-                                      "min_domains"}
+                    # iter83: removed tc_cap/gr_cap/tc_gr_combined — canonical snapshot exposes post-swap truth
+                    _DD_DEFERRABLE = {"max_domain", "max_vendor", "min_domains"}
                     if not _i80_ok_dd:
                         _i80_ok_dd = all(
                             (not _i80_inv_dd[k]) or (k in _DD_DEFERRABLE)
