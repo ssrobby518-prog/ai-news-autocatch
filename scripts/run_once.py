@@ -12039,8 +12039,9 @@ def _f600_run_fast_path(
                             if not _pdd_ok:
                                 _pdd_ok = all(not _pdd_inv_b[k] for k in _pdd_reg)
                             if not _pdd_ok:
+                                # iter83: removed tc_cap/gr_cap/tc_gr_combined — canonical snapshot exposes truth
                                 _pdd_ok = all(
-                                    (not _pdd_inv_b[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined", "target_player"})
+                                    (not _pdd_inv_b[k]) or (k in {"max_domain", "target_player"})
                                     for k in _pdd_reg
                                 )
                             if _pdd_ok:
