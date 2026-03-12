@@ -11889,12 +11889,36 @@ def _f600_run_fast_path(
             _selected[_thin_idx] = _old_item
             return False, _unresolved
 
-        _scan_cap = min(len(_dd_swap_pool), 24)
+        _cur_dc = _DivCounter(_f6_domain_key(s) for s in _selected)
+        _cur_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
+        _cur_doms = set(_cur_dc.keys())
+        _max_vendor = _cur_vc.most_common(1)[0][0] if _cur_vc else ""
+        _need_domains = "min_domains" in set(_unresolved)
+        _need_vendor_relief = "max_vendor" in set(_unresolved)
+        _need_tcgr_relief = "tc_gr_combined" in set(_unresolved)
+
+        def _c2_rank(_idx):
+            _it = _dd_swap_pool[_idx]
+            _dom = _f6_domain_key(_it)
+            _ven = _f6_vendor_key(_it)
+            _ft = int(getattr(_it, "fulltext_len", 0) or 0)
+            if _ft <= 0:
+                _ft = len(str(getattr(_it, "full_text", "") or getattr(_it, "body", "") or ""))
+            return (
+                0 if (_need_domains and _dom not in _cur_doms) else 1,
+                0 if (_need_vendor_relief and _ven != _max_vendor) else 1,
+                0 if (_need_tcgr_relief and (not _is_techcrunch(_it)) and (not _f6_is_google_research_blog(_it))) else 1,
+                -_ft,
+                -_f6_bfp(_it),
+            )
+
+        _c2_order = sorted(range(len(_dd_swap_pool)), key=_c2_rank)
+        _scan_cap = min(len(_c2_order), 24)
         for _ri, _rs in enumerate(_selected):
             if _ri == _thin_idx:
                 continue
             _orig_rs = _rs
-            for _c2i in range(_scan_cap):
+            for _c2i in _c2_order[:_scan_cap]:
                 if _c2i == _cand_idx:
                     continue
                 _c2 = _dd_swap_pool[_c2i]
