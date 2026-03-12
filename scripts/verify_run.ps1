@@ -330,7 +330,8 @@ if ($env:BRIEF_ONLY -eq "1") {
     $notionContent = Get-Content "outputs\notion_page.md" -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
     if ($notionContent) {
         foreach ($bw in $bannedWords) {
-            if ($notionContent -match [regex]::Escape($bw)) {
+            # iter83: use -cmatch (case-sensitive) to avoid false positives
+            if ($notionContent -cmatch [regex]::Escape($bw)) {
                 Write-Host "  FAIL: Banned word '$bw' found in notion_page.md" -ForegroundColor Red
                 $notionBannedHits++
                 $v3Pass = $false
@@ -358,7 +359,8 @@ print(raw)
 " 2>$null
 if ($docxText) {
     foreach ($bw in $bannedWords) {
-        if ($docxText -match [regex]::Escape($bw)) {
+        # iter83: use -cmatch (case-sensitive) to avoid false positives (e.g. "ETL" in "Netlify")
+        if ($docxText -cmatch [regex]::Escape($bw)) {
             Write-Host "  FAIL: Banned word '$bw' found in executive_report.docx" -ForegroundColor Red
             $docxBannedHits++
             $v3Pass = $false
