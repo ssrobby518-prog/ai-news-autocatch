@@ -9543,7 +9543,7 @@ def _f600_run_fast_path(
             _prev_file = _state_dir / "daily_last_ids.json"
             _prev_daily_file = str(_prev_file)
             _prev_ids: set = set()
-            if _prev_file.exists():
+            if _oa_dup_gate_enabled and _prev_file.exists():
                 _prev_data = _f6_j.loads(_prev_file.read_text(encoding="utf-8"))
                 _prev_ids = set(_prev_data.get("ids", []))
             def _item_hash(it) -> str:
@@ -9552,7 +9552,7 @@ def _f600_run_fast_path(
             _cur_hashes = [_item_hash(it) for it in _selected]
             _overlap_items = [(i, h) for i, h in enumerate(_cur_hashes) if h and h in _prev_ids]
             _overlap_count = len(_overlap_items)
-            if _overlap_count > 2:
+            if _oa_dup_gate_enabled and _overlap_count > 2:
                 # iter81b: also require fulltext >= 300 chars to avoid introducing thin digest items
                 _backup_pool_all = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
                                 and not _f6_is_google_research_blog(it)
@@ -11846,6 +11846,78 @@ def _f600_run_fast_path(
     _dd_swap_pool += [it for it in raw_items if it not in _selected and it not in _dd_swap_pool
                       and _i80_dd_pool_ok(it) and _f6_is_bigtech(it)
                       and len(str(getattr(it, 'full_text', '') or getattr(it, 'body', '') or '')) >= 100]
+    _DD_STAGE_DEFERRABLE = {"max_domain", "max_vendor", "min_domains"}
+    _DD_DEFERRABLE = _DD_STAGE_DEFERRABLE | {
+        "target_player",
+        "role_axes",
+        "policy",
+        "buckets",
+        "tc_cap",
+        "gr_cap",
+        "tc_gr_combined",
+        "tc_rumor",
+        "nsgr",
+    }
+
+    def _i83_dd_try_commit(_thin_idx, _cand_idx, _defer_keys, _stage_label="main", _stage_defer_keys=None):
+        _stage_defer_keys = _stage_defer_keys or set()
+        _old_item = _selected[_thin_idx]
+        _cand_item = _dd_swap_pool[_cand_idx]
+        _before_inv = _i80_invariant_snapshot(_selected)
+        _selected[_thin_idx] = _cand_item
+        _after_inv = _i80_invariant_snapshot(_selected)
+        _ok, _reg = _i80_no_regression(_before_inv, _after_inv)
+        if not _ok:
+            _reg = [k for k in _reg if _before_inv.get(k, False)]
+            _ok = (len(_reg) == 0) or all(k in _defer_keys for k in _reg)
+        if not _ok:
+            _selected[_thin_idx] = _old_item
+            return False, _reg
+        if all(_after_inv.values()):
+            _dd_swap_pool.pop(_cand_idx)
+            return True, []
+
+        _unresolved = [k for k, v in _after_inv.items() if not v]
+        if _unresolved and set(_unresolved).issubset(_stage_defer_keys):
+            _new_stage_debt = [k for k in _unresolved if _before_inv.get(k, True)]
+            if not _new_stage_debt:
+                _dd_swap_pool.pop(_cand_idx)
+                _log.info("iter83 dd-swap DEFER[%s]: idx=%d unresolved=%s", _stage_label, _thin_idx, _unresolved)
+                return True, _unresolved
+
+        if len(_unresolved) > 6:
+            _selected[_thin_idx] = _old_item
+            return False, _unresolved
+
+        _scan_cap = min(len(_dd_swap_pool), 60)
+        for _ri, _rs in enumerate(_selected):
+            if _ri == _thin_idx:
+                continue
+            _orig_rs = _rs
+            for _c2i in range(_scan_cap):
+                if _c2i == _cand_idx:
+                    continue
+                _c2 = _dd_swap_pool[_c2i]
+                if _is_non_strategic_google_research(_c2):
+                    continue
+                _c2_ft = int(getattr(_c2, "fulltext_len", 0) or 0)
+                if _c2_ft < 500:
+                    continue
+                _selected[_ri] = _c2
+                _inv2 = _i80_invariant_snapshot(_selected)
+                if all(_inv2.values()):
+                    for _pi in sorted((_cand_idx, _c2i), reverse=True):
+                        _dd_swap_pool.pop(_pi)
+                    _log.info(
+                        "iter83 dd-swap TX[%s]: thin_idx=%d pair_idx=%d debt=%s",
+                        _stage_label, _thin_idx, _ri, _unresolved,
+                    )
+                    return True, []
+                _selected[_ri] = _orig_rs
+
+        _selected[_thin_idx] = _old_item
+        return False, _unresolved
+
     for _dd_round in range(10):  # iter80: allow up to 10 density swap rounds (was 5)
         if _dd_ok or not _dd_meta.get("thin_events_count"):
             break
@@ -11881,28 +11953,27 @@ def _f600_run_fast_path(
                 _dd_scanned = 0
                 for _dd_ci in range(len(_dd_swap_pool)):
                     _dd_cand = _dd_swap_pool[_dd_ci]
-                    _selected[_dd_thin_idx] = _dd_cand
-                    _i80_post_dd = _i80_invariant_snapshot(_selected)
-                    _i80_ok_dd, _i80_reg_dd = _i80_no_regression(_i80_inv_dd, _i80_post_dd)
+                    if _is_non_strategic_google_research(_dd_cand):
+                        continue
+                    _dd_cand_ft = int(getattr(_dd_cand, "fulltext_len", 0) or 0)
+                    if _dd_cand_ft <= 0:
+                        _dd_cand_ft = len(str(getattr(_dd_cand, "full_text", "") or getattr(_dd_cand, "body", "") or ""))
+                    if _dd_cand_ft < max(700, _dd_thin_ft + 120):
+                        continue
+                    _i80_ok_dd, _i80_reg_dd = _i83_dd_try_commit(
+                        _dd_thin_idx,
+                        _dd_ci,
+                        _DD_DEFERRABLE,
+                        _stage_label=f"round{_dd_round + 1}",
+                        _stage_defer_keys=_DD_STAGE_DEFERRABLE,
+                    )
                     # iter81: relaxed — accept if all regressed invariants were already failing
-                    if not _i80_ok_dd:
-                        _i80_ok_dd = all(not _i80_inv_dd[k] for k in _i80_reg_dd)
-                    # iter81c: cap-deferrable — min_domains fixable by post-density domain rescue
-                    # iter83: removed tc_cap/gr_cap/tc_gr_combined — canonical snapshot exposes post-swap truth
-                    _DD_DEFERRABLE = {"max_domain", "max_vendor", "min_domains"}
-                    if not _i80_ok_dd:
-                        _i80_ok_dd = all(
-                            (not _i80_inv_dd[k]) or (k in _DD_DEFERRABLE)
-                            for k in _i80_reg_dd
-                        )
-                    if not _i80_ok_dd and _dd_scanned <= 3:
-                        _log.info("iter81 dd-swap REJECT[%d]: idx=%d dom=%s reg=%s", _dd_scanned, _dd_thin_idx, _f6_domain_key(_dd_cand), _i80_reg_dd)
+                    if not _i80_ok_dd and _dd_scanned <= 5:
+                        _log.info("iter83 dd-swap REJECT[%d]: idx=%d dom=%s reg=%s", _dd_scanned, _dd_thin_idx, _f6_domain_key(_dd_cand), _i80_reg_dd)
                     _dd_scanned += 1
                     if _i80_ok_dd:
-                        _dd_swap_pool.pop(_dd_ci)
                         _dd_found = True
                         break
-                    _selected[_dd_thin_idx] = _dd_old_item
                 if _dd_found:
                     break
                 _log.info("iter81: density swap round %d idx=%d — no safe candidate (scanned %d), trying next thin", _dd_round + 1, _dd_thin_idx, _dd_scanned)
@@ -11918,23 +11989,35 @@ def _f600_run_fast_path(
             for _dd_thin_idx2 in _dd_thin_indices:
                 if _dd_coord_done:
                     break
+                _coord_inv_before = _i80_invariant_snapshot(_selected)
                 _dd_old2 = _selected[_dd_thin_idx2]
                 _dd_thin_ven2 = _f6_vendor_key(_dd_old2)
                 _dd_thin_tp2 = _is_target_player(_dd_old2)
+                _dd_thin_ft2 = len(str(getattr(_dd_old2, "full_text", "") or getattr(_dd_old2, "body", "") or ""))
                 if not _dd_thin_tp2:
                     continue  # only needed when thin item IS a target player
                 # Step 1: find a thick non-TP candidate (allow target_player regression)
                 for _dd_c1i, _dd_c1 in enumerate(_dd_swap_pool):
+                    if _is_non_strategic_google_research(_dd_c1):
+                        continue
+                    _dd_c1_ft = int(getattr(_dd_c1, "fulltext_len", 0) or 0)
+                    if _dd_c1_ft <= 0:
+                        _dd_c1_ft = len(str(getattr(_dd_c1, "full_text", "") or getattr(_dd_c1, "body", "") or ""))
+                    if _dd_c1_ft < max(700, _dd_thin_ft2 + 120):
+                        continue
                     _selected[_dd_thin_idx2] = _dd_c1
                     _inv_a1 = _i80_invariant_snapshot(_selected)
                     _inv_b1 = _i80_invariant_snapshot([_dd_old2 if j == _dd_thin_idx2 else s for j, s in enumerate(_selected)])
                     # Allow only target_player regression (must pass everything else)
                     _reg1 = [k for k in _inv_b1 if _inv_b1[k] and not _inv_a1[k]]
-                    _ok1 = all(k in {"target_player"} | _DD_DEFERRABLE for k in _reg1) if _reg1 else True
+                    _ok1 = all(k in {"target_player"} for k in _reg1) if _reg1 else True
                     if not _ok1:
                         _selected[_dd_thin_idx2] = _dd_old2
                         continue
                     if "target_player" not in _reg1:
+                        if not all(_inv_a1.values()):
+                            _selected[_dd_thin_idx2] = _dd_old2
+                            continue
                         # No TP regression — accept directly
                         _dd_swap_pool.pop(_dd_c1i)
                         _dd_found = True
@@ -11963,10 +12046,13 @@ def _f600_run_fast_path(
                                 continue
                             _selected[_dd_ri] = _dd_c2
                             _inv_coord = _i80_invariant_snapshot(_selected)
-                            _coord_ok = all(inv_v for inv_v in _inv_coord.values())
+                            _coord_ok, _coord_reg = _i80_no_regression(_coord_inv_before, _inv_coord)
                             if not _coord_ok:
-                                _reg_c = [k for k in _inv_coord if not _inv_coord[k]]
-                                _coord_ok = all(k in _DD_DEFERRABLE for k in _reg_c)
+                                _coord_ok = all(k in _DD_STAGE_DEFERRABLE for k in _coord_reg)
+                            if _coord_ok:
+                                _coord_new_debt = [k for k, v in _inv_coord.items() if (not v) and _coord_inv_before.get(k, True)]
+                                if _coord_new_debt:
+                                    _coord_ok = False
                             if _coord_ok:
                                 _dd_swap_pool.pop(max(_dd_c1i, _dd_c2i))
                                 _dd_swap_pool.pop(min(_dd_c1i, _dd_c2i) if _dd_c2i != _dd_c1i else _dd_c1i)
@@ -12045,6 +12131,16 @@ def _f600_run_fast_path(
                                     (not _pdd_inv_b[k]) or (k in {"max_domain", "target_player"})
                                     for k in _pdd_reg
                                 )
+                            _pdd_density_ok = True
+                            if _pdd_ok:
+                                try:
+                                    _pdd_cards_test = [_f600_item_to_card_dict(it) for it in _pdd_test]
+                                    _pdd_digest_test = _generate_digest_md(_pdd_cards_test, _run_id)
+                                    _pdd_density_ok, _, _ = _f600_check_digest_density(_pdd_digest_test, _outputs, _run_id)
+                                except Exception:
+                                    _pdd_density_ok = False
+                            if _pdd_ok and not _pdd_density_ok:
+                                continue
                             if _pdd_ok:
                                 _log.info("iter81c post-density domain rescue: replaced '%s'[%d] with '%s' (new domain)",
                                           _pdd_wdom, _pdd_di, _pdd_cdom)
@@ -12075,28 +12171,23 @@ def _f600_run_fast_path(
                     if not _pdd_thin_indices:
                         break
                     _pdd_ds_done = False
-                    # iter82: post-domain density swap must NOT defer min_domains (just rescued)
-                    _PDD_DEFERRABLE = _DD_DEFERRABLE - {"min_domains"}
+                    # iter83: keep defer-set for transaction search; commit still needs all invariants.
+                    _PDD_DEFERRABLE = _DD_DEFERRABLE
                     for _pdd_ti in _pdd_thin_indices:
-                        _pdd_old = _selected[_pdd_ti]
-                        _pdd_inv0 = _i80_invariant_snapshot(_selected)
                         for _pdd_sci, _pdd_sc in enumerate(_dd_swap_pool):
-                            _selected[_pdd_ti] = _pdd_sc
-                            _pdd_inv1 = _i80_invariant_snapshot(_selected)
-                            _pdd_ds_ok, _pdd_ds_reg = _i80_no_regression(_pdd_inv0, _pdd_inv1)
-                            if not _pdd_ds_ok:
-                                _pdd_ds_ok = all(not _pdd_inv0[k] for k in _pdd_ds_reg)
-                            if not _pdd_ds_ok:
-                                _pdd_ds_ok = all(
-                                    (not _pdd_inv0[k]) or (k in _PDD_DEFERRABLE)
-                                    for k in _pdd_ds_reg
-                                )
+                            _pdd_ds_ok, _pdd_ds_reg = _i83_dd_try_commit(
+                                _pdd_ti,
+                                _pdd_sci,
+                                _PDD_DEFERRABLE,
+                                _stage_label=f"post_domain_round{_pdd_ds_round + 1}",
+                                _stage_defer_keys=set(),
+                            )
                             if _pdd_ds_ok:
-                                _dd_swap_pool.pop(_pdd_sci)
                                 _pdd_ds_done = True
                                 _log.info("iter81c post-domain density swap: round=%d idx=%d replaced", _pdd_ds_round + 1, _pdd_ti)
                                 break
-                            _selected[_pdd_ti] = _pdd_old
+                            if _pdd_sci <= 3:
+                                _log.info("iter83 post-domain dd REJECT[%d]: idx=%d reg=%s", _pdd_sci, _pdd_ti, _pdd_ds_reg)
                         if _pdd_ds_done:
                             break
                     if not _pdd_ds_done:
@@ -12114,6 +12205,17 @@ def _f600_run_fast_path(
                 except Exception:
                     pass
                 _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+
+    # iter83: finalize commit lock for post-selection mutations.
+    # No final output is allowed unless the final selection satisfies all invariants.
+    if _is_daily and len(_selected) >= _max_events:
+        _i83_final_inv = _i80_invariant_snapshot(_selected)
+        _i83_final_inv_fail = [k for k, v in _i83_final_inv.items() if not v]
+        if _i83_final_inv_fail:
+            _f6_fail(
+                "FINAL_SELECTION_INVARIANT_HARD",
+                f"post_mutation_invariants_failed={_i83_final_inv_fail}",
+            )
 
     # --- iter81c: final meta rebuild after all density/diversity swaps ---
     if _is_daily:
@@ -12220,6 +12322,29 @@ def _f600_run_fast_path(
                     "strategic_density_score": _i83_sd.get("strategic_density_score", 0),
                     "strategic_density_floor_pass": _i83_sd.get("strategic_density_score", 0) >= _cm73_sd_floor,
                 })
+            _i83_per_item_sd_failures = []
+            for _i83_idx, _i83_row in enumerate(_i83_per_item):
+                if not _i83_row.get("strategic_density_floor_pass", False):
+                    _i83_per_item_sd_failures.append({
+                        "idx": _i83_idx,
+                        "score": _i83_row.get("strategic_density_score", 0),
+                        "title": _i83_row.get("title", "")[:80],
+                    })
+            _i83_per_item_sd_pass = (len(_i83_per_item_sd_failures) == 0)
+            _i83_density_scores = [
+                _hdf_all_scores.get(id(s), {}).get("density_score", 0)
+                for s in _selected
+            ]
+            _i83_density_avg = round(sum(_i83_density_scores) / len(_i83_density_scores), 2) if _i83_density_scores else 0
+            _i83_density_min = min(_i83_density_scores) if _i83_density_scores else 0
+            _i83_density_floor_pass = (
+                len(_i83_density_scores) > 0 and _i83_density_min >= _HDF_NEW_DENSITY_MIN
+            )
+            _i83_sd_scores = [row.get("strategic_density_score", 0) for row in _i83_per_item]
+            _i83_sd_avg = round(sum(_i83_sd_scores) / len(_i83_sd_scores), 2) if _i83_sd_scores else 0
+            _i83_sd_min = min(_i83_sd_scores) if _i83_sd_scores else 0
+            _i83_sd_target = int(locals().get("_sd72_target_avg", _cm73_sd_floor))
+            _i83_sd_gate_pass = (len(_i83_sd_scores) > 0 and _i83_sd_avg >= _i83_sd_target)
 
             # Apply INJECT_ overrides for gate-check values (same as pre-swap section)
             _i83_plat_check = int(os.environ["INJECT_PLATFORM_DOMAIN_TOTAL"]) if os.environ.get("INJECT_PLATFORM_DOMAIN_TOTAL") else _i83_plat_total
@@ -12316,8 +12441,15 @@ def _f600_run_fast_path(
                 "strategic_bucket_coverage_min": 5,
                 "strategic_bucket_coverage_pass": _i83_buckets_distinct >= 5,
                 "per_item_strategic_density_floor": _cm73_sd_floor,
-                "per_item_strategic_density_pass": _cm73_per_item_sd_pass,
-                "per_item_strategic_density_failures": _cm73_per_item_sd_failures,
+                "per_item_strategic_density_pass": _i83_per_item_sd_pass,
+                "per_item_strategic_density_failures": _i83_per_item_sd_failures,
+                "strategic_density_gate_target_avg": _i83_sd_target,
+                "strategic_density_gate_avg": _i83_sd_avg,
+                "strategic_density_gate_pass": _i83_sd_gate_pass,
+                "source_density_floor": _HDF_NEW_DENSITY_MIN,
+                "source_density_min": _i83_density_min,
+                "source_density_avg": _i83_density_avg,
+                "source_density_floor_pass": _i83_density_floor_pass,
                 "selected_role_axes": _i83_role_axes,
                 "selected_role_axes_distinct": _i83_role_chk,
                 "role_diversity_min": _ROLE_DIVERSITY_MIN,
@@ -12384,6 +12516,61 @@ def _f600_run_fast_path(
                 _i83_sa["non_strategic_google_research_total"] = _i83_nsgr_total
                 _i83_sa["executive_signal_total"] = _i83_exec_total
                 _i83_sa_path.write_text(_f6_j.dumps(_i83_sa, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            _i83_sd_path = _outputs / "source_density.meta.json"
+            if _i83_sd_path.exists():
+                _i83_sd_meta = _f6_j.loads(_i83_sd_path.read_text(encoding="utf-8"))
+                _i83_sel_by_url = {}
+                for _i83_s in _selected:
+                    _i83_url = str(getattr(_i83_s, "url", "") or getattr(_i83_s, "link", "") or "")[:200]
+                    if _i83_url and _i83_url not in _i83_sel_by_url:
+                        _i83_sel_by_url[_i83_url] = _i83_s
+                _i83_sel_urls = set(_i83_sel_by_url.keys())
+                _i83_sel_pass = 0
+                _i83_sel_fail = 0
+                for _i83_row in _i83_sd_meta.get("items", []):
+                    _i83_url = str(_i83_row.get("url", "") or "")[:200]
+                    _i83_is_sel = _i83_url in _i83_sel_urls
+                    _i83_row["selected"] = _i83_is_sel
+                    if not _i83_is_sel:
+                        continue
+                    _i83_dscore = float(_i83_row.get("density_score", 0) or 0)
+                    if _i83_dscore >= _HDF_NEW_DENSITY_MIN:
+                        _i83_sel_pass += 1
+                    else:
+                        _i83_sel_fail += 1
+                    _i83_sel_item = _i83_sel_by_url.get(_i83_url)
+                    if _i83_sel_item is not None:
+                        _i83_row["content_type"] = _ct71_classify(_i83_sel_item)
+                        _i83_row["source_class"] = _ct72b_source_class(_i83_sel_item)
+                        _i83_row["strategic_bucket"] = _ct72b_strategic_bucket(_i83_sel_item)
+                        _i83_row["geo_class"] = _geo_class(_i83_sel_item)
+                        _i83_row["leadership_politics_ai_item"] = _is_leadership_politics_ai(_i83_sel_item)
+                        _i83_row["china_ai_gov_item"] = _is_china_ai_gov(_i83_sel_item)
+                        _i83_row["bigtech_actionable"] = _ct71_is_bigtech_actionable(_i83_sel_item)
+                        _i83_row["bigtech_official_media_actionable"] = _ct72b_is_bigtech_official_media_actionable(_i83_sel_item)
+                        _i83_sds = _sd72_all_scores.get(id(_i83_sel_item), {})
+                        _i83_row["strategic_density_score"] = _i83_sds.get("strategic_density_score", 0)
+                        _i83_row["strategic_density_floor_pass"] = _i83_sds.get("strategic_density_score", 0) >= _cm73_sd_floor
+
+                _i83_sd_meta["canonical_snapshot"] = True
+                _i83_sd_meta["selected_pass"] = _i83_sel_pass
+                _i83_sd_meta["selected_fail"] = _i83_sel_fail
+                _i83_sd_meta["selected_all_pass"] = (_i83_sel_fail == 0 and _i83_sel_pass > 0)
+                _i83_sd_meta["selected_avg_density_score"] = _i83_density_avg
+                _i83_sd_meta["selected_min_density_score"] = _i83_density_min
+                _i83_sd_meta["density_hard_floor"] = _HDF_NEW_DENSITY_MIN
+                _i83_sd_meta["new_density_min"] = _HDF_NEW_DENSITY_MIN
+                _i83_sd_meta["density_multiplier_gate_pass"] = _i83_density_floor_pass
+                _i83_sd_meta["selected_all_pass_hard_floor"] = _i83_density_floor_pass
+                _i83_sd_meta["selected_avg_strategic_density_score"] = _i83_sd_avg
+                _i83_sd_meta["selected_min_strategic_density_score"] = _i83_sd_min
+                _i83_sd_meta["target_avg_density_1p5"] = _i83_sd_target
+                _i83_sd_meta["target_min_density_1p5"] = _cm73_sd_floor
+                _i83_sd_meta["strategic_density_gate_pass"] = _i83_sd_gate_pass
+                _i83_sd_meta["per_item_strategic_density_gate_pass"] = _i83_per_item_sd_pass
+                _i83_sd_meta["per_item_strategic_density_failures"] = _i83_per_item_sd_failures
+                _i83_sd_path.write_text(_f6_j.dumps(_i83_sd_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
             _log.info("iter83 CANONICAL SNAPSHOT FINALIZED: events=%d bt_act=%d bom=%d tc=%d gr=%d doms=%d tp=%d buckets=%d roles=%d",
                       len(_selected), _i83_bt_actionable, _i83_bt_om, _i83_tc_total, _i83_gr_total,
