@@ -8810,6 +8810,8 @@ def _f600_run_fast_path(
             "role_axes": len(set(_role_axis(s) for s in sel)) >= _ROLE_DIVERSITY_MIN,
             "buckets": len(set(_ct72b_strategic_bucket(s) for s in sel)) >= 5,
             "prohibited": not any(_is_ceo_prohibited(s) for s in sel),
+            "tc_rumor": sum(1 for s in sel if _is_techcrunch_rumor_speculation(s)) <= _TECHCRUNCH_RUMOR_SPEC_CAP,
+            "nsgr": sum(1 for s in sel if _is_non_strategic_google_research(s)) <= _NON_STRATEGIC_GR_CAP,
         }
 
     def _i80_no_regression(before, after):
