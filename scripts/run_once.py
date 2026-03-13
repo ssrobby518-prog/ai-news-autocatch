@@ -7737,11 +7737,10 @@ def _f600_run_fast_path(
         return _hits >= 2
 
     # iter84: tutorial semantic classifier (broader, no blanket official/media exemption)
-    _TUTORIAL_SEMANTIC_RE = _ct71_re.compile(
+    _TUTORIAL_SEMANTIC_TITLE_RE = _ct71_re.compile(
         r'(?:\btutorial\b|\bhow[\-\s]to\b|\bstep[\-\s]by[\-\s]step\b'
         r'|\bwalkthrough\b|\bgetting[\-\s]started\b|\bquickstart\b'
-        r'|\bdeploy(?:ment|ing)?\s+(?:guide|on|to|with|using)\b'
-        r'|\btrain(?:ing)?\s+(?:guide|recipe|tutorial|walkthrough|with\s+\w+\s+and)\b'
+        r'|\btrain\s+\w+[\-\s]\d+\w*\s+with\b'
         r'|\bfine[\-\s]tun(?:e|ing)\s+(?:guide|recipe|tutorial|with)\b'
         r'|\bsetup\s+guide\b|\binstall(?:ation)?\s+guide\b'
         r'|\bcookbook\b|\bhandbook\b'
@@ -7750,16 +7749,20 @@ def _f600_run_fast_path(
 
     def _is_tutorial_semantic(it) -> bool:
         """iter84: True if item is tutorial/deploy/how-to by semantic check.
-        No blanket official/media exemption (unlike _is_tutorial_explainer).
+        For official/media sources: only flag if TITLE matches (not fulltext).
         Only exempt if title has strong executive signals (product launch, GA, etc.)."""
         _title = str(getattr(it, "title", "") or "")
         _snippet = _f6_snippet(it)
-        _ft = _f6_text_blob(it, 2000)
-        _blob = _title + " " + _snippet + " " + _ft
-        if not _TUTORIAL_SEMANTIC_RE.search(_blob):
+        _sc = _ct72b_source_class(it)
+        # For official/media: only check title + snippet (not fulltext) to avoid false positives
+        if _sc in ("official", "media"):
+            _blob = _title + " " + _snippet
+        else:
+            _blob = _title + " " + _snippet + " " + _f6_text_blob(it, 2000)
+        if not _TUTORIAL_SEMANTIC_TITLE_RE.search(_blob):
             return False
         # If title has strong executive signal, exempt (product launch mentioning deployment)
-        if _ct71_re.search(r'\b(?:launch|announce|GA|general\s+availab|rollout|acqui|partner|earnings)\b', _title, _ct71_re.I):
+        if _ct71_re.search(r'\b(?:launch|announce|GA|general\s+availab|rollout|acqui|partner|earnings|introduc|cross[\-\s]region|global)\b', _title, _ct71_re.I):
             return False
         return True
 
@@ -7769,18 +7772,24 @@ def _f600_run_fast_path(
             r'\b(?:policy|regulat|governance|executive\s+order|legislation|hearing|testimony'
             r'|compliance|sanction|tariff|export\s+control|entity\s+list|ban|restriction'
             r'|White\s+House|Congress|Senate|EU\s+AI\s+Act|DOJ|FTC|NIST'
-            r'|minister|ministry|government|administration)\b', _ct71_re.I),
+            r'|minister|ministry|government|administration|safety|oversight'
+            r'|antitrust|CEO|CTO|CIO|VP|chief|officer|strategy|strategic'
+            r'|summit|conference|keynote|speech|statement|Davos)\b', _ct71_re.I),
         "product_launch_release_model_api": _ct71_re.compile(
             r'\b(?:launch|release|announce|model|API|SDK|GA|general\s+availab|beta|preview'
-            r'|upgrade|new\s+version|new\s+feature|rollout|ship|available\s+(?:today|now)'
-            r'|Gemini|GPT|Claude|Llama|Qwen)\b', _ct71_re.I),
+            r'|upgrade|new\s+version|new\s+feature|rollout|ship|available'
+            r'|Gemini|GPT|Claude|Llama|Qwen|LLM|inference|embedding'
+            r'|capabilities|performance|benchmark|token|parameter)\b', _ct71_re.I),
         "distribution_ecosystem_partnership": _ct71_re.compile(
             r'\b(?:partner(?:ship)?|distribut|ecosystem|alliance|OEM|integration|marketplace'
-            r'|platform|app\s+store|cloud\s+provider|resell|channel)\b', _ct71_re.I),
+            r'|platform|app\s+store|cloud|provider|resell|channel|region'
+            r'|expand|collaboration|support\s+for|cross[\-\s]region|global'
+            r'|Bedrock|Azure|SageMaker|Vertex|GCP|AWS)\b', _ct71_re.I),
         "economics_pricing_capex_monetization": _ct71_re.compile(
             r'\b(?:pric(?:e|ing)|revenue|earnings|capex|invest(?:ment)?|funding|valuation'
-            r'|IPO|acquisition|merger|monetiz|subscription|tier|enterprise\s+(?:plan|pricing|rollout)'
-            r'|cost|budget|quarterly|ARR|MRR)\b', _ct71_re.I),
+            r'|IPO|acquisition|merger|monetiz|subscription|tier|enterprise'
+            r'|cost|budget|quarterly|ARR|MRR|billion|million|raise|round'
+            r'|deal|growth|margin|profit|market(?:place)?|capital)\b', _ct71_re.I),
         "china_ai_government_strategic": _ct71_re.compile(
             r'(?:\bChina\b|\bChinese\b|\bMIIT\b|\bCAC\b|\bState\s+Council\b'
             r'|\bBeijing\b|\bShanghai\b|\bShenzhen\b'
@@ -7793,7 +7802,8 @@ def _f600_run_fast_path(
         """iter84: Return set of executive semantic axes present in item."""
         _title = str(getattr(it, "title", "") or "")
         _snippet = _f6_snippet(it)
-        _blob = _title + " " + _snippet
+        _ft = _f6_text_blob(it, 1000)
+        _blob = _title + " " + _snippet + " " + _ft
         _axes = set()
         for _ax_name, _ax_re in _EXEC_SEM_AXIS_PATTERNS.items():
             if _ax_re.search(_blob):
