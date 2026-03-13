@@ -4833,15 +4833,52 @@ if (Test-Path $_teMetaPatchPath) {
         $_teObj["cpu_fallback_detected"] = ((Test-Path $_gpuFallbackFlag) -or $_runOnceFallback)
         $_teObj["gpu_required"] = $true
         # iter39 (E): compute est_total_seconds_if_all_miss
-        # iter44: when translate_mode=all_miss, actual total IS the all-miss measurement
+        # iter83d: prefer canonical pipeline stage baseline (before_translation + build_docx + gates)
+        # over wrapper wall-clock, to avoid over-counting untracked shell/runtime overhead.
         $_teXlatSec = if ($_teObj.Contains("translate_seconds")) { [double]$_teObj["translate_seconds"] } else { 0 }
         $_teEstMiss = if ($_teObj.Contains("est_translate_seconds_if_all_miss")) { [double]$_teObj["est_translate_seconds_if_all_miss"] } else { 0 }
         $_teMode    = if ($_teObj.Contains("translate_mode")) { [string]$_teObj["translate_mode"] } else { "" }
+        $_teBaseNoTranslate = 0.0
+        $_teHasStageBase = $false
+        if ($null -ne $_stgHt -and $_stgHt.Count -gt 0) {
+            if ($_stgHt.Contains("before_translation")) {
+                $_teBaseNoTranslate += [double]$_stgHt["before_translation"]
+                $_teHasStageBase = $true
+            } else {
+                foreach ($_k in @("z0_collect_online","z0_collect","hydrate","digest_write","card_build")) {
+                    if ($_stgHt.Contains($_k)) {
+                        $_teBaseNoTranslate += [double]$_stgHt[$_k]
+                        $_teHasStageBase = $true
+                    }
+                }
+            }
+            foreach ($_kTail in @("build_docx","gates")) {
+                if ($_stgHt.Contains($_kTail)) {
+                    $_teBaseNoTranslate += [double]$_stgHt[$_kTail]
+                    $_teHasStageBase = $true
+                }
+            }
+        }
+        if ($_teHasStageBase) {
+            $_teObj["est_base_seconds_no_translate"] = [double][Math]::Round($_teBaseNoTranslate, 1)
+        }
         if ($_teMode -eq "all_miss") {
-            # actual run WAS all-miss; total_seconds is the ground-truth measurement
-            $_teObj["est_total_seconds_if_all_miss"] = [int]$_sSecTot
+            if ($_teHasStageBase -and $_teXlatSec -gt 0) {
+                $_teObj["est_total_seconds_if_all_miss"] = [int][Math]::Round(($_teBaseNoTranslate + $_teXlatSec), 0)
+                $_teObj["est_total_seconds_if_all_miss_source"] = "stage_seconds_actual_translate"
+            } else {
+                # fallback when stage baseline is unavailable
+                $_teObj["est_total_seconds_if_all_miss"] = [int]$_sSecTot
+                $_teObj["est_total_seconds_if_all_miss_source"] = "wall_clock_total_seconds"
+            }
         } elseif ($_teEstMiss -gt 0) {
-            $_teObj["est_total_seconds_if_all_miss"] = [int][Math]::Round(($_sSecTot - $_teXlatSec + $_teEstMiss), 0)
+            if ($_teHasStageBase) {
+                $_teObj["est_total_seconds_if_all_miss"] = [int][Math]::Round(($_teBaseNoTranslate + $_teEstMiss), 0)
+                $_teObj["est_total_seconds_if_all_miss_source"] = "stage_seconds_est_translate"
+            } else {
+                $_teObj["est_total_seconds_if_all_miss"] = [int][Math]::Round(($_sSecTot - $_teXlatSec + $_teEstMiss), 0)
+                $_teObj["est_total_seconds_if_all_miss_source"] = "wall_clock_est_translate"
+            }
         }
         $_teObj | ConvertTo-Json -Depth 8 -Compress | Set-Content $_teMetaPatchPath -Encoding UTF8
         Write-Output ("  [iter35] translation_engine.meta.json 已更新 tok_per_sec_est={0:F1}  calls_tok_s_count={1}  cpu_fallback={2}" `
@@ -5040,6 +5077,36 @@ if (Test-Path $_dfaJsonPath) {
 }
 Write-Output ""
 
+function Get-MetaEffectiveInt {
+    param(
+        $Meta,
+        [string[]]$Names,
+        [int]$Default = 0
+    )
+    if ($null -eq $Meta) { return $Default }
+    foreach ($name in $Names) {
+        if ($Meta.PSObject.Properties[$name]) {
+            try { return [int]$Meta.$name } catch {}
+        }
+    }
+    return $Default
+}
+
+function Get-MetaEffectiveBool {
+    param(
+        $Meta,
+        [string[]]$Names,
+        [bool]$Default = $false
+    )
+    if ($null -eq $Meta) { return $Default }
+    foreach ($name in $Names) {
+        if ($Meta.PSObject.Properties[$name]) {
+            try { return [bool]$Meta.$name } catch {}
+        }
+    }
+    return $Default
+}
+
 # ---------------------------------------------------------------------------
 # iter53: BIGTECH_DIVERSITY_HARD_DAILY — enforce multi-source + multi-vendor
 #   Reads selection_audit.meta.json for diversity fields
@@ -5087,10 +5154,10 @@ Write-Output "SINGLE_DOMAIN_SHARE_CAP_HARD:"
 if (Test-Path $_dscMetaPath) {
     try {
         $_dscMeta = Get-Content $_dscMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $_dscMaxDom    = if ($_dscMeta.PSObject.Properties['max_domain_count']) { [int]$_dscMeta.max_domain_count } else { 99 }
+        $_dscMaxDom    = Get-MetaEffectiveInt $_dscMeta @('gate_max_domain_count', 'max_domain_count') 99
         $_dscEvents    = if ($_dscMeta.PSObject.Properties['selected_events']) { [int]$_dscMeta.selected_events } else { 0 }
         $_dscRatio     = if ($_dscEvents -gt 0) { [math]::Round($_dscMaxDom / $_dscEvents, 4) } else { "N/A" }
-        $_dscPass      = if ($_dscMeta.PSObject.Properties['domain_cap_pass']) { $_dscMeta.domain_cap_pass } elseif ($_dscMeta.PSObject.Properties['domain_share_cap_pass']) { $_dscMeta.domain_share_cap_pass } else { $false }
+        $_dscPass      = Get-MetaEffectiveBool $_dscMeta @('gate_domain_cap_pass', 'gate_domain_share_cap_pass', 'domain_cap_pass', 'domain_share_cap_pass') $false
         $_dscInjected  = if ($_dscMeta.PSObject.Properties['domain_test_injected']) { $_dscMeta.domain_test_injected } elseif ($_dscMeta.PSObject.Properties['domain_share_cap_test_injected']) { $_dscMeta.domain_share_cap_test_injected } else { $false }
         Write-Output ("  max_domain_count          : {0}" -f $_dscMaxDom)
         Write-Output ("  selected_events           : {0}" -f $_dscEvents)
@@ -5123,10 +5190,10 @@ Write-Output "SINGLE_VENDOR_SHARE_CAP_HARD:"
 if (Test-Path $_vscMetaPath) {
     try {
         $_vscMeta = Get-Content $_vscMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $_vscMaxVen    = if ($_vscMeta.PSObject.Properties['max_vendor_count']) { [int]$_vscMeta.max_vendor_count } else { 99 }
+        $_vscMaxVen    = Get-MetaEffectiveInt $_vscMeta @('gate_max_vendor_count', 'max_vendor_count') 99
         $_vscEvents    = if ($_vscMeta.PSObject.Properties['selected_events']) { [int]$_vscMeta.selected_events } else { 0 }
         $_vscRatio     = if ($_vscEvents -gt 0) { [math]::Round($_vscMaxVen / $_vscEvents, 4) } else { "N/A" }
-        $_vscPass      = if ($_vscMeta.PSObject.Properties['vendor_cap_pass']) { $_vscMeta.vendor_cap_pass } elseif ($_vscMeta.PSObject.Properties['vendor_share_cap_pass']) { $_vscMeta.vendor_share_cap_pass } else { $false }
+        $_vscPass      = Get-MetaEffectiveBool $_vscMeta @('gate_vendor_cap_pass', 'gate_vendor_share_cap_pass', 'vendor_cap_pass', 'vendor_share_cap_pass') $false
         $_vscInjected  = if ($_vscMeta.PSObject.Properties['vendor_test_injected']) { $_vscMeta.vendor_test_injected } elseif ($_vscMeta.PSObject.Properties['vendor_share_cap_test_injected']) { $_vscMeta.vendor_share_cap_test_injected } else { $false }
         Write-Output ("  max_vendor_count          : {0}" -f $_vscMaxVen)
         Write-Output ("  selected_events           : {0}" -f $_vscEvents)
@@ -5241,9 +5308,9 @@ if ($_fast300Daily) {
     if (Test-Path $_pdcMetaPath) {
         try {
             $_pdcMeta = Get-Content $_pdcMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_pdcTotal    = if ($_pdcMeta.PSObject.Properties['platform_domain_total_count']) { [int]$_pdcMeta.platform_domain_total_count } else { 99 }
+            $_pdcTotal    = Get-MetaEffectiveInt $_pdcMeta @('gate_platform_domain_total_count', 'platform_domain_total_count') 99
             $_pdcCap      = if ($_pdcMeta.PSObject.Properties['cap']) { [int]$_pdcMeta.cap } else { 1 }
-            $_pdcPass     = if ($_pdcMeta.PSObject.Properties['cap_pass']) { $_pdcMeta.cap_pass } else { $false }
+            $_pdcPass     = Get-MetaEffectiveBool $_pdcMeta @('gate_cap_pass', 'cap_pass') $false
             $_pdcInjected = if ($_pdcMeta.PSObject.Properties['test_injected']) { $_pdcMeta.test_injected } else { $false }
             $_pdcDomains  = if ($_pdcMeta.PSObject.Properties['platform_domains']) { ($_pdcMeta.platform_domains -join ", ") } else { "N/A" }
             Write-Output ("  platform_domain_total_count : {0}" -f $_pdcTotal)
@@ -5319,8 +5386,8 @@ if ($_fast300Daily) {
     if (Test-Path $_cmMetaPath2) {
         try {
             $_cmMeta2 = Get-Content $_cmMetaPath2 -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_cmRtTotal2   = if ($_cmMeta2.PSObject.Properties['research_tutorial_total']) { [int]$_cmMeta2.research_tutorial_total } else { 0 }
-            $_cmRtPass2    = if ($_cmMeta2.PSObject.Properties['research_tutorial_cap_pass']) { $_cmMeta2.research_tutorial_cap_pass } else { $false }
+            $_cmRtTotal2   = Get-MetaEffectiveInt $_cmMeta2 @('research_tutorial_gate_total', 'research_tutorial_total') 0
+            $_cmRtPass2    = Get-MetaEffectiveBool $_cmMeta2 @('research_tutorial_gate_cap_pass', 'research_tutorial_cap_pass') $false
             $_cmRtInjected = if ($_cmMeta2.PSObject.Properties['research_tutorial_test_injected']) { $_cmMeta2.research_tutorial_test_injected } else { $false }
             Write-Output ("  research_tutorial_total     : {0}" -f $_cmRtTotal2)
             Write-Output ("  research_tutorial_cap_pass  : {0}" -f $_cmRtPass2)
@@ -5352,8 +5419,8 @@ if ($_fast300Daily) {
     if (Test-Path $_bomMetaPath) {
         try {
             $_bomMeta = Get-Content $_bomMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_bomCount   = if ($_bomMeta.PSObject.Properties['bigtech_official_media_count']) { [int]$_bomMeta.bigtech_official_media_count } else { 0 }
-            $_bomPass    = if ($_bomMeta.PSObject.Properties['bigtech_official_media_min_pass']) { $_bomMeta.bigtech_official_media_min_pass } else { $false }
+            $_bomCount   = Get-MetaEffectiveInt $_bomMeta @('bigtech_official_media_gate_count', 'bigtech_official_media_count') 0
+            $_bomPass    = Get-MetaEffectiveBool $_bomMeta @('bigtech_official_media_gate_pass', 'bigtech_official_media_min_pass') $false
             $_bomInjected = if ($_bomMeta.PSObject.Properties['bigtech_official_media_test_injected']) { $_bomMeta.bigtech_official_media_test_injected } else { $false }
             Write-Output ("  bigtech_official_media_count : {0}" -f $_bomCount)
             Write-Output ("  bigtech_official_media_pass  : {0}" -f $_bomPass)
@@ -5384,8 +5451,8 @@ if ($_fast300Daily) {
     if (Test-Path $_grtMetaPath) {
         try {
             $_grtMeta = Get-Content $_grtMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_grtCount  = if ($_grtMeta.PSObject.Properties['google_research_total']) { [int]$_grtMeta.google_research_total } else { 0 }
-            $_grtPass   = if ($_grtMeta.PSObject.Properties['google_research_cap_pass']) { $_grtMeta.google_research_cap_pass } else { $false }
+            $_grtCount  = Get-MetaEffectiveInt $_grtMeta @('google_research_gate_total', 'google_research_total') 0
+            $_grtPass   = Get-MetaEffectiveBool $_grtMeta @('google_research_gate_cap_pass', 'google_research_cap_pass') $false
             $_grtInjected = if ($_grtMeta.PSObject.Properties['google_research_test_injected']) { $_grtMeta.google_research_test_injected } else { $false }
             Write-Output ("  google_research_total : {0}" -f $_grtCount)
             Write-Output ("  google_research_pass  : {0}" -f $_grtPass)
@@ -5416,8 +5483,8 @@ if ($_fast300Daily) {
     if (Test-Path $_drMetaPath) {
         try {
             $_drMeta = Get-Content $_drMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_drCount  = if ($_drMeta.PSObject.Properties['developer_release_total']) { [int]$_drMeta.developer_release_total } else { 0 }
-            $_drPass   = if ($_drMeta.PSObject.Properties['developer_release_cap_pass']) { $_drMeta.developer_release_cap_pass } else { $false }
+            $_drCount  = Get-MetaEffectiveInt $_drMeta @('developer_release_gate_total', 'developer_release_total') 0
+            $_drPass   = Get-MetaEffectiveBool $_drMeta @('developer_release_gate_cap_pass', 'developer_release_cap_pass') $false
             $_drInjected = if ($_drMeta.PSObject.Properties['developer_release_test_injected']) { $_drMeta.developer_release_test_injected } else { $false }
             Write-Output ("  developer_release_total : {0}" -f $_drCount)
             Write-Output ("  developer_release_pass  : {0}" -f $_drPass)
@@ -5448,8 +5515,8 @@ if ($_fast300Daily) {
     if (Test-Path $_idtMetaPath) {
         try {
             $_idtMeta = Get-Content $_idtMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_idtCount  = if ($_idtMeta.PSObject.Properties['indie_dev_tone_total']) { [int]$_idtMeta.indie_dev_tone_total } else { 0 }
-            $_idtPass   = if ($_idtMeta.PSObject.Properties['indie_dev_tone_cap_pass']) { $_idtMeta.indie_dev_tone_cap_pass } else { $false }
+            $_idtCount  = Get-MetaEffectiveInt $_idtMeta @('indie_dev_tone_gate_total', 'indie_dev_tone_total') 0
+            $_idtPass   = Get-MetaEffectiveBool $_idtMeta @('indie_dev_tone_gate_cap_pass', 'indie_dev_tone_cap_pass') $false
             $_idtInjected = if ($_idtMeta.PSObject.Properties['indie_dev_tone_test_injected']) { $_idtMeta.indie_dev_tone_test_injected } else { $false }
             Write-Output ("  indie_dev_tone_total : {0}" -f $_idtCount)
             Write-Output ("  indie_dev_tone_pass  : {0}" -f $_idtPass)
@@ -5480,8 +5547,8 @@ if ($_fast300Daily) {
     if (Test-Path $_forumMetaPath) {
         try {
             $_forumMeta = Get-Content $_forumMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_forumCount  = if ($_forumMeta.PSObject.Properties['forum_discussion_total']) { [int]$_forumMeta.forum_discussion_total } else { 0 }
-            $_forumPass   = if ($_forumMeta.PSObject.Properties['forum_discussion_cap_pass']) { $_forumMeta.forum_discussion_cap_pass } else { $false }
+            $_forumCount  = Get-MetaEffectiveInt $_forumMeta @('forum_discussion_gate_total', 'forum_discussion_total') 0
+            $_forumPass   = Get-MetaEffectiveBool $_forumMeta @('forum_discussion_gate_cap_pass', 'forum_discussion_cap_pass') $false
             $_forumInjected = if ($_forumMeta.PSObject.Properties['forum_discussion_test_injected']) { $_forumMeta.forum_discussion_test_injected } else { $false }
             Write-Output ("  forum_discussion_total : {0}" -f $_forumCount)
             Write-Output ("  forum_discussion_pass  : {0}" -f $_forumPass)
@@ -5512,8 +5579,8 @@ if ($_fast300Daily) {
     if (Test-Path $_tutMetaPath) {
         try {
             $_tutMeta = Get-Content $_tutMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_tutCount  = if ($_tutMeta.PSObject.Properties['tutorial_explainer_total']) { [int]$_tutMeta.tutorial_explainer_total } else { 0 }
-            $_tutPass   = if ($_tutMeta.PSObject.Properties['tutorial_explainer_cap_pass']) { $_tutMeta.tutorial_explainer_cap_pass } else { $false }
+            $_tutCount  = Get-MetaEffectiveInt $_tutMeta @('tutorial_explainer_gate_total', 'tutorial_explainer_total') 0
+            $_tutPass   = Get-MetaEffectiveBool $_tutMeta @('tutorial_explainer_gate_cap_pass', 'tutorial_explainer_cap_pass') $false
             $_tutInjected = if ($_tutMeta.PSObject.Properties['tutorial_explainer_test_injected']) { $_tutMeta.tutorial_explainer_test_injected } else { $false }
             Write-Output ("  tutorial_explainer_total : {0}" -f $_tutCount)
             Write-Output ("  tutorial_explainer_pass  : {0}" -f $_tutPass)
@@ -5544,8 +5611,8 @@ if ($_fast300Daily) {
     if (Test-Path $_tcMetaPath) {
         try {
             $_tcMeta = Get-Content $_tcMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_tcCount  = if ($_tcMeta.PSObject.Properties['techcrunch_total']) { [int]$_tcMeta.techcrunch_total } else { 0 }
-            $_tcPass   = if ($_tcMeta.PSObject.Properties['techcrunch_cap_pass']) { $_tcMeta.techcrunch_cap_pass } else { $false }
+            $_tcCount  = Get-MetaEffectiveInt $_tcMeta @('techcrunch_gate_total', 'techcrunch_total') 0
+            $_tcPass   = Get-MetaEffectiveBool $_tcMeta @('techcrunch_gate_cap_pass', 'techcrunch_cap_pass') $false
             $_tcInjected = if ($_tcMeta.PSObject.Properties['techcrunch_test_injected']) { $_tcMeta.techcrunch_test_injected } else { $false }
             Write-Output ("  techcrunch_total : {0}" -f $_tcCount)
             Write-Output ("  techcrunch_pass  : {0}" -f $_tcPass)
@@ -5576,8 +5643,8 @@ if ($_fast300Daily) {
     if (Test-Path $_hfbeMetaPath) {
         try {
             $_hfbeMeta = Get-Content $_hfbeMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_hfbeCount  = if ($_hfbeMeta.PSObject.Properties['hf_blog_explainer_total']) { [int]$_hfbeMeta.hf_blog_explainer_total } else { 0 }
-            $_hfbePass   = if ($_hfbeMeta.PSObject.Properties['hf_blog_explainer_cap_pass']) { $_hfbeMeta.hf_blog_explainer_cap_pass } else { $false }
+            $_hfbeCount  = Get-MetaEffectiveInt $_hfbeMeta @('hf_blog_explainer_gate_total', 'hf_blog_explainer_total') 0
+            $_hfbePass   = Get-MetaEffectiveBool $_hfbeMeta @('hf_blog_explainer_gate_cap_pass', 'hf_blog_explainer_cap_pass') $false
             $_hfbeInjected = if ($_hfbeMeta.PSObject.Properties['hf_blog_explainer_test_injected']) { $_hfbeMeta.hf_blog_explainer_test_injected } else { $false }
             Write-Output ("  hf_blog_explainer_total : {0}" -f $_hfbeCount)
             Write-Output ("  hf_blog_explainer_pass  : {0}" -f $_hfbePass)
@@ -5608,8 +5675,8 @@ if ($_fast300Daily) {
     if (Test-Path $_tcrMetaPath) {
         try {
             $_tcrMeta = Get-Content $_tcrMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_tcrCount  = if ($_tcrMeta.PSObject.Properties['techcrunch_rumor_speculation_total']) { [int]$_tcrMeta.techcrunch_rumor_speculation_total } else { 0 }
-            $_tcrPass   = if ($_tcrMeta.PSObject.Properties['techcrunch_rumor_speculation_cap_pass']) { $_tcrMeta.techcrunch_rumor_speculation_cap_pass } else { $false }
+            $_tcrCount  = Get-MetaEffectiveInt $_tcrMeta @('techcrunch_rumor_speculation_gate_total', 'techcrunch_rumor_speculation_total') 0
+            $_tcrPass   = Get-MetaEffectiveBool $_tcrMeta @('techcrunch_rumor_speculation_gate_cap_pass', 'techcrunch_rumor_speculation_cap_pass') $false
             $_tcrInjected = if ($_tcrMeta.PSObject.Properties['techcrunch_rumor_speculation_test_injected']) { $_tcrMeta.techcrunch_rumor_speculation_test_injected } else { $false }
             Write-Output ("  tc_rumor_speculation_total : {0}" -f $_tcrCount)
             Write-Output ("  tc_rumor_speculation_pass  : {0}" -f $_tcrPass)
@@ -5640,8 +5707,8 @@ if ($_fast300Daily) {
     if (Test-Path $_nsgrMetaPath) {
         try {
             $_nsgrMeta = Get-Content $_nsgrMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_nsgrCount  = if ($_nsgrMeta.PSObject.Properties['non_strategic_google_research_total']) { [int]$_nsgrMeta.non_strategic_google_research_total } else { 0 }
-            $_nsgrPass   = if ($_nsgrMeta.PSObject.Properties['non_strategic_google_research_cap_pass']) { $_nsgrMeta.non_strategic_google_research_cap_pass } else { $false }
+            $_nsgrCount  = Get-MetaEffectiveInt $_nsgrMeta @('non_strategic_google_research_gate_total', 'non_strategic_google_research_total') 0
+            $_nsgrPass   = Get-MetaEffectiveBool $_nsgrMeta @('non_strategic_google_research_gate_cap_pass', 'non_strategic_google_research_cap_pass') $false
             $_nsgrInjected = if ($_nsgrMeta.PSObject.Properties['non_strategic_google_research_test_injected']) { $_nsgrMeta.non_strategic_google_research_test_injected } else { $false }
             Write-Output ("  non_strategic_gr_total : {0}" -f $_nsgrCount)
             Write-Output ("  non_strategic_gr_pass  : {0}" -f $_nsgrPass)
@@ -5672,8 +5739,8 @@ if ($_fast300Daily) {
     if (Test-Path $_tcgrMetaPath) {
         try {
             $_tcgrMeta = Get-Content $_tcgrMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_tcgrCount  = if ($_tcgrMeta.PSObject.Properties['techcrunch_google_research_total']) { [int]$_tcgrMeta.techcrunch_google_research_total } else { 0 }
-            $_tcgrPass   = if ($_tcgrMeta.PSObject.Properties['techcrunch_google_research_combined_cap_pass']) { $_tcgrMeta.techcrunch_google_research_combined_cap_pass } else { $false }
+            $_tcgrCount  = Get-MetaEffectiveInt $_tcgrMeta @('techcrunch_google_research_gate_total', 'techcrunch_google_research_total') 0
+            $_tcgrPass   = Get-MetaEffectiveBool $_tcgrMeta @('techcrunch_google_research_gate_cap_pass', 'techcrunch_google_research_combined_cap_pass') $false
             $_tcgrInjected = if ($_tcgrMeta.PSObject.Properties['techcrunch_google_research_combined_test_injected']) { $_tcgrMeta.techcrunch_google_research_combined_test_injected } else { $false }
             Write-Output ("  techcrunch_google_research_total : {0}" -f $_tcgrCount)
             Write-Output ("  combined_cap_pass                : {0}" -f $_tcgrPass)
@@ -5704,8 +5771,8 @@ if ($_fast300Daily) {
     if (Test-Path $_rdMetaPath) {
         try {
             $_rdMeta = Get-Content $_rdMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_rdCount  = if ($_rdMeta.PSObject.Properties['selected_role_axes_distinct']) { [int]$_rdMeta.selected_role_axes_distinct } else { 0 }
-            $_rdPass   = if ($_rdMeta.PSObject.Properties['role_diversity_pass']) { $_rdMeta.role_diversity_pass } else { $false }
+            $_rdCount  = Get-MetaEffectiveInt $_rdMeta @('selected_role_axes_gate_distinct', 'selected_role_axes_distinct') 0
+            $_rdPass   = Get-MetaEffectiveBool $_rdMeta @('role_diversity_gate_pass', 'role_diversity_pass') $false
             $_rdInjected = if ($_rdMeta.PSObject.Properties['role_diversity_test_injected']) { $_rdMeta.role_diversity_test_injected } else { $false }
             Write-Output ("  selected_role_axes_distinct : {0}" -f $_rdCount)
             Write-Output ("  role_diversity_pass         : {0}" -f $_rdPass)
@@ -5736,8 +5803,8 @@ if ($_fast300Daily) {
     if (Test-Path $_tpMetaPath) {
         try {
             $_tpMeta = Get-Content $_tpMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_tpCount  = if ($_tpMeta.PSObject.Properties['target_player_distinct']) { [int]$_tpMeta.target_player_distinct } else { 0 }
-            $_tpPass   = if ($_tpMeta.PSObject.Properties['target_player_coverage_pass']) { $_tpMeta.target_player_coverage_pass } else { $false }
+            $_tpCount  = Get-MetaEffectiveInt $_tpMeta @('target_player_gate_distinct', 'target_player_distinct') 0
+            $_tpPass   = Get-MetaEffectiveBool $_tpMeta @('target_player_gate_coverage_pass', 'target_player_coverage_pass') $false
             $_tpInjected = if ($_tpMeta.PSObject.Properties['target_player_test_injected']) { $_tpMeta.target_player_test_injected } else { $false }
             $_tpPlayers = if ($_tpMeta.PSObject.Properties['target_players']) { ($_tpMeta.target_players -join ", ") } else { "N/A" }
             Write-Output ("  target_player_distinct : {0}" -f $_tpCount)
@@ -5770,9 +5837,9 @@ if ($_fast300Daily) {
     if (Test-Path $_ucpMetaPath) {
         try {
             $_ucpMeta = Get-Content $_ucpMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_ucpUS    = if ($_ucpMeta.PSObject.Properties['us_policy_count']) { [int]$_ucpMeta.us_policy_count } else { 0 }
-            $_ucpCN    = if ($_ucpMeta.PSObject.Properties['china_policy_count']) { [int]$_ucpMeta.china_policy_count } else { 0 }
-            $_ucpPass  = if ($_ucpMeta.PSObject.Properties['us_china_policy_min_pass']) { $_ucpMeta.us_china_policy_min_pass } else { $false }
+            $_ucpUS    = Get-MetaEffectiveInt $_ucpMeta @('us_policy_gate_count', 'us_policy_count') 0
+            $_ucpCN    = Get-MetaEffectiveInt $_ucpMeta @('china_policy_gate_count', 'china_policy_count') 0
+            $_ucpPass  = Get-MetaEffectiveBool $_ucpMeta @('us_china_policy_gate_pass', 'us_china_policy_min_pass') $false
             $_ucpUSInj = if ($_ucpMeta.PSObject.Properties['us_policy_test_injected']) { $_ucpMeta.us_policy_test_injected } else { $false }
             $_ucpCNInj = if ($_ucpMeta.PSObject.Properties['china_policy_test_injected']) { $_ucpMeta.china_policy_test_injected } else { $false }
             Write-Output ("  us_policy_count   : {0}" -f $_ucpUS)
@@ -5867,8 +5934,8 @@ if ($_fast300Daily) {
     if (Test-Path $_lpPath) {
         try {
             $_lpMeta = Get-Content $_lpPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_lpCount    = if ($_lpMeta.PSObject.Properties['leadership_politics_ai_count']) { [int]$_lpMeta.leadership_politics_ai_count } else { 0 }
-            $_lpPass     = if ($_lpMeta.PSObject.Properties['leadership_politics_ai_min_pass']) { $_lpMeta.leadership_politics_ai_min_pass } else { $false }
+            $_lpCount    = Get-MetaEffectiveInt $_lpMeta @('leadership_politics_ai_gate_count', 'leadership_politics_ai_count') 0
+            $_lpPass     = Get-MetaEffectiveBool $_lpMeta @('leadership_politics_ai_gate_pass', 'leadership_politics_ai_min_pass') $false
             $_lpInjected = if ($_lpMeta.PSObject.Properties['leadership_politics_ai_test_injected']) { $_lpMeta.leadership_politics_ai_test_injected } else { $false }
             Write-Output ("  leadership_politics_ai_count : {0}" -f $_lpCount)
             Write-Output ("  leadership_politics_ai_pass  : {0}" -f $_lpPass)
@@ -5900,8 +5967,8 @@ if ($_fast300Daily) {
     if (Test-Path $_caPath) {
         try {
             $_caMeta = Get-Content $_caPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            $_caCount    = if ($_caMeta.PSObject.Properties['china_ai_gov_count']) { [int]$_caMeta.china_ai_gov_count } else { 0 }
-            $_caPass     = if ($_caMeta.PSObject.Properties['china_ai_gov_min_pass']) { $_caMeta.china_ai_gov_min_pass } else { $false }
+            $_caCount    = Get-MetaEffectiveInt $_caMeta @('china_ai_gov_gate_count', 'china_ai_gov_count') 0
+            $_caPass     = Get-MetaEffectiveBool $_caMeta @('china_ai_gov_gate_pass', 'china_ai_gov_min_pass') $false
             $_caInjected = if ($_caMeta.PSObject.Properties['china_ai_gov_test_injected']) { $_caMeta.china_ai_gov_test_injected } else { $false }
             Write-Output ("  china_ai_gov_count           : {0}" -f $_caCount)
             Write-Output ("  china_ai_gov_pass            : {0}" -f $_caPass)

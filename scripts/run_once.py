@@ -6792,20 +6792,35 @@ def _f600_item_to_card_dict(item) -> dict:
     title = _normalize_ws(str(getattr(item, "title", "") or ""))
     source_name = str(getattr(item, "source_name", "") or "")
     url = str(getattr(item, "url", "") or getattr(item, "link", "") or "")
-    full_text = str(getattr(item, "full_text", "") or getattr(item, "body", "") or "")
-    # iter80: fallback to summary/description if full_text is too short
+    full_text = ""
+    for _ft_field in ("full_text", "body", "content_text", "content"):
+        _ft_candidate = str(getattr(item, _ft_field, "") or "").strip()
+        if len(_ft_candidate) > len(full_text):
+            full_text = _ft_candidate
+    # iter80/iter83: fallback to summary/description if article body is absent or too short
     if len(full_text.strip()) < 200:
-        for _ftf in ("summary", "description", "snippet", "content"):
+        for _ftf in ("summary", "description", "snippet", "content_text", "content"):
             _ftv = str(getattr(item, _ftf, "") or "").strip()
             if len(_ftv) > len(full_text.strip()):
                 full_text = _ftv
     # Build fact_pack_sentences from full_text via sentence splitting
     sentences: list = []
+    _seen_sentence_keys: set[str] = set()
+
+    def _push_sentence(_raw: str) -> bool:
+        _sc = _normalize_ws(str(_raw or ""))
+        if len(_sc) < 20:
+            return False
+        _skey = re.sub(r"\W+", "", _sc.lower())[:120]
+        if not _skey or _skey in _seen_sentence_keys:
+            return False
+        _seen_sentence_keys.add(_skey)
+        sentences.append(_sc)
+        return True
+
     # iter80b: split on sentence boundaries, newlines, semicolons, and em-dashes
     for seg in re.split(r"(?<=[.!?。！？;；])\s+|\n+|(?<=—)\s+", full_text):
-        sc = _normalize_ws(seg)
-        if len(sc) >= 20 and sc not in sentences:
-            sentences.append(sc)
+        _push_sentence(seg)
         if len(sentences) >= 12:
             break
     # iter80b: if still too few sentences, chunk unseen tail of full_text
@@ -6822,9 +6837,28 @@ def _f600_item_to_card_dict(item) -> dict:
         while len(sentences) < 8 and _chunk_pos < len(_chunk_text):
             _chunk_end = min(_chunk_pos + 200, len(_chunk_text))
             _chunk = _chunk_text[_chunk_pos:_chunk_end].strip()
-            if len(_chunk) >= 20 and _chunk not in sentences:
-                sentences.append(_chunk)
+            _push_sentence(_chunk)
             _chunk_pos = _chunk_end
+    # iter83: short official/media updates often carry enough signal in title+summary,
+    # but not enough punctuation to survive sentence splitting. Recover clause-level facts
+    # before density swap tries to replace an otherwise valid domain/vendor slot.
+    if len(sentences) < 5:
+        _fact_seed = _normalize_ws(f"{title}. {full_text}".strip())
+        for seg in re.split(r"(?<=[,:;])\s+|(?<=—)\s+|\s+[|/]\s+|\s+\-\s+", _fact_seed):
+            if _push_sentence(seg) and len(sentences) >= 8:
+                break
+        if len(sentences) < 5:
+            _seed_tokens = _fact_seed.split()
+            _chunk_words: list[str] = []
+            for _tok in _seed_tokens:
+                _chunk_words.append(_tok)
+                _candidate = " ".join(_chunk_words).strip()
+                if len(_candidate) >= 60:
+                    if _push_sentence(_candidate) and len(sentences) >= 8:
+                        break
+                    _chunk_words = []
+            if _chunk_words and len(sentences) < 8:
+                _push_sentence(" ".join(_chunk_words))
     return {
         "title": title,
         "source_name": source_name,
@@ -7094,8 +7128,41 @@ def _f600_run_fast_path(
     def _f6_title(it) -> str:
         return str(getattr(it, "title", "") or "")
 
+    def _f6_snippet(it) -> str:
+        return str(
+            getattr(it, "snippet", "")
+            or getattr(it, "summary", "")
+            or getattr(it, "description", "")
+            or getattr(it, "excerpt", "")
+            or ""
+        )
+
+    def _f6_text_blob(it, limit: int | None = None) -> str:
+        _parts = []
+        for _field in ("full_text", "fulltext", "body", "content_text", "content"):
+            _val = _normalize_ws(str(getattr(it, _field, "") or ""))
+            if _val and _val not in _parts:
+                _parts.append(_val)
+        _blob = _normalize_ws(" ".join(_parts))
+        if len(_blob) < 240:
+            _fallback = _normalize_ws(_f6_snippet(it))
+            if _fallback:
+                _blob = _normalize_ws(f"{_blob} {_fallback}".strip())
+        if len(_blob) < 240:
+            _title = _normalize_ws(_f6_title(it))
+            if _title:
+                _blob = _normalize_ws(f"{_title} {_blob}".strip())
+        if limit is not None:
+            return _blob[:limit]
+        return _blob
+
     def _f6_is_bigtech(it) -> bool:
-        return bool(_BIGTECH_COMPANY_RE.search(_f6_title(it)) or _BIGTECH_COMPANY_RE.search(_f6_src(it)))
+        _vendor_bigtech = _f6_vendor_key(it) in globals().get("_CT71_BIGTECH_VENDORS", frozenset())
+        return bool(
+            _vendor_bigtech
+            or _BIGTECH_COMPANY_RE.search(_f6_title(it))
+            or _BIGTECH_COMPANY_RE.search(_f6_src(it))
+        )
 
     def _f6_src_type(it) -> str:
         return _classify_source_type(_f6_src(it), str(getattr(it, "url", "") or getattr(it, "link", "") or ""))
@@ -7157,8 +7224,8 @@ def _f600_run_fast_path(
     def _ct71_classify(it) -> str:
         """Classify content_type via regex on title+snippet+fulltext. O(n), no network."""
         _title = str(getattr(it, "title", "") or "")
-        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
-        _ft = str(getattr(it, "fulltext", "") or getattr(it, "body", "") or "")
+        _snippet = _f6_snippet(it)
+        _ft = _f6_text_blob(it)
         _blob = _title + " " + _snippet + " " + _ft[:3000]
         for _rx, _ctype in _CT_RULES:
             if _rx.search(_blob):
@@ -7312,7 +7379,7 @@ def _f600_run_fast_path(
         if _f6_domain_key(it) in _GEO_CHINA_DOMAINS:
             return "china"
         # iter73: check title + snippet + fulltext[:2000] for broader English-language China AI coverage
-        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or "")[:2000]
+        _blob = str(getattr(it, "title", "") or "") + " " + _f6_snippet(it) + " " + _f6_text_blob(it, 2000)
         if _GEO_CHINA_RE.search(_blob):
             return "china"
         return "global"
@@ -7344,7 +7411,7 @@ def _f600_run_fast_path(
             _sb = _ct72b_strategic_bucket(it)
             if _sb in ("leadership", "governance"):
                 return True
-        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or "")[:2000]
+        _blob = str(getattr(it, "title", "") or "") + " " + _f6_snippet(it) + " " + _f6_text_blob(it, 2000)
         # Must have AI topic for non-BOMA paths
         if not _LEADERSHIP_AI_RE.search(_blob):
             # Path 0b: BOMA with economics/distribution bucket still qualifies if confirmed bigtech
@@ -7392,7 +7459,7 @@ def _f600_run_fast_path(
 
     def _sd72_score(it) -> dict:
         """Compute strategic density signal hits and score for a single item."""
-        _ft = str(getattr(it, "fulltext", "") or getattr(it, "body", "") or "")
+        _ft = _f6_text_blob(it)
         _blob = str(getattr(it, "title", "") or "") + " " + _ft[:5000]
         _exec = len(_SD72_EXEC_RE.findall(_blob))
         _prod = len(_SD72_PRODUCT_RE.findall(_blob))
@@ -7442,7 +7509,7 @@ def _f600_run_fast_path(
 
     def _practical_signal_score(it) -> int:
         """Return count of practical/actionable signal hits in fulltext."""
-        _ft = str(getattr(it, "fulltext", "") or getattr(it, "body", "") or "")
+        _ft = _f6_text_blob(it)
         return len(_PRACTICAL_SIGNAL_RE.findall(_ft))
 
     def _f6_is_research_blog(it) -> bool:
@@ -7467,7 +7534,7 @@ def _f600_run_fast_path(
         if _dk in _FORUM_DOMAINS:
             return True
         _title = str(getattr(it, "title", "") or "")
-        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        _snippet = _f6_snippet(it)
         if _FORUM_TITLE_RE.search(_title + " " + _snippet):
             if _ct72b_source_class(it) in ("official", "media"):
                 return False
@@ -7496,7 +7563,7 @@ def _f600_run_fast_path(
         if _ct71_classify(it) in _TUTORIAL_CONTENT_TYPES:
             return True
         _title = str(getattr(it, "title", "") or "")
-        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        _snippet = _f6_snippet(it)
         _blob = _title + " " + _snippet
         if _TUTORIAL_TITLE_RE.search(_blob) or _TUTORIAL_ZH_RE.search(_blob):
             return True
@@ -7557,7 +7624,7 @@ def _f600_run_fast_path(
     def _is_indie_dev_tone(it) -> bool:
         """iter75: True if item has indie developer / contributor / changelog tone."""
         _title = str(getattr(it, "title", "") or "")
-        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        _snippet = _f6_snippet(it)
         _blob = _title + " " + _snippet
         if _INDIE_TONE_RE.search(_blob):
             # Exempt bigtech official/media — they occasionally mention contributors
@@ -7587,8 +7654,8 @@ def _f600_run_fast_path(
         if "/blog/" not in _url:
             return False
         _title = str(getattr(it, "title", "") or "")
-        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
-        _ft = str(getattr(it, "full_text", "") or getattr(it, "body", "") or "")[:2000]
+        _snippet = _f6_snippet(it)
+        _ft = _f6_text_blob(it, 2000)
         return bool(_HF_BLOG_EXPLAINER_RE.search(_title + " " + _snippet + " " + _ft))
 
     # iter82: TechCrunch rumor/speculation classifier
@@ -7602,7 +7669,7 @@ def _f600_run_fast_path(
         if not _is_techcrunch(it):
             return False
         _title = str(getattr(it, "title", "") or "")
-        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        _snippet = _f6_snippet(it)
         return bool(_TC_RUMOR_SPEC_RE.search(_title + " " + _snippet))
 
     # iter82: non-strategic Google Research classifier
@@ -7620,8 +7687,8 @@ def _f600_run_fast_path(
         if not _f6_is_google_research_blog(it):
             return False
         _title = str(getattr(it, "title", "") or "")
-        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
-        _ft = str(getattr(it, "full_text", "") or getattr(it, "body", "") or "")[:2000]
+        _snippet = _f6_snippet(it)
+        _ft = _f6_text_blob(it, 2000)
         _text = _title + " " + _snippet + " " + _ft
         # If it matches strategic signals, it's NOT non-strategic
         if _GR_STRATEGIC_RE.search(_text):
@@ -7644,7 +7711,7 @@ def _f600_run_fast_path(
     def _is_executive_signal(it) -> bool:
         """iter82: True if item has CEO-grade executive/strategic signal."""
         _title = str(getattr(it, "title", "") or "")
-        _snippet = str(getattr(it, "snippet", "") or getattr(it, "description", "") or "")
+        _snippet = _f6_snippet(it)
         return bool(_EXEC_SIGNAL_RE.search(_title + " " + _snippet))
 
     _TECHCRUNCH_RUMOR_SPEC_CAP = 1  # iter82
@@ -7668,7 +7735,7 @@ def _f600_run_fast_path(
         r'|白宮|國會|商務部|國防部|出口管制|採購|國安|聯邦|AI政策)\b', _ct71_re.I)
 
     def _is_us_policy(it) -> bool:
-        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or getattr(it, "full_text", "") or "")[:2000]
+        _blob = str(getattr(it, "title", "") or "") + " " + _f6_snippet(it) + " " + _f6_text_blob(it, 2000)
         return bool(_US_POLICY_RE.search(_blob))
 
     # iter78: China policy classifier
@@ -7684,7 +7751,7 @@ def _f600_run_fast_path(
         r'|funding|valuation|revenue|partnership|acquisition|security|safety)\b', _ct71_re.I)
 
     def _is_china_policy(it) -> bool:
-        _blob = str(getattr(it, "title", "") or "") + " " + str(getattr(it, "snippet", "") or "") + " " + str(getattr(it, "fulltext", "") or getattr(it, "full_text", "") or "")[:2000]
+        _blob = str(getattr(it, "title", "") or "") + " " + _f6_snippet(it) + " " + _f6_text_blob(it, 2000)
         if _CHINA_POLICY_RE.search(_blob):
             return True
         # iter78→80b: China geo items are always policy-relevant
@@ -7773,15 +7840,16 @@ def _f600_run_fast_path(
 
     def _hdf_score(it):
         """Return density metrics + weighted density_score for a single item."""
-        _ft = str(getattr(it, "fulltext", "") or getattr(it, "body", "") or "")
-        _chars = len(_ft)
-        _num = len(_HDF_NUMBERS_RE.findall(_ft))
-        _prop = len(_HDF_PROPER_RE.findall(_ft))
-        _act = len(_HDF_ACTION_RE.findall(_ft))
-        _spec = len(_HDF_SPEC_RE.findall(_ft))
+        _ft = _f6_text_blob(it)
+        _blob = (_f6_title(it) + " " + _ft).strip()
+        _chars = len(_blob)
+        _num = len(_HDF_NUMBERS_RE.findall(_blob))
+        _prop = len(_HDF_PROPER_RE.findall(_blob))
+        _act = len(_HDF_ACTION_RE.findall(_blob))
+        _spec = len(_HDF_SPEC_RE.findall(_blob))
         _ds = _HDF_W_NUM * _num + _HDF_W_PROP * _prop + _HDF_W_ACT * _act + _HDF_W_SPEC * _spec
         # iter69/70: practical signal bonus — short but actionable official updates get density boost
-        _pss = len(_PRACTICAL_SIGNAL_RE.findall(_ft))
+        _pss = len(_PRACTICAL_SIGNAL_RE.findall(_blob))
         # iter70: raised cap from 6 to 8 for richer signal coverage
         _practical_bonus = min(_pss, 8)
         _ds += _practical_bonus
@@ -8785,6 +8853,22 @@ def _f600_run_fast_path(
         _gr = sum(1 for s in sel if _f6_is_google_research_blog(s))
         _usp = sum(1 for s in sel if _is_us_policy(s))
         _cnp = sum(1 for s in sel if _is_china_policy(s))
+        try:
+            _sd_floor = int(_cm73_sd_floor)
+        except Exception:
+            _sd_floor = 0
+        try:
+            _sd_target = int(_sd72_target_avg)
+        except Exception:
+            _sd_target = _sd_floor
+        _density_scores = [
+            _hdf_all_scores.get(id(s), {}).get("density_score", 0)
+            for s in sel
+        ]
+        _sd_scores = [
+            _sd72_all_scores.get(id(s), {}).get("strategic_density_score", 0)
+            for s in sel
+        ]
         return {
             "total": len(sel) == _max_events,
             "max_domain": _maxd <= _DIV_MAX_DOMAIN,
@@ -8812,6 +8896,9 @@ def _f600_run_fast_path(
             "prohibited": not any(_is_ceo_prohibited(s) for s in sel),
             "tc_rumor": sum(1 for s in sel if _is_techcrunch_rumor_speculation(s)) <= _TECHCRUNCH_RUMOR_SPEC_CAP,
             "nsgr": sum(1 for s in sel if _is_non_strategic_google_research(s)) <= _NON_STRATEGIC_GR_CAP,
+            "density_floor": bool(_density_scores) and min(_density_scores) >= _HDF_NEW_DENSITY_MIN,
+            "per_item_sd": all(_score >= _sd_floor for _score in _sd_scores) if _sd_scores else False,
+            "sd_avg": bool(_sd_scores) and (sum(_sd_scores) / len(_sd_scores)) >= _sd_target,
         }
 
     def _i80_no_regression(before, after):
@@ -10488,6 +10575,61 @@ def _f600_run_fast_path(
             if not _i80_gr_swapped:
                 _log.warning("iter80b final cap: stuck at gr=%d, no valid replacement", _i80_gr)
                 break
+        # iter83: enforce non-strategic Google Research cap
+        for _i80_nsgr_round in range(10):
+            _i80_nsgr = sum(1 for s in _selected if _is_non_strategic_google_research(s))
+            if _i80_nsgr <= _NON_STRATEGIC_GR_CAP:
+                break
+            if not _i80_final_pool:
+                _log.warning("iter83 final cap: no pool for NSGR reduction (nsgr=%d)", _i80_nsgr)
+                break
+            _i80_nsgr_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
+            _i80_nsgr_tp_vc = _DivCounter(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+            _i80_nsgr_bucket_counts = _DivCounter(_ct72b_strategic_bucket(s) for s in _selected)
+            _i80_nsgr_axis_counts = _DivCounter(_role_axis(s) for s in _selected)
+            _i80_nsgr_policy_total = sum(1 for s in _selected if _is_us_policy(s) or _is_china_policy(s))
+            _i80_nsgr_china_total = sum(1 for s in _selected if _is_china_policy(s))
+            _i80_nsgr_items = sorted(
+                [(i, s) for i, s in enumerate(_selected) if _is_non_strategic_google_research(s)],
+                key=lambda x: (
+                    0 if _i80_nsgr_bucket_counts.get(_ct72b_strategic_bucket(x[1]), 0) > 1 else 1,
+                    0 if _i80_nsgr_axis_counts.get(_role_axis(x[1]), 0) > 1 else 1,
+                    0 if _i80_nsgr_vc.get(_f6_vendor_key(x[1]), 0) > 1 else 1,
+                    0 if ((not _is_target_player(x[1])) or _i80_nsgr_tp_vc.get(_f6_vendor_key(x[1]), 0) > 1) else 1,
+                    0 if ((not _is_china_policy(x[1])) or _i80_nsgr_china_total > 1) else 1,
+                    0 if ((not (_is_us_policy(x[1]) or _is_china_policy(x[1]))) or _i80_nsgr_policy_total > 2) else 1,
+                    _f6_bfp(x[1]),
+                )
+            )
+            _i80_nsgr_swapped = False
+            for _i80_nsgr_idx, _i80_nsgr_item in _i80_nsgr_items:
+                if _i80_nsgr_swapped:
+                    break
+                for _i80_nsgr_ci, _i80_nsgr_cand in enumerate(_i80_final_pool):
+                    _i80_nsgr_test = [s if j != _i80_nsgr_idx else _i80_nsgr_cand for j, s in enumerate(_selected)]
+                    _i80_nsgr_cur_inv = _i80_invariant_snapshot(_selected)
+                    _i80_nsgr_test_inv = _i80_invariant_snapshot(_i80_nsgr_test)
+                    _i80_nsgr_ok, _i80_nsgr_reg = _i80_no_regression(_i80_nsgr_cur_inv, _i80_nsgr_test_inv)
+                    if not _i80_nsgr_ok:
+                        _i80_nsgr_ok = all(not _i80_nsgr_cur_inv[k] for k in _i80_nsgr_reg)
+                    if not _i80_nsgr_ok:
+                        _i80_nsgr_ok = all(
+                            (not _i80_nsgr_cur_inv[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined", "nsgr"})
+                            for k in _i80_nsgr_reg
+                        )
+                    _i80_nsgr_test_total = sum(1 for s in _i80_nsgr_test if _is_non_strategic_google_research(s))
+                    if _i80_nsgr_test_total < _i80_nsgr and _i80_nsgr_ok:
+                        _log.info("iter83 final cap: replaced NSGR[%d] '%s' with '%s'",
+                                  _i80_nsgr_idx, str(getattr(_i80_nsgr_item, "title", ""))[:60],
+                                  str(getattr(_i80_nsgr_cand, "title", ""))[:60])
+                        _selected[_i80_nsgr_idx] = _i80_nsgr_cand
+                        _i80_final_pool.pop(_i80_nsgr_ci)
+                        _i80_changed = True
+                        _i80_nsgr_swapped = True
+                        break
+            if not _i80_nsgr_swapped:
+                _log.warning("iter83 final cap: stuck at nsgr=%d, no valid replacement", _i80_nsgr)
+                break
         # iter80b: enforce domain concentration cap (max _DIV_MAX_DOMAIN per domain)
         for _i80_dom_round in range(10):
             _i80_dom_c = _DivCounter(_f6_domain_key(s) for s in _selected)
@@ -10576,6 +10718,25 @@ def _f600_run_fast_path(
                     _log.info("iter81: domain diversity pool relaxed density (>=%d→>=8), pool=%d", _HDF_NEW_DENSITY_MIN, len(_i80b_pool))
             # iter81: include any eligible items from NEW domains for domain diversity
             _i80b_cur_doms_check = set(_f6_domain_key(s) for s in _selected)
+            _i80b_dense_short_pool = [
+                it for it in raw_items
+                if it not in _selected and it not in _i80b_pool
+                and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                and not _is_tutorial_explainer(it)
+                and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                and _f6_domain_key(it) not in _i80b_cur_doms_check
+                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                and len(_f6_text_blob(it)) >= 180
+            ]
+            if _i80b_dense_short_pool:
+                _i80b_pool.extend(_i80b_dense_short_pool)
+                _log.info(
+                    "iter83: domain diversity pool extended with dense sub-300 candidates=%d domains=%s",
+                    len(_i80b_dense_short_pool),
+                    list(sorted(set(_f6_domain_key(it) for it in _i80b_dense_short_pool)))[:10],
+                )
             _i80b_has_new_dom = any(_f6_domain_key(it) not in _i80b_cur_doms_check for it in _i80b_pool)
             if not _i80b_has_new_dom:
                 # Widen: drop bigtech+source_type requirements, keep density and prohibitions
@@ -11822,11 +11983,105 @@ def _f600_run_fast_path(
 
     # --- Step 6: DIGEST_DENSITY_FLOOR_HARD (with density-aware swap) ---
     _dd_ok, _dd_reason, _dd_meta = _f600_check_digest_density(_digest_path, _outputs, _run_id)
+    _dd_candidate_density_cache: dict[int, dict] = {}
+
+    def _dd_candidate_density_meta(it) -> dict:
+        _ck = id(it)
+        _cached = _dd_candidate_density_cache.get(_ck)
+        if _cached is not None:
+            return _cached
+        _meta = {"pass": False, "bullet_count": 0, "chars": 0}
+        try:
+            _card = _f600_item_to_card_dict(it)
+            _sentences: list[str] = []
+            for _candidate in (
+                list(_card.get("fact_pack_sentences", []) or []),
+                list(_card.get("detail_sentences_en_used", []) or []),
+            ):
+                for _s in _candidate:
+                    _sc = _normalize_ws(str(_s or ""))
+                    if _sc and len(_sc) >= 20 and _sc not in _sentences:
+                        _sentences.append(_sc)
+                    if len(_sentences) >= 8:
+                        break
+                if len(_sentences) >= 5:
+                    break
+            if len(_sentences) < 5:
+                _blob = _normalize_ws(
+                    str(_card.get("full_text", "") or _card.get("what_happened", "") or "")
+                )
+                if _blob:
+                    for _seg in re.split(r"(?<=[.!?])\s+|\n+", _blob):
+                        _sc = _normalize_ws(str(_seg or ""))
+                        if len(_sc) >= 20 and _sc not in _sentences:
+                            _sentences.append(_sc)
+                        if len(_sentences) >= 8:
+                            break
+            _sentences = _sentences[:8]
+            _chars = sum(len(_normalize_ws(str(_s or ""))) for _s in _sentences)
+            _meta = {
+                "pass": (len(_sentences) >= 5 or _chars >= 1200),
+                "bullet_count": len(_sentences),
+                "chars": _chars,
+            }
+        except Exception:
+            pass
+        _dd_candidate_density_cache[_ck] = _meta
+        return _meta
+
+    def _dd_candidate_commit_probe(it) -> dict:
+        _meta = dict(_dd_candidate_density_meta(it))
+        if _meta.get("pass", False):
+            _meta["probe_reason"] = "digest_density_meta"
+            return _meta
+        _hdf = _hdf_all_scores.get(id(it), {})
+        _sd = _sd72_all_scores.get(id(it), {})
+        _ft = int(getattr(it, "fulltext_len", 0) or 0)
+        if _ft <= 0:
+            _ft = len(str(getattr(it, "full_text", "") or getattr(it, "body", "") or ""))
+        _strict_ok = (
+            _hdf.get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+            and _sd.get("strategic_density_score", 0) >= _cm73_sd_floor
+            and _ft >= 1200
+        )
+        _mid_ok = (
+            _hdf.get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+            and _sd.get("strategic_density_score", 0) >= _cm73_sd_floor
+            and _ft >= 450
+            and (_meta.get("bullet_count", 0) >= 2 or _meta.get("chars", 0) >= 350)
+        )
+        _strategic_media_ok = (
+            _f6_src_type(it) in _BT_OM_TYPES
+            and _sd.get("strategic_density_score", 0) >= max(_cm73_sd_floor, 30)
+            and _ft >= 900
+            and (_meta.get("bullet_count", 0) >= 2 or _meta.get("chars", 0) >= 350)
+        )
+        _fallback_ok = _strict_ok or _mid_ok or _strategic_media_ok
+        _meta["pass"] = bool(_fallback_ok)
+        if _strict_ok:
+            _meta["probe_reason"] = "dense_fulltext_fallback"
+        elif _mid_ok:
+            _meta["probe_reason"] = "mid_density_fallback"
+        elif _strategic_media_ok:
+            _meta["probe_reason"] = "strategic_media_fallback"
+        else:
+            _meta["probe_reason"] = "reject"
+        _meta["fulltext_len"] = _ft
+        _meta["density_score"] = _hdf.get("density_score", 0)
+        _meta["strategic_density_score"] = _sd.get("strategic_density_score", 0)
+        return _meta
+
+    def _dd_candidate_swap_ok(it, *, allow_mid=False) -> bool:
+        _probe = _dd_candidate_commit_probe(it)
+        if not _probe.get("pass", False):
+            return False
+        if (not allow_mid) and _probe.get("probe_reason") == "mid_density_fallback":
+            return False
+        return True
+
     # If thin events exist, swap them with denser candidates (up to 2 rounds).
     # Use index-based matching: events in digest meta are in same order as _selected.
-    def _i80_dd_pool_ok(it):
-        """iter81b: pre-filter density swap pool — exclude items that violate hard caps.
-        TC/GR/platform no longer pre-excluded; invariant snapshot catches them."""
+    def _i83_dd_pool_candidate_ok(it, *, allow_mid=False):
         if _is_daily:
             if not _f6_is_bigtech(it): return False  # iter83: DAILY_BIGTECH_ONLY requires all bigtech
             if _is_hf_blog_explainer(it): return False
@@ -11836,7 +12091,12 @@ def _f600_run_fast_path(
             if _is_tutorial_explainer(it): return False
             if _is_ceo_prohibited(it): return False
             if _f6_is_dev_noise(it): return False
+            if not _dd_candidate_swap_ok(it, allow_mid=allow_mid): return False
         return True
+
+    def _i80_dd_pool_ok(it):
+        """iter81b: pre-filter density swap pool; invariant snapshot handles caps."""
+        return _i83_dd_pool_candidate_ok(it, allow_mid=False)
     _dd_swap_pool = [it for it in _f6_tier(1200) if it not in _selected and _i80_dd_pool_ok(it)]
     _dd_swap_pool += [it for it in _f6_tier(800) if it not in _selected and it not in _dd_swap_pool
                       and _i80_dd_pool_ok(it)]
@@ -11846,6 +12106,25 @@ def _f600_run_fast_path(
     _dd_swap_pool += [it for it in raw_items if it not in _selected and it not in _dd_swap_pool
                       and _i80_dd_pool_ok(it) and _f6_is_bigtech(it)
                       and len(str(getattr(it, 'full_text', '') or getattr(it, 'body', '') or '')) >= 100]
+
+    def _dd_pool_recycle(*items, allow_mid=False):
+        for _it in items:
+            if _it is None:
+                continue
+            if _it in _selected or _it in _dd_swap_pool:
+                continue
+            if not _i83_dd_pool_candidate_ok(_it, allow_mid=allow_mid):
+                continue
+            _dd_swap_pool.append(_it)
+
+    def _dd_pool_extend(*, allow_mid=False):
+        for _it in raw_items:
+            if _it in _selected or _it in _dd_swap_pool:
+                continue
+            if not _i83_dd_pool_candidate_ok(_it, allow_mid=allow_mid):
+                continue
+            _dd_swap_pool.append(_it)
+
     _DD_STAGE_DEFERRABLE = {"max_domain", "max_vendor", "min_domains"}
     _DD_DEFERRABLE = _DD_STAGE_DEFERRABLE | {
         "target_player",
@@ -11858,12 +12137,23 @@ def _f600_run_fast_path(
         "tc_rumor",
         "nsgr",
     }
+    _PDD_DD_DEFERRABLE = (_DD_DEFERRABLE - {"target_player", "nsgr"}) | {"min_vendors"}
 
-    def _i83_dd_try_commit(_thin_idx, _cand_idx, _defer_keys, _stage_label="main", _stage_defer_keys=None):
+    def _i83_dd_try_commit(
+        _thin_idx,
+        _cand_idx,
+        _defer_keys,
+        _stage_label="main",
+        _stage_defer_keys=None,
+        _allow_mid=False,
+        _locked_indices=None,
+    ):
         _stage_defer_keys = _stage_defer_keys or set()
+        _locked_indices = set(_locked_indices or ())
+        _before_sel = list(_selected)
         _old_item = _selected[_thin_idx]
         _cand_item = _dd_swap_pool[_cand_idx]
-        _before_inv = _i80_invariant_snapshot(_selected)
+        _before_inv = _i80_invariant_snapshot(_before_sel)
         _selected[_thin_idx] = _cand_item
         _after_inv = _i80_invariant_snapshot(_selected)
         _ok, _reg = _i80_no_regression(_before_inv, _after_inv)
@@ -11875,6 +12165,7 @@ def _f600_run_fast_path(
             return False, _reg
         if all(_after_inv.values()):
             _dd_swap_pool.pop(_cand_idx)
+            _dd_pool_recycle(_old_item)
             return True, []
 
         _unresolved = [k for k, v in _after_inv.items() if not v]
@@ -11882,41 +12173,109 @@ def _f600_run_fast_path(
             _new_stage_debt = [k for k in _unresolved if _before_inv.get(k, True)]
             if not _new_stage_debt:
                 _dd_swap_pool.pop(_cand_idx)
+                _dd_pool_recycle(_old_item)
                 _log.info("iter83 dd-swap DEFER[%s]: idx=%d unresolved=%s", _stage_label, _thin_idx, _unresolved)
                 return True, _unresolved
 
-        if len(_unresolved) > 6:
+        if len(_unresolved) > 8:
             _selected[_thin_idx] = _old_item
             return False, _unresolved
 
         _cur_dc = _DivCounter(_f6_domain_key(s) for s in _selected)
         _cur_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
         _cur_doms = set(_cur_dc.keys())
+        _max_domain = _cur_dc.most_common(1)[0][0] if _cur_dc else ""
         _max_vendor = _cur_vc.most_common(1)[0][0] if _cur_vc else ""
-        _need_domains = "min_domains" in set(_unresolved)
-        _need_vendor_relief = "max_vendor" in set(_unresolved)
-        _need_tcgr_relief = "tc_gr_combined" in set(_unresolved)
+        _unresolved_set = set(_unresolved)
+        _need_domains = "min_domains" in _unresolved_set
+        _need_max_domain_relief = "max_domain" in _unresolved_set
+        _need_vendor_relief = "max_vendor" in _unresolved_set
+        _need_min_vendors = "min_vendors" in _unresolved_set
+        _need_tc_relief = "tc_cap" in _unresolved_set
+        _need_gr_relief = "gr_cap" in _unresolved_set
+        _need_tcgr_relief = "tc_gr_combined" in _unresolved_set
+        _need_nsgr_relief = "nsgr" in _unresolved_set
+        _need_tcr_relief = "tc_rumor" in _unresolved_set
+        _need_target_player = "target_player" in _unresolved_set
+        _need_policy = "policy" in _unresolved_set
+        _need_buckets = "buckets" in _unresolved_set
+        _need_role_axes = "role_axes" in _unresolved_set
+        _before_buckets = set(_ct72b_strategic_bucket(s) for s in _before_sel)
+        _after_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
+        _missing_buckets = (_before_buckets - _after_buckets) if _need_buckets else set()
+        _before_axes = set(_role_axis(s) for s in _before_sel)
+        _after_axes = set(_role_axis(s) for s in _selected)
+        _missing_axes = (_before_axes - _after_axes) if _need_role_axes else set()
+        _bucket_counts = _DivCounter(_ct72b_strategic_bucket(s) for s in _selected)
+        _axis_counts = _DivCounter(_role_axis(s) for s in _selected)
+        _tp_vendors = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+        _vendor_set = set(_f6_vendor_key(s) for s in _selected) - {"other"}
+        _policy_total = sum(1 for s in _selected if _is_us_policy(s) or _is_china_policy(s))
+        _china_policy_total = sum(1 for s in _selected if _is_china_policy(s))
+        _need_china_policy = _need_policy and _china_policy_total < 1
+        _need_any_policy = _need_policy and _policy_total < 2
 
         def _c2_rank(_idx):
             _it = _dd_swap_pool[_idx]
             _dom = _f6_domain_key(_it)
             _ven = _f6_vendor_key(_it)
+            _bucket = _ct72b_strategic_bucket(_it)
+            _axis = _role_axis(_it)
             _ft = int(getattr(_it, "fulltext_len", 0) or 0)
             if _ft <= 0:
                 _ft = len(str(getattr(_it, "full_text", "") or getattr(_it, "body", "") or ""))
             return (
                 0 if (_need_domains and _dom not in _cur_doms) else 1,
+                0 if (_need_max_domain_relief and _dom != _max_domain) else 1,
                 0 if (_need_vendor_relief and _ven != _max_vendor) else 1,
-                0 if (_need_tcgr_relief and (not _is_techcrunch(_it)) and (not _f6_is_google_research_blog(_it))) else 1,
+                0 if (_need_min_vendors and _ven not in _vendor_set) else 1,
+                0 if ((_need_tcgr_relief or _need_tc_relief) and not _is_techcrunch(_it)) else 1,
+                0 if ((_need_tcgr_relief or _need_gr_relief) and not _f6_is_google_research_blog(_it)) else 1,
+                0 if (_need_tcr_relief and not _is_techcrunch_rumor_speculation(_it)) else 1,
+                0 if (_need_nsgr_relief and not _is_non_strategic_google_research(_it)) else 1,
+                0 if (_missing_buckets and _bucket in _missing_buckets) else 1,
+                0 if (_missing_axes and _axis in _missing_axes) else 1,
+                0 if (_need_target_player and _is_target_player(_it) and _ven not in _tp_vendors) else 1,
+                0 if (_need_policy and _need_china_policy and _is_china_policy(_it)) else 1,
+                0 if (_need_policy and (not _need_china_policy) and _need_any_policy and (_is_us_policy(_it) or _is_china_policy(_it))) else 1,
                 -_ft,
                 -_f6_bfp(_it),
             )
 
+        def _ri_rank(_ri):
+            _it = _selected[_ri]
+            _dom = _f6_domain_key(_it)
+            _ven = _f6_vendor_key(_it)
+            _bucket = _ct72b_strategic_bucket(_it)
+            _axis = _role_axis(_it)
+            return (
+                0 if ((_need_domains or _need_max_domain_relief) and _dom == _max_domain) else 1,
+                0 if (_need_vendor_relief and _ven == _max_vendor) else 1,
+                0 if (_need_min_vendors and _cur_vc.get(_ven, 0) > 1) else 1,
+                0 if ((_need_tcgr_relief or _need_tc_relief) and _is_techcrunch(_it)) else 1,
+                0 if ((_need_tcgr_relief or _need_gr_relief) and _f6_is_google_research_blog(_it)) else 1,
+                0 if (_need_nsgr_relief and _is_non_strategic_google_research(_it)) else 1,
+                0 if (_need_tcr_relief and _is_techcrunch_rumor_speculation(_it)) else 1,
+                0 if (_missing_buckets and _bucket_counts.get(_bucket, 0) > 1) else 1,
+                0 if (_missing_axes and _axis_counts.get(_axis, 0) > 1) else 1,
+                0 if (_need_target_player and not _is_target_player(_it)) else 1,
+                0 if (_need_policy and not (_is_us_policy(_it) or _is_china_policy(_it))) else 1,
+                _f6_bfp(_it),
+            )
+
         _c2_order = sorted(range(len(_dd_swap_pool)), key=_c2_rank)
-        _scan_cap = min(len(_c2_order), 24)
-        for _ri, _rs in enumerate(_selected):
-            if _ri == _thin_idx:
-                continue
+        _ri_order = sorted(
+            [_ri for _ri in range(len(_selected)) if _ri != _thin_idx and _ri not in _locked_indices],
+            key=_ri_rank,
+        )
+        _scan_cap = 24
+        if len(_unresolved_set) > 3:
+            _scan_cap = 40
+        if _missing_buckets or _missing_axes or _need_target_player or _need_policy:
+            _scan_cap = max(_scan_cap, 56)
+        _scan_cap = min(len(_c2_order), _scan_cap)
+        for _ri in _ri_order:
+            _rs = _selected[_ri]
             _orig_rs = _rs
             for _c2i in _c2_order[:_scan_cap]:
                 if _c2i == _cand_idx:
@@ -11924,14 +12283,14 @@ def _f600_run_fast_path(
                 _c2 = _dd_swap_pool[_c2i]
                 if _is_non_strategic_google_research(_c2):
                     continue
-                _c2_ft = int(getattr(_c2, "fulltext_len", 0) or 0)
-                if _c2_ft < 500:
+                if not _dd_candidate_swap_ok(_c2, allow_mid=_allow_mid):
                     continue
                 _selected[_ri] = _c2
                 _inv2 = _i80_invariant_snapshot(_selected)
                 if all(_inv2.values()):
                     for _pi in sorted((_cand_idx, _c2i), reverse=True):
                         _dd_swap_pool.pop(_pi)
+                    _dd_pool_recycle(_old_item, _orig_rs)
                     _log.info(
                         "iter83 dd-swap TX[%s]: thin_idx=%d pair_idx=%d debt=%s",
                         _stage_label, _thin_idx, _ri, _unresolved,
@@ -11941,6 +12300,178 @@ def _f600_run_fast_path(
 
         _selected[_thin_idx] = _old_item
         return False, _unresolved
+
+    def _i83_dd_direct_digest_commit(
+        _thin_idx,
+        *,
+        _defer_keys=None,
+        _allow_mid=False,
+        _allowed_domains=None,
+        _prefer_domains=None,
+    ):
+        _defer_keys = set(_defer_keys or _DD_DEFERRABLE)
+        _allowed_domains = None if _allowed_domains is None else set(_allowed_domains)
+        _prefer_domains = set(_prefer_domains or [])
+        _before_sel = list(_selected)
+        _before_inv = _i80_invariant_snapshot(_before_sel)
+        _before_thin = int(_dd_meta.get("thin_events_count", 0) or 0)
+        _old_item = _before_sel[_thin_idx]
+        _cur_doms = set(_f6_domain_key(s) for s in _before_sel)
+        _cur_dc = _DivCounter(_f6_domain_key(s) for s in _before_sel)
+        _cur_tp_vendors = set(_f6_vendor_key(s) for s in _before_sel if _is_target_player(s))
+        _cur_tp_distinct = len(_cur_tp_vendors)
+        _old_dom = _f6_domain_key(_old_item)
+        _old_vendor = _f6_vendor_key(_old_item)
+        _old_tp = _is_target_player(_old_item)
+        _old_tp_vendor_count = sum(
+            1 for s in _before_sel
+            if _is_target_player(s) and _f6_vendor_key(s) == _old_vendor
+        )
+        _must_preserve_domain = (
+            _cur_dc.get(_old_dom, 0) <= 1
+            and len(_cur_doms) <= _DIV_MIN_DOMAINS
+        )
+        _must_preserve_tp = (
+            _old_tp
+            and _old_tp_vendor_count <= 1
+            and _cur_tp_distinct <= 6
+        )
+        if _must_preserve_domain:
+            _domain_guard = {_old_dom} | {
+                _f6_domain_key(it)
+                for it in raw_items
+                if it not in _before_sel and _f6_domain_key(it) not in _cur_doms
+            }
+            _allowed_domains = (_allowed_domains & _domain_guard) if _allowed_domains is not None else _domain_guard
+            _prefer_domains |= {
+                _f6_domain_key(it)
+                for it in raw_items
+                if it not in _before_sel and _f6_domain_key(it) not in _cur_doms
+            }
+            _prefer_domains.add(_old_dom)
+        _tp_guard_vendors = None
+        if _must_preserve_tp:
+            _tp_guard_vendors = {_old_vendor} | {
+                _f6_vendor_key(it)
+                for it in raw_items
+                if it not in _before_sel and _is_target_player(it) and _f6_vendor_key(it) not in _cur_tp_vendors
+            }
+            if not _tp_guard_vendors:
+                return False, None, None, None
+        if _allowed_domains is not None and not _allowed_domains:
+            return False, None, None, None
+        _domain_priority = {"ithome.com.tw": 0, "bloomberg.com": 1, "openai.com": 2}
+
+        def _direct_pool_ok(it):
+            if it in _selected:
+                return False
+            if not _f6_is_bigtech(it):
+                return False
+            _dom = _f6_domain_key(it)
+            if _allowed_domains is not None and _dom not in _allowed_domains:
+                return False
+            if _f6_src_type(it) not in _BT_OM_TYPES:
+                return False
+            if _f6_is_dev_noise(it) or _is_ceo_prohibited(it):
+                return False
+            if _is_hf_blog_explainer(it) or _is_forum_discussion(it):
+                return False
+            if _is_developer_release(it) or _is_indie_dev_tone(it) or _is_tutorial_explainer(it):
+                return False
+            if _must_preserve_domain and not (_dom == _old_dom or _dom not in _cur_doms):
+                return False
+            if _tp_guard_vendors is not None:
+                _ven = _f6_vendor_key(it)
+                _tp_vendor_ok = (
+                    (_ven == _old_vendor and _is_target_player(it))
+                    or (_is_target_player(it) and _ven not in _cur_tp_vendors)
+                )
+                if not _tp_vendor_ok:
+                    return False
+            _probe = _dd_candidate_commit_probe(it)
+            if _probe.get("pass", False):
+                return True
+            _ft = int(_probe.get("fulltext_len", 0) or 0)
+            if _dom in _domain_priority and _ft >= 300:
+                return True
+            return bool(
+                _allow_mid
+                and _ft >= 300
+                and (_allowed_domains is not None and _dom in _allowed_domains)
+            )
+
+        def _direct_rank(it):
+            _probe = _dd_candidate_commit_probe(it)
+            _dom = _f6_domain_key(it)
+            _ven = _f6_vendor_key(it)
+            _reason = str(_probe.get("probe_reason", "") or "")
+            _is_new_dom = _dom not in _cur_doms
+            _is_new_tp_vendor = _is_target_player(it) and _ven not in _cur_tp_vendors
+            return (
+                0 if (_prefer_domains and _dom in _prefer_domains) else 1,
+                0 if (_must_preserve_domain and _is_new_dom) else 1,
+                0 if (_must_preserve_domain and _dom == _old_dom) else 1,
+                0 if _dom not in _cur_doms else 1,
+                0 if (_must_preserve_tp and _is_new_tp_vendor) else 1,
+                0 if (_must_preserve_tp and _ven == _old_vendor) else 1,
+                _domain_priority.get(_dom, 9),
+                0 if _reason == "strategic_media_fallback" else 1,
+                0 if _reason == "digest_density_meta" else 1,
+                -int(_probe.get("strategic_density_score", 0) or 0),
+                -int(_probe.get("fulltext_len", 0) or 0),
+                -_f6_bfp(it),
+            )
+
+        _direct_pool = sorted(
+            [it for it in raw_items if _direct_pool_ok(it)],
+            key=_direct_rank,
+        )[:20]
+        if not _direct_pool:
+            return False, None, None, None
+
+        for _cand in _direct_pool:
+            _test_sel = [(_cand if j == _thin_idx else s) for j, s in enumerate(_before_sel)]
+            _test_inv = _i80_invariant_snapshot(_test_sel)
+            _ok, _reg = _i80_no_regression(_before_inv, _test_inv)
+            if not _ok:
+                _ok = all(not _before_inv[k] for k in _reg)
+            if not _ok:
+                _ok = all((not _before_inv[k]) or (k in _defer_keys) for k in _reg)
+            if not _ok:
+                continue
+            _new_debt = [k for k, v in _test_inv.items() if (not v) and _before_inv.get(k, True)]
+            if any(k not in _defer_keys for k in _new_debt):
+                continue
+            try:
+                _test_cards = [_f600_item_to_card_dict(it) for it in _test_sel]
+                _test_digest = _generate_digest_md(_test_cards, _run_id)
+                _test_ok, _test_reason, _test_meta = _f600_check_digest_density(_test_digest, _outputs, _run_id)
+            except Exception:
+                continue
+            _test_thin = int((_test_meta or {}).get("thin_events_count", 0) or 0)
+            if not (_test_ok or _test_thin < _before_thin):
+                continue
+            _selected[_thin_idx] = _cand
+            try:
+                _dd_swap_pool.remove(_cand)
+            except ValueError:
+                pass
+            _dd_pool_recycle(_old_item)
+            _log.info(
+                "iter83 dd-direct COMMIT: idx=%d dom=%s probe=%s thin=%d->%d preserve_domain=%s preserve_tp=%s",
+                _thin_idx,
+                _f6_domain_key(_cand),
+                _dd_candidate_commit_probe(_cand).get("probe_reason", ""),
+                _before_thin,
+                _test_thin,
+                _must_preserve_domain,
+                _must_preserve_tp,
+            )
+            return True, _test_ok, _test_reason, _test_meta
+
+        _restore_cards = [_f600_item_to_card_dict(it) for it in _selected]
+        _generate_digest_md(_restore_cards, _run_id)
+        return False, None, None, None
 
     for _dd_round in range(10):  # iter80: allow up to 10 density swap rounds (was 5)
         if _dd_ok or not _dd_meta.get("thin_events_count"):
@@ -11974,15 +12505,27 @@ def _f600_run_fast_path(
                 _dd_swap_pool.sort(key=lambda it: (
                     0 if _f6_domain_key(it) == _dd_thin_dom and int(getattr(it, "fulltext_len", 0) or 0) >= 800 else 1,
                     -int(getattr(it, "fulltext_len", 0) or 0)))
+                if _dd_round == 0:
+                    _dd_probe_rows = []
+                    for _ddi, _ddit in enumerate(_dd_swap_pool[:20]):
+                        _dd_probe = _dd_candidate_commit_probe(_ddit)
+                        _dd_probe_rows.append({
+                            "idx": _ddi,
+                            "domain": _f6_domain_key(_ddit),
+                            "vendor": _f6_vendor_key(_ddit),
+                            "probe": _dd_probe.get("probe_reason", ""),
+                            "density": _dd_probe.get("density_score", _hdf_all_scores.get(id(_ddit), {}).get("density_score", 0)),
+                            "sd": _dd_probe.get("strategic_density_score", _sd72_all_scores.get(id(_ddit), {}).get("strategic_density_score", 0)),
+                            "ft": _dd_probe.get("fulltext_len", int(getattr(_ddit, "fulltext_len", 0) or 0)),
+                            "title": str(getattr(_ddit, "title", "") or "")[:72],
+                        })
+                    _log.info("iter83 dd-pool round=%d idx=%d candidates=%s", _dd_round + 1, _dd_thin_idx, _dd_probe_rows)
                 _dd_scanned = 0
                 for _dd_ci in range(len(_dd_swap_pool)):
                     _dd_cand = _dd_swap_pool[_dd_ci]
                     if _is_non_strategic_google_research(_dd_cand):
                         continue
-                    _dd_cand_ft = int(getattr(_dd_cand, "fulltext_len", 0) or 0)
-                    if _dd_cand_ft <= 0:
-                        _dd_cand_ft = len(str(getattr(_dd_cand, "full_text", "") or getattr(_dd_cand, "body", "") or ""))
-                    if _dd_cand_ft < max(700, _dd_thin_ft + 120):
+                    if not _dd_candidate_swap_ok(_dd_cand):
                         continue
                     _i80_ok_dd, _i80_reg_dd = _i83_dd_try_commit(
                         _dd_thin_idx,
@@ -11996,6 +12539,16 @@ def _f600_run_fast_path(
                         _log.info("iter83 dd-swap REJECT[%d]: idx=%d dom=%s reg=%s", _dd_scanned, _dd_thin_idx, _f6_domain_key(_dd_cand), _i80_reg_dd)
                     _dd_scanned += 1
                     if _i80_ok_dd:
+                        _dd_found = True
+                        break
+                if not _dd_found:
+                    _dd_direct_ok, _dd_direct_pass, _dd_direct_reason, _dd_direct_meta = _i83_dd_direct_digest_commit(_dd_thin_idx)
+                    if _dd_direct_ok:
+                        _dd_ok = bool(_dd_direct_pass)
+                        if _dd_direct_reason is not None:
+                            _dd_reason = _dd_direct_reason
+                        if _dd_direct_meta is not None:
+                            _dd_meta = _dd_direct_meta
                         _dd_found = True
                         break
                 if _dd_found:
@@ -12024,6 +12577,8 @@ def _f600_run_fast_path(
                 for _dd_c1i, _dd_c1 in enumerate(_dd_swap_pool):
                     if _is_non_strategic_google_research(_dd_c1):
                         continue
+                    if not _dd_candidate_swap_ok(_dd_c1):
+                        continue
                     _dd_c1_ft = int(getattr(_dd_c1, "fulltext_len", 0) or 0)
                     if _dd_c1_ft <= 0:
                         _dd_c1_ft = len(str(getattr(_dd_c1, "full_text", "") or getattr(_dd_c1, "body", "") or ""))
@@ -12044,6 +12599,7 @@ def _f600_run_fast_path(
                             continue
                         # No TP regression — accept directly
                         _dd_swap_pool.pop(_dd_c1i)
+                        _dd_pool_recycle(_dd_old2)
                         _dd_found = True
                         _dd_coord_done = True
                         _log.info("iter81c density coord-swap: replaced thin[%d] (no TP regression)", _dd_thin_idx2)
@@ -12065,6 +12621,8 @@ def _f600_run_fast_path(
                                 continue
                             if not _is_target_player(_dd_c2):
                                 continue
+                            if not _dd_candidate_swap_ok(_dd_c2):
+                                continue
                             _dd_c2_ft = len(str(getattr(_dd_c2, 'full_text', '') or getattr(_dd_c2, 'body', '') or ''))
                             if _dd_c2_ft < 500:
                                 continue
@@ -12080,6 +12638,7 @@ def _f600_run_fast_path(
                             if _coord_ok:
                                 _dd_swap_pool.pop(max(_dd_c1i, _dd_c2i))
                                 _dd_swap_pool.pop(min(_dd_c1i, _dd_c2i) if _dd_c2i != _dd_c1i else _dd_c1i)
+                                _dd_pool_recycle(_dd_old2, _dd_rs)
                                 _dd_found = True
                                 _dd_coord_done = True
                                 _dd_coord_ok = True
@@ -12108,127 +12667,336 @@ def _f600_run_fast_path(
             next_steps="全文不足/水化過薄，請調整 targeted hydration 取得完整內容後再翻譯",
         )
 
+    def _i83_rebuild_digest_from_selected():
+        _restore_cards = [_f600_item_to_card_dict(it) for it in _selected]
+        return _generate_digest_md(_restore_cards, _run_id)
+
+    def _i83_post_domain_density_repair(_stage_label="post_domain", _locked_indices=None):
+        nonlocal _dd_ok, _dd_reason, _dd_meta
+        _locked_indices = set(_locked_indices or ())
+        _dd_pool_extend(allow_mid=True)
+        _repair_digest = _i83_rebuild_digest_from_selected()
+        _repair_ok, _repair_reason, _repair_meta = _f600_check_digest_density(_repair_digest, _outputs, _run_id)
+        _dd_ok, _dd_reason, _dd_meta = _repair_ok, _repair_reason, _repair_meta
+        for _pdd_ds_round in range(5):
+            if _repair_ok:
+                break
+            _pdd_thin_indices = []
+            for _pdi, _pddev in enumerate((_repair_meta or {}).get("events", [])):
+                if _pddev.get("bullet_count", 0) < 5 and _pddev.get("chars", 0) < 1200:
+                    if _pdi < len(_selected) and _pdi not in _locked_indices:
+                        _pdd_thin_indices.append(_pdi)
+            if not _pdd_thin_indices:
+                break
+            _pdd_ds_done = False
+            for _pdd_ti in _pdd_thin_indices:
+                for _pdd_sci, _pdd_sc in enumerate(_dd_swap_pool):
+                    _pdd_ds_ok, _pdd_ds_reg = _i83_dd_try_commit(
+                        _pdd_ti,
+                        _pdd_sci,
+                        _PDD_DD_DEFERRABLE,
+                        _stage_label=f"{_stage_label}_round{_pdd_ds_round + 1}",
+                        _stage_defer_keys=set(),
+                        _allow_mid=True,
+                        _locked_indices=_locked_indices,
+                    )
+                    if _pdd_ds_ok:
+                        _pdd_ds_done = True
+                        _log.info(
+                            "iter81c post-domain density swap: stage=%s round=%d idx=%d replaced",
+                            _stage_label,
+                            _pdd_ds_round + 1,
+                            _pdd_ti,
+                        )
+                        break
+                    if _pdd_sci <= 3:
+                        _log.info(
+                            "iter83 post-domain dd REJECT[%d]: stage=%s idx=%d reg=%s",
+                            _pdd_sci,
+                            _stage_label,
+                            _pdd_ti,
+                            _pdd_ds_reg,
+                        )
+                if not _pdd_ds_done:
+                    _dd_ok, _dd_reason, _dd_meta = _repair_ok, _repair_reason, _repair_meta
+                    _pdd_direct_ok, _pdd_direct_pass, _pdd_direct_reason, _pdd_direct_meta = _i83_dd_direct_digest_commit(
+                        _pdd_ti,
+                        _defer_keys=_PDD_DD_DEFERRABLE,
+                        _allow_mid=True,
+                    )
+                    if _pdd_direct_ok:
+                        _repair_ok = bool(_pdd_direct_pass)
+                        if _pdd_direct_reason is not None:
+                            _repair_reason = _pdd_direct_reason
+                        if _pdd_direct_meta is not None:
+                            _repair_meta = _pdd_direct_meta
+                        _dd_ok, _dd_reason, _dd_meta = _repair_ok, _repair_reason, _repair_meta
+                        _pdd_ds_done = True
+                if _pdd_ds_done:
+                    break
+            if not _pdd_ds_done:
+                break
+            _repair_digest = _i83_rebuild_digest_from_selected()
+            _repair_ok, _repair_reason, _repair_meta = _f600_check_digest_density(_repair_digest, _outputs, _run_id)
+            _dd_ok, _dd_reason, _dd_meta = _repair_ok, _repair_reason, _repair_meta
+        return _repair_ok, _repair_reason, _repair_meta
+
+    def _i83_try_post_density_domain_commit(_replace_idx, _cand_item, _stage_label="post_density_domain"):
+        nonlocal _dd_ok, _dd_reason, _dd_meta
+        import copy as _i83_copy
+
+        _pdd_precommit_deferrable = _PDD_DD_DEFERRABLE | {
+            "density_floor",
+            "per_item_sd",
+            "sd_avg",
+            "role_axes",
+            "buckets",
+        }
+        _saved_sel = list(_selected)
+        _saved_pool = list(_dd_swap_pool)
+        _saved_dd_ok = _dd_ok
+        _saved_dd_reason = _dd_reason
+        _saved_dd_meta = _i83_copy.deepcopy(_dd_meta)
+        _before_inv = _i80_invariant_snapshot(_saved_sel)
+        _before_dom_count = len(_DivCounter(_f6_domain_key(s) for s in _saved_sel))
+        _before_remaining_domains = {
+            _f6_domain_key(s)
+            for _j, s in enumerate(_saved_sel)
+            if _j != _replace_idx
+        }
+        if _f6_domain_key(_cand_item) in _before_remaining_domains:
+            return False, {
+                "reject": "not_new_domain",
+                "candidate_domain": _f6_domain_key(_cand_item),
+            }
+        _old_item = _selected[_replace_idx]
+        _selected[_replace_idx] = _cand_item
+        _after_inv = _i80_invariant_snapshot(_selected)
+        _ok, _reg = _i80_no_regression(_before_inv, _after_inv)
+        if not _ok:
+            _reg = [k for k in _reg if _before_inv.get(k, False)]
+            _ok = (len(_reg) == 0) or all(k in _pdd_precommit_deferrable for k in _reg)
+        if not _ok:
+            _selected[:] = _saved_sel
+            _dd_swap_pool[:] = _saved_pool
+            _dd_ok, _dd_reason, _dd_meta = _saved_dd_ok, _saved_dd_reason, _saved_dd_meta
+            _i83_rebuild_digest_from_selected()
+            return False, {"reject": "regression", "reg": _reg}
+
+        try:
+            _dd_swap_pool.remove(_cand_item)
+        except ValueError:
+            pass
+        _dd_pool_recycle(_old_item)
+
+        _repair_digest = _i83_rebuild_digest_from_selected()
+        _repair_ok, _repair_reason, _repair_meta = _f600_check_digest_density(_repair_digest, _outputs, _run_id)
+        _dd_ok, _dd_reason, _dd_meta = _repair_ok, _repair_reason, _repair_meta
+        _cand_domain = _f6_domain_key(_cand_item)
+        if not _repair_ok:
+            _same_dom_ok, _same_dom_pass, _same_dom_reason, _same_dom_meta = _i83_dd_direct_digest_commit(
+                _replace_idx,
+                _defer_keys=_pdd_precommit_deferrable,
+                _allow_mid=True,
+                _allowed_domains={_cand_domain},
+                _prefer_domains={_cand_domain},
+            )
+            if _same_dom_ok:
+                _repair_ok = bool(_same_dom_pass)
+                if _same_dom_reason is not None:
+                    _repair_reason = _same_dom_reason
+                if _same_dom_meta is not None:
+                    _repair_meta = _same_dom_meta
+                _dd_ok, _dd_reason, _dd_meta = _repair_ok, _repair_reason, _repair_meta
+        if not _repair_ok:
+            _repair_ok, _repair_reason, _repair_meta = _i83_post_domain_density_repair(
+                _stage_label=_stage_label,
+                _locked_indices={_replace_idx},
+            )
+        _final_inv = _i80_invariant_snapshot(_selected)
+        _final_debt = sorted(k for k, v in _final_inv.items() if not v)
+        _final_dom_count = len(_DivCounter(_f6_domain_key(s) for s in _selected))
+        _domain_progress = _final_dom_count > _before_dom_count
+        if _repair_ok and _domain_progress and not _final_debt:
+            return True, {
+                "domains_before": _before_dom_count,
+                "domains_after": _final_dom_count,
+                "density_reason": _repair_reason,
+            }
+
+        _selected[:] = _saved_sel
+        _dd_swap_pool[:] = _saved_pool
+        _dd_ok, _dd_reason, _dd_meta = _saved_dd_ok, _saved_dd_reason, _saved_dd_meta
+        _i83_rebuild_digest_from_selected()
+        return False, {
+            "reject": "post_domain_commit_failed",
+            "domains_before": _before_dom_count,
+            "domains_after": _final_dom_count,
+            "density_ok": _repair_ok,
+            "density_reason": _repair_reason,
+            "final_debt": _final_debt,
+        }
+
     # --- iter81c: post-density-swap domain diversity rescue ---
     # Density swap may have deferred min_domains regression; fix it now
     if _is_daily and len(_selected) >= _max_events:
+        def _i83_pdd_candidate_ok(it):
+            if _dd_candidate_swap_ok(it, allow_mid=True):
+                return True
+            _probe = _dd_candidate_commit_probe(it)
+            _ft = int(_probe.get("fulltext_len", 0) or 0)
+            if _ft <= 0:
+                _ft = len(str(getattr(it, "full_text", "") or getattr(it, "body", "") or ""))
+            return (
+                _f6_src_type(it) in _BT_OM_TYPES
+                and _ft >= 150
+                and int(_probe.get("strategic_density_score", 0) or 0) >= max(_cm73_sd_floor, 35)
+                and not _is_non_strategic_google_research(it)
+            )
+
         _pdd_dc = _DivCounter(_f6_domain_key(s) for s in _selected)
         _pdd_dist = len(_pdd_dc)
         if _pdd_dist < _DIV_MIN_DOMAINS:
             _log.info("iter81c post-density domain rescue: dist_doms=%d < %d, attempting fix", _pdd_dist, _DIV_MIN_DOMAINS)
             _pdd_pool = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
                          and not _is_ceo_prohibited(it) and not _is_hf_blog_explainer(it)
+                         and not _is_forum_discussion(it) and not _is_developer_release(it)
+                         and not _is_indie_dev_tone(it) and not _is_tutorial_explainer(it)
                          and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
-                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
-                         and len(str(getattr(it, 'full_text', '') or getattr(it, 'body', '') or '')) >= 500]
+                         and _i83_pdd_candidate_ok(it)]
             _pdd_cur_doms = set(_f6_domain_key(s) for s in _selected)
-            _pdd_pool.sort(key=lambda it: (0 if _f6_domain_key(it) not in _pdd_cur_doms else 1,
-                                           -int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
+            _pdd_cur_vendors = set(_f6_vendor_key(s) for s in _selected) - {"other"}
+            _pdd_cur_tp_vendors = set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+            _pdd_wide_pool = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
+                              and not _is_ceo_prohibited(it) and not _is_hf_blog_explainer(it)
+                              and not _is_forum_discussion(it) and not _is_developer_release(it)
+                              and not _is_indie_dev_tone(it) and not _is_tutorial_explainer(it)
+                              and _f6_src_type(it) in _BT_OM_TYPES
+                              and _i83_pdd_candidate_ok(it)
+                              and _f6_domain_key(it) not in _pdd_cur_doms]
+            if _pdd_wide_pool:
+                _pdd_pool.extend([it for it in _pdd_wide_pool if it not in _pdd_pool])
+                _log.info(
+                    "iter83: post-density domain rescue widened to non-bigtech new domains=%s",
+                    list(sorted(set(_f6_domain_key(it) for it in _pdd_wide_pool)))[:10],
+                )
+            _pdd_pool.sort(key=lambda it: (
+                0 if _f6_domain_key(it) not in _pdd_cur_doms else 1,
+                0 if _dd_candidate_commit_probe(it).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN else 1,
+                0 if _dd_candidate_commit_probe(it).get("strategic_density_score", 0) >= _cm73_sd_floor else 1,
+                0 if _f6_vendor_key(it) not in _pdd_cur_vendors else 1,
+                0 if (_is_target_player(it) and _f6_vendor_key(it) not in _pdd_cur_tp_vendors) else 1,
+                0 if not _f6_is_google_research_blog(it) else 1,
+                0 if not _is_techcrunch(it) else 1,
+                0 if not _is_non_strategic_google_research(it) else 1,
+                -_dd_candidate_commit_probe(it).get("strategic_density_score", 0),
+                -_dd_candidate_commit_probe(it).get("chars", 0),
+                -_dd_candidate_commit_probe(it).get("fulltext_len", int(getattr(it, "fulltext_len", 0) or 0)),
+                -_f6_bfp(it),
+            ))
             for _pdd_round in range(5):
                 _pdd_dc2 = _DivCounter(_f6_domain_key(s) for s in _selected)
                 if len(_pdd_dc2) >= _DIV_MIN_DOMAINS:
                     break
                 _pdd_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
+                _pdd_tp_vc = _DivCounter(_f6_vendor_key(s) for s in _selected if _is_target_player(s))
+                _pdd_bucket_counts = _DivCounter(_ct72b_strategic_bucket(s) for s in _selected)
+                _pdd_axis_counts = _DivCounter(_role_axis(s) for s in _selected)
+                _pdd_policy_total = sum(1 for s in _selected if _is_us_policy(s) or _is_china_policy(s))
+                _pdd_china_total = sum(1 for s in _selected if _is_china_policy(s))
                 _pdd_swapped = False
-                for _pdd_wdom, _pdd_wcnt in _pdd_dc2.most_common():
-                    if _pdd_wcnt <= 1 or _pdd_swapped:
+                _pdd_replace_items = [
+                    (i, s)
+                    for i, s in enumerate(_selected)
+                    if _pdd_dc2.get(_f6_domain_key(s), 0) > 1
+                ]
+                _pdd_replace_items.sort(key=lambda x: (
+                    0 if _pdd_vc.get(_f6_vendor_key(x[1]), 0) > 1 else 1,
+                    0 if ((not _is_target_player(x[1])) or _pdd_tp_vc.get(_f6_vendor_key(x[1]), 0) > 1) else 1,
+                    0 if _pdd_bucket_counts.get(_ct72b_strategic_bucket(x[1]), 0) > 1 else 1,
+                    0 if _pdd_axis_counts.get(_role_axis(x[1]), 0) > 1 else 1,
+                    0 if ((not _is_china_policy(x[1])) or _pdd_china_total > 1) else 1,
+                    0 if ((not (_is_us_policy(x[1]) or _is_china_policy(x[1]))) or _pdd_policy_total > 2) else 1,
+                    0 if _f6_is_google_research_blog(x[1]) else 1,
+                    0 if _is_techcrunch(x[1]) else 1,
+                    0 if _is_non_strategic_google_research(x[1]) else 1,
+                    -_pdd_dc2.get(_f6_domain_key(x[1]), 0),
+                    -_pdd_vc.get(_f6_vendor_key(x[1]), 0),
+                    _f6_bfp(x[1]),
+                ))
+                for _pdd_di, _pdd_dit in _pdd_replace_items:
+                    if _pdd_swapped:
                         break
-                    _pdd_dom_items = sorted(
-                        [(i, s) for i, s in enumerate(_selected) if _f6_domain_key(s) == _pdd_wdom],
-                        key=lambda x: (-_pdd_vc.get(_f6_vendor_key(x[1]), 0), _f6_bfp(x[1]))
-                    )
-                    for _pdd_di, _pdd_dit in _pdd_dom_items:
-                        if _pdd_swapped:
-                            break
-                        for _pdd_ci, _pdd_cand in enumerate(_pdd_pool):
-                            _pdd_cdom = _f6_domain_key(_pdd_cand)
-                            if _pdd_cdom in _pdd_cur_doms:
-                                continue
-                            _pdd_test = [s if j != _pdd_di else _pdd_cand for j, s in enumerate(_selected)]
-                            _pdd_inv_b = _i80_invariant_snapshot(_selected)
-                            _pdd_inv_a = _i80_invariant_snapshot(_pdd_test)
-                            _pdd_ok, _pdd_reg = _i80_no_regression(_pdd_inv_b, _pdd_inv_a)
-                            if not _pdd_ok:
-                                _pdd_ok = all(not _pdd_inv_b[k] for k in _pdd_reg)
-                            if not _pdd_ok:
-                                # iter83: removed tc_cap/gr_cap/tc_gr_combined — canonical snapshot exposes truth
-                                _pdd_ok = all(
-                                    (not _pdd_inv_b[k]) or (k in {"max_domain", "target_player"})
-                                    for k in _pdd_reg
+                    _pdd_wdom = _f6_domain_key(_pdd_dit)
+                    _pdd_bucket = _ct72b_strategic_bucket(_pdd_dit)
+                    _pdd_axis = _role_axis(_pdd_dit)
+                    _pdd_tp_item = _is_target_player(_pdd_dit)
+                    _pdd_policy_item = _is_us_policy(_pdd_dit) or _is_china_policy(_pdd_dit)
+                    _pdd_china_item = _is_china_policy(_pdd_dit)
+                    _pdd_round_pool = sorted(list(_pdd_pool), key=lambda it: (
+                        0 if _f6_domain_key(it) not in _pdd_cur_doms else 1,
+                        0 if _ct72b_strategic_bucket(it) == _pdd_bucket else 1,
+                        0 if _role_axis(it) == _pdd_axis else 1,
+                        0 if (_is_target_player(it) == _pdd_tp_item) else 1,
+                        0 if ((_is_us_policy(it) or _is_china_policy(it)) == _pdd_policy_item) else 1,
+                        0 if (_is_china_policy(it) == _pdd_china_item) else 1,
+                        0 if _f6_vendor_key(it) not in _pdd_cur_vendors else 1,
+                        0 if (_is_target_player(it) and _f6_vendor_key(it) not in _pdd_cur_tp_vendors) else 1,
+                        0 if not _f6_is_google_research_blog(it) else 1,
+                        0 if not _is_techcrunch(it) else 1,
+                        0 if not _is_non_strategic_google_research(it) else 1,
+                        -_dd_candidate_commit_probe(it).get("strategic_density_score", 0),
+                        -_dd_candidate_commit_probe(it).get("chars", 0),
+                        -_dd_candidate_commit_probe(it).get("fulltext_len", int(getattr(it, "fulltext_len", 0) or 0)),
+                        -_f6_bfp(it),
+                    ))
+                    for _pdd_ci, _pdd_cand in enumerate(_pdd_round_pool):
+                        _pdd_cdom = _f6_domain_key(_pdd_cand)
+                        if _pdd_cdom in _pdd_cur_doms:
+                            continue
+                        _pdd_ok, _pdd_meta = _i83_try_post_density_domain_commit(
+                            _pdd_di,
+                            _pdd_cand,
+                            _stage_label=f"post_density_domain_round{_pdd_round + 1}",
+                        )
+                        if not _pdd_ok:
+                            if _pdd_ci <= 3:
+                                _log.info(
+                                    "iter83 post-density domain REJECT[%d]: src_dom=%s dst_dom=%s details=%s",
+                                    _pdd_ci,
+                                    _pdd_wdom,
+                                    _pdd_cdom,
+                                    _pdd_meta,
                                 )
-                            _pdd_density_ok = True
-                            if _pdd_ok:
-                                try:
-                                    _pdd_cards_test = [_f600_item_to_card_dict(it) for it in _pdd_test]
-                                    _pdd_digest_test = _generate_digest_md(_pdd_cards_test, _run_id)
-                                    _pdd_density_ok, _, _ = _f600_check_digest_density(_pdd_digest_test, _outputs, _run_id)
-                                except Exception:
-                                    _pdd_density_ok = False
-                            if _pdd_ok and not _pdd_density_ok:
-                                continue
-                            if _pdd_ok:
-                                _log.info("iter81c post-density domain rescue: replaced '%s'[%d] with '%s' (new domain)",
-                                          _pdd_wdom, _pdd_di, _pdd_cdom)
-                                _selected[_pdd_di] = _pdd_cand
-                                _pdd_pool.pop(_pdd_ci)
-                                _pdd_cur_doms = set(_f6_domain_key(s) for s in _selected)
-                                _pdd_swapped = True
-                                break
+                            continue
+                        _log.info(
+                            "iter81c post-density domain rescue: replaced '%s'[%d] with '%s' (domains %d -> %d)",
+                            _pdd_wdom,
+                            _pdd_di,
+                            _pdd_cdom,
+                            _pdd_meta.get("domains_before", 0),
+                            _pdd_meta.get("domains_after", 0),
+                        )
+                        try:
+                            _pdd_pool.remove(_pdd_cand)
+                        except ValueError:
+                            pass
+                        _pdd_cur_doms = set(_f6_domain_key(s) for s in _selected)
+                        _pdd_swapped = True
+                        break
                 if not _pdd_swapped:
                     _log.warning("iter81c post-density domain rescue: stuck at dist_doms=%d", len(_pdd_dc2))
                     break
-            # Rebuild digest after domain rescue + re-run density check
             _pdd_dc_final = _DivCounter(_f6_domain_key(s) for s in _selected)
             if len(_pdd_dc_final) != _pdd_dist:
-                _log.info("iter81c post-density domain rescue: domains %d → %d", _pdd_dist, len(_pdd_dc_final))
-                _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
-                _digest_path = _generate_digest_md(_card_dicts, _run_id)
-                _dd_ok2, _dd_reason2, _dd_meta2 = _f600_check_digest_density(_digest_path, _outputs, _run_id)
-                # iter81c: if domain rescue introduced thin items, do another density swap pass
-                for _pdd_ds_round in range(5):
-                    if _dd_ok2:
-                        break
-                    _pdd_thin_indices = []
-                    for _pdi, _pddev in enumerate(_dd_meta2.get("events", [])):
-                        if _pddev.get("bullet_count", 0) < 5 and _pddev.get("chars", 0) < 1200:
-                            if _pdi < len(_selected):
-                                _pdd_thin_indices.append(_pdi)
-                    if not _pdd_thin_indices:
-                        break
-                    _pdd_ds_done = False
-                    # iter83: keep defer-set for transaction search; commit still needs all invariants.
-                    _PDD_DEFERRABLE = _DD_DEFERRABLE
-                    for _pdd_ti in _pdd_thin_indices:
-                        for _pdd_sci, _pdd_sc in enumerate(_dd_swap_pool):
-                            _pdd_ds_ok, _pdd_ds_reg = _i83_dd_try_commit(
-                                _pdd_ti,
-                                _pdd_sci,
-                                _PDD_DEFERRABLE,
-                                _stage_label=f"post_domain_round{_pdd_ds_round + 1}",
-                                _stage_defer_keys=set(),
-                            )
-                            if _pdd_ds_ok:
-                                _pdd_ds_done = True
-                                _log.info("iter81c post-domain density swap: round=%d idx=%d replaced", _pdd_ds_round + 1, _pdd_ti)
-                                break
-                            if _pdd_sci <= 3:
-                                _log.info("iter83 post-domain dd REJECT[%d]: idx=%d reg=%s", _pdd_sci, _pdd_ti, _pdd_ds_reg)
-                        if _pdd_ds_done:
-                            break
-                    if not _pdd_ds_done:
-                        break
-                    _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
-                    _digest_path = _generate_digest_md(_card_dicts, _run_id)
-                    _dd_ok2, _dd_reason2, _dd_meta2 = _f600_check_digest_density(_digest_path, _outputs, _run_id)
+                _log.info("iter81c post-density domain rescue: domains %d -> %d", _pdd_dist, len(_pdd_dc_final))
+                _dd_ok2, _dd_reason2, _dd_meta2 = _i83_post_domain_density_repair(_stage_label="post_domain_finalize")
                 if not _dd_ok2:
-                    _f6_fail("DIGEST_DENSITY_FLOOR_HARD", _dd_reason2,
-                             next_steps="全文不足/水化過薄，請調整 targeted hydration 取得完整內容後再翻譯")
-                # Update meta files
-                _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
-                try:
-                    _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
-                except Exception:
-                    pass
-                _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+                    _f6_fail(
+                        "DIGEST_DENSITY_FLOOR_HARD",
+                        _dd_reason2,
+                        next_steps="Increase targeted hydration or use denser candidate pool.",
+                    )
 
     # iter83: finalize commit lock for post-selection mutations.
     # No final output is allowed unless the final selection satisfies all invariants.
@@ -12391,6 +13159,48 @@ def _f600_run_fast_path(
             _i83_indie_chk  = int(os.environ["INJECT_INDIE_DEV_TONE_TOTAL"]) if os.environ.get("INJECT_INDIE_DEV_TONE_TOTAL") else _i83_indie_total
             _i83_forum_chk  = int(os.environ["INJECT_FORUM_DISCUSSION_TOTAL"]) if os.environ.get("INJECT_FORUM_DISCUSSION_TOTAL") else _i83_forum_total
             _i83_tut_chk    = int(os.environ["INJECT_TUTORIAL_EXPLAINER_TOTAL"]) if os.environ.get("INJECT_TUTORIAL_EXPLAINER_TOTAL") else _i83_tutorial_total
+            _i83_domain_counts = dict(_DivCounter(_f6_domain_key(s) for s in _selected))
+            _i83_vendor_counts = dict(_DivCounter(_f6_vendor_key(s) for s in _selected))
+            _i83_vendor_set = set(_f6_vendor_key(s) for s in _selected) - {"other"}
+            _i83_max_domain = max(_i83_domain_counts.values(), default=0)
+            _i83_max_vendor = max(_i83_vendor_counts.values(), default=0)
+            _i83_div_pass = (
+                len(_i83_domain_counts) >= _DIV_MIN_DOMAINS
+                and _i83_max_domain <= _DIV_MAX_DOMAIN
+                and len(_i83_vendor_set) >= _DIV_MIN_VENDORS
+                and _i83_max_vendor <= _DIV_MAX_VENDOR
+            )
+            _i83_overlap_policy = "daily_unique_only" if locals().get("_oa_entrypoint", "") == "scheduled_task" else "allow_duplicates"
+            _i83_overlap_gate_enabled = (_i83_overlap_policy == "daily_unique_only")
+            _i83_overlap_ids = []
+            for _i83_overlap_item in _selected:
+                _i83_overlap_hash = _oa_item_hash(_i83_overlap_item)
+                if _i83_overlap_hash and _i83_overlap_hash in _oa_prev_ids:
+                    _i83_overlap_ids.append(_i83_overlap_hash)
+            _i83_overlap_count = len(_i83_overlap_ids)
+            _i83_overlap_pass = (not _i83_overlap_gate_enabled) or (_i83_overlap_count <= _OVERLAP_CAP)
+            _i83_gate_overrides = {
+                "platform_total": _i83_plat_check,
+                "research_tutorial_total": _i83_rt_check,
+                "bigtech_official_media_count": _i83_bom_check,
+                "leadership_politics_ai_count": _i83_lp_chk,
+                "china_ai_gov_count": _i83_china_chk,
+                "google_research_total": _i83_gr_check,
+                "developer_release_total": _i83_devrel_chk,
+                "indie_dev_tone_total": _i83_indie_chk,
+                "forum_discussion_total": _i83_forum_chk,
+                "tutorial_explainer_total": _i83_tut_chk,
+                "techcrunch_total": _i83_tc_check,
+                "hf_blog_explainer_total": _i83_hfbe_chk,
+                "target_player_distinct": _i83_tp_chk,
+                "us_policy_count": _i83_usp_chk,
+                "china_policy_count": _i83_cnp_chk,
+                "techcrunch_google_research_total": _i83_tcgr_chk,
+                "selected_role_axes_distinct": _i83_role_chk,
+                "techcrunch_rumor_speculation_total": _i83_tcr_chk,
+                "non_strategic_google_research_total": _i83_nsgr_chk,
+                "executive_signal_total": _i83_exec_chk,
+            }
 
             # Recompute gate pass/fail from canonical values
             _i83_cm_path = _outputs / "content_mix.meta.json"
@@ -12403,62 +13213,62 @@ def _f600_run_fast_path(
                 "bigtech_actionable_count": _i83_bt_actionable,
                 "bigtech_actionable_min": 7,
                 "bigtech_actionable_min_pass": _i83_bt_actionable >= 7,
-                "bigtech_official_media_count": _i83_bom_check,
+                "bigtech_official_media_count": _i83_bt_om,
                 "bigtech_official_media_min": 8,
-                "bigtech_official_media_min_pass": _i83_bom_check >= 8,
-                "leadership_politics_ai_count": _i83_lp_chk,
+                "bigtech_official_media_min_pass": _i83_bt_om >= 8,
+                "leadership_politics_ai_count": _i83_lp_count,
                 "leadership_politics_ai_min": 2,
-                "leadership_politics_ai_min_pass": _i83_lp_chk >= 2,
-                "china_ai_gov_count": _i83_china_chk,
+                "leadership_politics_ai_min_pass": _i83_lp_count >= 2,
+                "china_ai_gov_count": _i83_china_count,
                 "china_ai_gov_min": 1,
-                "china_ai_gov_min_pass": _i83_china_chk >= 1,
-                "platform_total": _i83_plat_check,
-                "platform_cap": _pdc_effective_cap,
-                "platform_cap_pass": _i83_plat_check <= _pdc_effective_cap,
-                "research_tutorial_total": _i83_rt_check,
+                "china_ai_gov_min_pass": _i83_china_count >= 1,
+                "platform_total": _i83_plat_total,
+                "platform_cap": _PLATFORM_CAP,
+                "platform_cap_pass": _i83_plat_total <= _PLATFORM_CAP,
+                "research_tutorial_total": _i83_rt_total,
                 "research_tutorial_cap": 1,
-                "research_tutorial_cap_pass": _i83_rt_check <= 1,
-                "google_research_total": _i83_gr_check,
+                "research_tutorial_cap_pass": _i83_rt_total <= 1,
+                "google_research_total": _i83_gr_total,
                 "google_research_cap": _GOOGLE_RESEARCH_CAP,
-                "google_research_cap_pass": _i83_gr_check <= _GOOGLE_RESEARCH_CAP,
+                "google_research_cap_pass": _i83_gr_total <= _GOOGLE_RESEARCH_CAP,
                 "google_research_target_band": "2-3",
-                "google_research_target_soft_hit": (2 <= _i83_gr_check <= 3),
-                "developer_release_total": _i83_devrel_chk,
+                "google_research_target_soft_hit": (2 <= _i83_gr_total <= 3),
+                "developer_release_total": _i83_devrel_total,
                 "developer_release_cap": 0,
-                "developer_release_cap_pass": _i83_devrel_chk <= 0,
-                "indie_dev_tone_total": _i83_indie_chk,
+                "developer_release_cap_pass": _i83_devrel_total <= 0,
+                "indie_dev_tone_total": _i83_indie_total,
                 "indie_dev_tone_cap": 0,
-                "indie_dev_tone_cap_pass": _i83_indie_chk <= 0,
-                "forum_discussion_total": _i83_forum_chk,
+                "indie_dev_tone_cap_pass": _i83_indie_total <= 0,
+                "forum_discussion_total": _i83_forum_total,
                 "forum_discussion_cap": 0,
-                "forum_discussion_cap_pass": _i83_forum_chk <= 0,
-                "tutorial_explainer_total": _i83_tut_chk,
+                "forum_discussion_cap_pass": _i83_forum_total <= 0,
+                "tutorial_explainer_total": _i83_tutorial_total,
                 "tutorial_explainer_cap": 0,
-                "tutorial_explainer_cap_pass": _i83_tut_chk <= 0,
-                "techcrunch_total": _i83_tc_check,
+                "tutorial_explainer_cap_pass": _i83_tutorial_total <= 0,
+                "techcrunch_total": _i83_tc_total,
                 "techcrunch_cap": _TECHCRUNCH_CAP,
-                "techcrunch_cap_pass": _i83_tc_check <= _TECHCRUNCH_CAP,
-                "techcrunch_google_research_total": _i83_tcgr_chk,
+                "techcrunch_cap_pass": _i83_tc_total <= _TECHCRUNCH_CAP,
+                "techcrunch_google_research_total": _i83_tc_gr_combined,
                 "techcrunch_google_research_combined_cap": _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP,
-                "techcrunch_google_research_combined_cap_pass": _i83_tcgr_chk <= _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP,
-                "hf_blog_explainer_total": _i83_hfbe_chk,
+                "techcrunch_google_research_combined_cap_pass": _i83_tc_gr_combined <= _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP,
+                "hf_blog_explainer_total": _i83_hfbe_total,
                 "hf_blog_explainer_cap": _HF_BLOG_EXPLAINER_CAP,
-                "hf_blog_explainer_cap_pass": _i83_hfbe_chk <= _HF_BLOG_EXPLAINER_CAP,
-                "techcrunch_rumor_speculation_total": _i83_tcr_chk,
+                "hf_blog_explainer_cap_pass": _i83_hfbe_total <= _HF_BLOG_EXPLAINER_CAP,
+                "techcrunch_rumor_speculation_total": _i83_tc_rumor_total,
                 "techcrunch_rumor_speculation_cap": _TECHCRUNCH_RUMOR_SPEC_CAP,
-                "techcrunch_rumor_speculation_cap_pass": _i83_tcr_chk <= _TECHCRUNCH_RUMOR_SPEC_CAP,
-                "non_strategic_google_research_total": _i83_nsgr_chk,
+                "techcrunch_rumor_speculation_cap_pass": _i83_tc_rumor_total <= _TECHCRUNCH_RUMOR_SPEC_CAP,
+                "non_strategic_google_research_total": _i83_nsgr_total,
                 "non_strategic_google_research_cap": _NON_STRATEGIC_GR_CAP,
-                "non_strategic_google_research_cap_pass": _i83_nsgr_chk <= _NON_STRATEGIC_GR_CAP,
-                "executive_signal_total": _i83_exec_chk,
-                "target_player_distinct": _i83_tp_chk,
+                "non_strategic_google_research_cap_pass": _i83_nsgr_total <= _NON_STRATEGIC_GR_CAP,
+                "executive_signal_total": _i83_exec_total,
+                "target_player_distinct": _i83_tp_distinct,
                 "target_players": _i83_tp_list,
                 "target_player_coverage_min": 6,
-                "target_player_coverage_pass": _i83_tp_chk >= 6,
-                "us_policy_count": _i83_usp_chk,
-                "china_policy_count": _i83_cnp_chk,
+                "target_player_coverage_pass": _i83_tp_distinct >= 6,
+                "us_policy_count": _i83_usp_count,
+                "china_policy_count": _i83_cnp_count,
                 "us_china_policy_min": 2,
-                "us_china_policy_min_pass": (_i83_usp_chk + _i83_cnp_chk) >= 2 and _i83_cnp_chk >= 1,
+                "us_china_policy_min_pass": (_i83_usp_count + _i83_cnp_count) >= 2 and _i83_cnp_count >= 1,
                 "official_media_count": _i83_om_count,
                 "selected_strategic_buckets": _i83_buckets,
                 "selected_strategic_buckets_distinct": _i83_buckets_distinct,
@@ -12475,9 +13285,9 @@ def _f600_run_fast_path(
                 "source_density_avg": _i83_density_avg,
                 "source_density_floor_pass": _i83_density_floor_pass,
                 "selected_role_axes": _i83_role_axes,
-                "selected_role_axes_distinct": _i83_role_chk,
+                "selected_role_axes_distinct": _i83_role_distinct,
                 "role_diversity_min": _ROLE_DIVERSITY_MIN,
-                "role_diversity_pass": _i83_role_chk >= _ROLE_DIVERSITY_MIN,
+                "role_diversity_pass": _i83_role_distinct >= _ROLE_DIVERSITY_MIN,
                 "bucket_rescue_attempts": _p6c_rescue_attempts if _is_daily else 0,
                 "bucket_rescue_successes": _p6c_rescue_successes if _is_daily else 0,
                 "strategic_bucket_per_item": [p["strategic_bucket"] for p in _i83_per_item],
@@ -12485,6 +13295,44 @@ def _f600_run_fast_path(
                 "source_class_per_item": [p["source_class"] for p in _i83_per_item],
                 "geo_class_per_item": [p["geo_class"] for p in _i83_per_item],
                 "selected_content_types": _i83_per_item,
+                "gate_overrides": _i83_gate_overrides,
+                "gate_platform_domain_total_count": _i83_plat_check,
+                "gate_platform_cap_pass": _i83_plat_check <= _PLATFORM_CAP,
+                "research_tutorial_gate_total": _i83_rt_check,
+                "research_tutorial_gate_cap_pass": _i83_rt_check <= 1,
+                "bigtech_official_media_gate_count": _i83_bom_check,
+                "bigtech_official_media_gate_pass": _i83_bom_check >= 8,
+                "leadership_politics_ai_gate_count": _i83_lp_chk,
+                "leadership_politics_ai_gate_pass": _i83_lp_chk >= 2,
+                "china_ai_gov_gate_count": _i83_china_chk,
+                "china_ai_gov_gate_pass": _i83_china_chk >= 1,
+                "google_research_gate_total": _i83_gr_check,
+                "google_research_gate_cap_pass": _i83_gr_check <= _GOOGLE_RESEARCH_CAP,
+                "developer_release_gate_total": _i83_devrel_chk,
+                "developer_release_gate_cap_pass": _i83_devrel_chk <= 0,
+                "indie_dev_tone_gate_total": _i83_indie_chk,
+                "indie_dev_tone_gate_cap_pass": _i83_indie_chk <= 0,
+                "forum_discussion_gate_total": _i83_forum_chk,
+                "forum_discussion_gate_cap_pass": _i83_forum_chk <= 0,
+                "tutorial_explainer_gate_total": _i83_tut_chk,
+                "tutorial_explainer_gate_cap_pass": _i83_tut_chk <= 0,
+                "techcrunch_gate_total": _i83_tc_check,
+                "techcrunch_gate_cap_pass": _i83_tc_check <= _TECHCRUNCH_CAP,
+                "hf_blog_explainer_gate_total": _i83_hfbe_chk,
+                "hf_blog_explainer_gate_cap_pass": _i83_hfbe_chk <= _HF_BLOG_EXPLAINER_CAP,
+                "techcrunch_rumor_speculation_gate_total": _i83_tcr_chk,
+                "techcrunch_rumor_speculation_gate_cap_pass": _i83_tcr_chk <= _TECHCRUNCH_RUMOR_SPEC_CAP,
+                "non_strategic_google_research_gate_total": _i83_nsgr_chk,
+                "non_strategic_google_research_gate_cap_pass": _i83_nsgr_chk <= _NON_STRATEGIC_GR_CAP,
+                "techcrunch_google_research_gate_total": _i83_tcgr_chk,
+                "techcrunch_google_research_gate_cap_pass": _i83_tcgr_chk <= _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP,
+                "selected_role_axes_gate_distinct": _i83_role_chk,
+                "role_diversity_gate_pass": _i83_role_chk >= _ROLE_DIVERSITY_MIN,
+                "target_player_gate_distinct": _i83_tp_chk,
+                "target_player_gate_coverage_pass": _i83_tp_chk >= 6,
+                "us_policy_gate_count": _i83_usp_chk,
+                "china_policy_gate_count": _i83_cnp_chk,
+                "us_china_policy_gate_pass": (_i83_usp_chk + _i83_cnp_chk) >= 2 and _i83_cnp_chk >= 1,
             }
 
             # Carry forward injection flags from env
@@ -12522,62 +13370,182 @@ def _f600_run_fast_path(
             if _i83_sa_path.exists():
                 _i83_sa = _f6_j.loads(_i83_sa_path.read_text(encoding="utf-8"))
                 _i83_sa["canonical_snapshot"] = True
+                _i83_sa["selected_domains_distinct"] = len(_i83_domain_counts)
+                _i83_sa["selected_vendors_distinct"] = len(_i83_vendor_set)
+                _i83_sa["domain_counts"] = _i83_domain_counts
+                _i83_sa["vendor_counts"] = _i83_vendor_counts
+                _i83_sa["max_domain_count"] = _i83_max_domain
+                _i83_sa["max_vendor_count"] = _i83_max_vendor
+                _i83_sa["diversity_pass"] = _i83_div_pass
                 _i83_sa["forum_discussion_total"] = _i83_forum_total
+                _i83_sa["forum_discussion_gate_total"] = _i83_forum_chk
+                _i83_sa["forum_discussion_gate_cap_pass"] = _i83_forum_chk <= 0
                 _i83_sa["developer_release_total"] = _i83_devrel_total
+                _i83_sa["developer_release_gate_total"] = _i83_devrel_chk
+                _i83_sa["developer_release_gate_cap_pass"] = _i83_devrel_chk <= 0
                 _i83_sa["indie_dev_tone_total"] = _i83_indie_total
+                _i83_sa["indie_dev_tone_gate_total"] = _i83_indie_chk
+                _i83_sa["indie_dev_tone_gate_cap_pass"] = _i83_indie_chk <= 0
                 _i83_sa["tutorial_explainer_total"] = _i83_tutorial_total
+                _i83_sa["tutorial_explainer_gate_total"] = _i83_tut_chk
+                _i83_sa["tutorial_explainer_gate_cap_pass"] = _i83_tut_chk <= 0
                 _i83_sa["google_research_total"] = _i83_gr_total
+                _i83_sa["google_research_gate_total"] = _i83_gr_check
+                _i83_sa["google_research_gate_cap_pass"] = _i83_gr_check <= _GOOGLE_RESEARCH_CAP
                 _i83_sa["official_media_count"] = _i83_om_count
                 _i83_sa["techcrunch_total"] = _i83_tc_total
+                _i83_sa["techcrunch_gate_total"] = _i83_tc_check
+                _i83_sa["techcrunch_gate_cap_pass"] = _i83_tc_check <= _TECHCRUNCH_CAP
                 _i83_sa["hf_blog_explainer_total"] = _i83_hfbe_total
+                _i83_sa["hf_blog_explainer_gate_total"] = _i83_hfbe_chk
+                _i83_sa["hf_blog_explainer_gate_cap_pass"] = _i83_hfbe_chk <= _HF_BLOG_EXPLAINER_CAP
                 _i83_sa["target_player_distinct"] = _i83_tp_distinct
+                _i83_sa["target_player_gate_distinct"] = _i83_tp_chk
+                _i83_sa["target_player_coverage_pass"] = _i83_tp_distinct >= 6
+                _i83_sa["target_player_gate_coverage_pass"] = _i83_tp_chk >= 6
                 _i83_sa["target_players"] = _i83_tp_list
                 _i83_sa["us_policy_count"] = _i83_usp_count
+                _i83_sa["us_policy_gate_count"] = _i83_usp_chk
                 _i83_sa["china_policy_count"] = _i83_cnp_count
+                _i83_sa["china_policy_gate_count"] = _i83_cnp_chk
+                _i83_sa["us_china_policy_min_pass"] = (_i83_usp_count + _i83_cnp_count) >= 2 and _i83_cnp_count >= 1
+                _i83_sa["us_china_policy_gate_pass"] = (_i83_usp_chk + _i83_cnp_chk) >= 2 and _i83_cnp_chk >= 1
                 _i83_sa["techcrunch_google_research_total"] = _i83_tc_gr_combined
+                _i83_sa["techcrunch_google_research_gate_total"] = _i83_tcgr_chk
+                _i83_sa["techcrunch_google_research_gate_cap_pass"] = _i83_tcgr_chk <= _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP
                 _i83_sa["selected_role_axes_distinct"] = _i83_role_distinct
+                _i83_sa["selected_role_axes_gate_distinct"] = _i83_role_chk
+                _i83_sa["role_diversity_pass"] = _i83_role_distinct >= _ROLE_DIVERSITY_MIN
+                _i83_sa["role_diversity_gate_pass"] = _i83_role_chk >= _ROLE_DIVERSITY_MIN
                 _i83_sa["techcrunch_rumor_speculation_total"] = _i83_tc_rumor_total
+                _i83_sa["techcrunch_rumor_speculation_gate_total"] = _i83_tcr_chk
+                _i83_sa["techcrunch_rumor_speculation_gate_cap_pass"] = _i83_tcr_chk <= _TECHCRUNCH_RUMOR_SPEC_CAP
                 _i83_sa["non_strategic_google_research_total"] = _i83_nsgr_total
+                _i83_sa["non_strategic_google_research_gate_total"] = _i83_nsgr_chk
+                _i83_sa["non_strategic_google_research_gate_cap_pass"] = _i83_nsgr_chk <= _NON_STRATEGIC_GR_CAP
                 _i83_sa["executive_signal_total"] = _i83_exec_total
+                _i83_sa["executive_signal_gate_total"] = _i83_exec_chk
+                _i83_sa["bigtech_official_media_count"] = _i83_bt_om
+                _i83_sa["bigtech_official_media_gate_count"] = _i83_bom_check
+                _i83_sa["bigtech_official_media_gate_pass"] = _i83_bom_check >= 8
+                _i83_sa["leadership_politics_ai_count"] = _i83_lp_count
+                _i83_sa["leadership_politics_ai_gate_count"] = _i83_lp_chk
+                _i83_sa["leadership_politics_ai_gate_pass"] = _i83_lp_chk >= 2
+                _i83_sa["china_ai_gov_count"] = _i83_china_count
+                _i83_sa["china_ai_gov_gate_count"] = _i83_china_chk
+                _i83_sa["china_ai_gov_gate_pass"] = _i83_china_chk >= 1
+                _i83_sa["platform_domain_total_count"] = _i83_plat_total
+                _i83_sa["gate_platform_domain_total_count"] = _i83_plat_check
+                _i83_sa["platform_cap_pass"] = _i83_plat_total <= _PLATFORM_CAP
+                _i83_sa["gate_platform_cap_pass"] = _i83_plat_check <= _PLATFORM_CAP
+                _i83_sa["selected_overlap_count"] = _i83_overlap_count
+                _i83_sa["selected_overlap_ids"] = _i83_overlap_ids[:5]
+                _i83_sa["overlap_policy"] = _i83_overlap_policy
+                _i83_sa["overlap_gate_enabled"] = _i83_overlap_gate_enabled
+                _i83_sa["overlap_pass"] = _i83_overlap_pass
                 _i83_sa_path.write_text(_f6_j.dumps(_i83_sa, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            _i83_dvc_path = _outputs / "domain_vendor_cap.meta.json"
+            if _i83_dvc_path.exists():
+                _i83_dvc = _f6_j.loads(_i83_dvc_path.read_text(encoding="utf-8"))
+                _i83_dvc["canonical_snapshot"] = True
+                _i83_dvc["selected_events"] = len(_selected)
+                _i83_dvc["domain_counts"] = _i83_domain_counts
+                _i83_dvc["vendor_counts"] = _i83_vendor_counts
+                _i83_dvc["max_domain_count"] = _i83_max_domain
+                _i83_dvc["max_vendor_count"] = _i83_max_vendor
+                _i83_dvc["domain_cap_pass"] = _i83_max_domain <= _DIV_MAX_DOMAIN
+                _i83_dvc["vendor_cap_pass"] = _i83_max_vendor <= _DIV_MAX_VENDOR
+                _i83_dvc["cap_pass"] = (_i83_max_domain <= _DIV_MAX_DOMAIN) and (_i83_max_vendor <= _DIV_MAX_VENDOR)
+                _i83_dvc["gate_max_domain_count"] = _i83_max_domain
+                _i83_dvc["gate_max_vendor_count"] = _i83_max_vendor
+                _i83_dvc["gate_domain_cap_pass"] = _i83_max_domain <= _DIV_MAX_DOMAIN
+                _i83_dvc["gate_vendor_cap_pass"] = _i83_max_vendor <= _DIV_MAX_VENDOR
+                _i83_dvc_path.write_text(_f6_j.dumps(_i83_dvc, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            _i83_bdm_path = _outputs / "bigtech_diversity.meta.json"
+            if _i83_bdm_path.exists():
+                _i83_bdm = _f6_j.loads(_i83_bdm_path.read_text(encoding="utf-8"))
+                _i83_bdm["canonical_snapshot"] = True
+                _i83_bdm["selected_events"] = len(_selected)
+                _i83_bdm["selected_domains_distinct"] = len(_i83_domain_counts)
+                _i83_bdm["selected_vendors_distinct"] = len(_i83_vendor_set)
+                _i83_bdm["domain_counts"] = _i83_domain_counts
+                _i83_bdm["vendor_counts"] = _i83_vendor_counts
+                _i83_bdm["max_domain_count"] = _i83_max_domain
+                _i83_bdm["max_vendor_count"] = _i83_max_vendor
+                _i83_bdm["pass"] = _i83_div_pass
+                _i83_bdm["domain_share_cap_pass"] = _i83_max_domain <= _DIV_MAX_DOMAIN
+                _i83_bdm["vendor_share_cap_pass"] = _i83_max_vendor <= _DIV_MAX_VENDOR
+                _i83_bdm_path.write_text(_f6_j.dumps(_i83_bdm, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            _i83_pdc_path = _outputs / "dev_platform_cap.meta.json"
+            if _i83_pdc_path.exists():
+                _i83_pdc = _f6_j.loads(_i83_pdc_path.read_text(encoding="utf-8"))
+                _i83_platform_domains = sorted(set(_f6_domain_key(s) for s in _selected if _is_platform_domain(s)))
+                _i83_platform_domain_counts = dict(_DivCounter(_f6_domain_key(s) for s in _selected if _is_platform_domain(s)))
+                _i83_pdc["canonical_snapshot"] = True
+                _i83_pdc["selected_events"] = len(_selected)
+                _i83_pdc["platform_domains"] = _i83_platform_domains
+                _i83_pdc["platform_domain_total_count"] = _i83_plat_total
+                _i83_pdc["platform_domain_counts"] = _i83_platform_domain_counts
+                _i83_pdc["cap"] = _PLATFORM_CAP
+                _i83_pdc["cap_rule"] = "platform_total<=1"
+                _i83_pdc["cap_pass"] = _i83_plat_total <= _PLATFORM_CAP
+                _i83_pdc["gate_platform_domain_total_count"] = _i83_plat_check
+                _i83_pdc["gate_cap_pass"] = _i83_plat_check <= _PLATFORM_CAP
+                _i83_pdc_path.write_text(_f6_j.dumps(_i83_pdc, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            _i83_ov_path = _outputs / "daily_overlap.meta.json"
+            if _i83_ov_path.exists():
+                _i83_ov = _f6_j.loads(_i83_ov_path.read_text(encoding="utf-8"))
+                _i83_ov["canonical_snapshot"] = True
+                _i83_ov["overlap_policy"] = _i83_overlap_policy
+                _i83_ov["overlap_gate_enabled"] = _i83_overlap_gate_enabled
+                _i83_ov["prev_daily_ids_count"] = len(_oa_prev_ids)
+                _i83_ov["selected_overlap_count"] = _i83_overlap_count
+                _i83_ov["selected_overlap_ids"] = _i83_overlap_ids[:5]
+                _i83_ov["pass"] = _i83_overlap_pass
+                _i83_ov_path.write_text(_f6_j.dumps(_i83_ov, ensure_ascii=False, indent=2), encoding="utf-8")
 
             _i83_sd_path = _outputs / "source_density.meta.json"
             if _i83_sd_path.exists():
                 _i83_sd_meta = _f6_j.loads(_i83_sd_path.read_text(encoding="utf-8"))
-                _i83_sel_by_url = {}
-                for _i83_s in _selected:
-                    _i83_url = str(getattr(_i83_s, "url", "") or getattr(_i83_s, "link", "") or "")[:200]
-                    if _i83_url and _i83_url not in _i83_sel_by_url:
-                        _i83_sel_by_url[_i83_url] = _i83_s
-                _i83_sel_urls = set(_i83_sel_by_url.keys())
+                _i83_existing_sd = {}
+                for _i83_row in _i83_sd_meta.get("items", []):
+                    _i83_existing_url = str(_i83_row.get("url", "") or "")[:200]
+                    if _i83_existing_url and _i83_existing_url not in _i83_existing_sd:
+                        _i83_existing_sd[_i83_existing_url] = dict(_i83_row)
+                _i83_sd_items = []
                 _i83_sel_pass = 0
                 _i83_sel_fail = 0
-                for _i83_row in _i83_sd_meta.get("items", []):
-                    _i83_url = str(_i83_row.get("url", "") or "")[:200]
-                    _i83_is_sel = _i83_url in _i83_sel_urls
-                    _i83_row["selected"] = _i83_is_sel
-                    if not _i83_is_sel:
-                        continue
-                    _i83_dscore = float(_i83_row.get("density_score", 0) or 0)
+                for _i83_sel_item in _selected:
+                    _i83_url = str(getattr(_i83_sel_item, "url", "") or getattr(_i83_sel_item, "link", "") or "")[:200]
+                    _i83_row = dict(_i83_existing_sd.get(_i83_url, {}))
+                    _i83_dscore = float(_hdf_all_scores.get(id(_i83_sel_item), {}).get("density_score", _i83_row.get("density_score", 0)) or 0)
                     if _i83_dscore >= _HDF_NEW_DENSITY_MIN:
                         _i83_sel_pass += 1
                     else:
                         _i83_sel_fail += 1
-                    _i83_sel_item = _i83_sel_by_url.get(_i83_url)
-                    if _i83_sel_item is not None:
-                        _i83_row["content_type"] = _ct71_classify(_i83_sel_item)
-                        _i83_row["source_class"] = _ct72b_source_class(_i83_sel_item)
-                        _i83_row["strategic_bucket"] = _ct72b_strategic_bucket(_i83_sel_item)
-                        _i83_row["geo_class"] = _geo_class(_i83_sel_item)
-                        _i83_row["leadership_politics_ai_item"] = _is_leadership_politics_ai(_i83_sel_item)
-                        _i83_row["china_ai_gov_item"] = _is_china_ai_gov(_i83_sel_item)
-                        _i83_row["bigtech_actionable"] = _ct71_is_bigtech_actionable(_i83_sel_item)
-                        _i83_row["bigtech_official_media_actionable"] = _ct72b_is_bigtech_official_media_actionable(_i83_sel_item)
-                        _i83_sds = _sd72_all_scores.get(id(_i83_sel_item), {})
-                        _i83_row["strategic_density_score"] = _i83_sds.get("strategic_density_score", 0)
-                        _i83_row["strategic_density_floor_pass"] = _i83_sds.get("strategic_density_score", 0) >= _cm73_sd_floor
+                    _i83_sds = _sd72_all_scores.get(id(_i83_sel_item), {})
+                    _i83_row["title"] = str(getattr(_i83_sel_item, "title", "") or "")[:120]
+                    _i83_row["url"] = _i83_url
+                    _i83_row["selected"] = True
+                    _i83_row["density_score"] = _i83_dscore
+                    _i83_row["content_type"] = _ct71_classify(_i83_sel_item)
+                    _i83_row["source_class"] = _ct72b_source_class(_i83_sel_item)
+                    _i83_row["strategic_bucket"] = _ct72b_strategic_bucket(_i83_sel_item)
+                    _i83_row["geo_class"] = _geo_class(_i83_sel_item)
+                    _i83_row["leadership_politics_ai_item"] = _is_leadership_politics_ai(_i83_sel_item)
+                    _i83_row["china_ai_gov_item"] = _is_china_ai_gov(_i83_sel_item)
+                    _i83_row["bigtech_actionable"] = _ct71_is_bigtech_actionable(_i83_sel_item)
+                    _i83_row["bigtech_official_media_actionable"] = _ct72b_is_bigtech_official_media_actionable(_i83_sel_item)
+                    _i83_row["strategic_density_score"] = _i83_sds.get("strategic_density_score", 0)
+                    _i83_row["strategic_density_floor_pass"] = _i83_sds.get("strategic_density_score", 0) >= _cm73_sd_floor
+                    _i83_sd_items.append(_i83_row)
 
                 _i83_sd_meta["canonical_snapshot"] = True
+                _i83_sd_meta["items"] = _i83_sd_items
                 _i83_sd_meta["selected_pass"] = _i83_sel_pass
                 _i83_sd_meta["selected_fail"] = _i83_sel_fail
                 _i83_sd_meta["selected_all_pass"] = (_i83_sel_fail == 0 and _i83_sel_pass > 0)
@@ -15390,7 +16358,45 @@ def run_pipeline() -> None:
                         "36kr.com", "deepseek.com", "baidu.com", "alibaba.com", "aliyun.com",
                         "tencent.com", "huawei.com",
                     })
+                    _HY_FRONTLOAD_MIN = {
+                        "ithome.com.tw": 4,
+                        "bloomberg.com": 2,
+                        "openai.com": 2,
+                    }
+                    _HY_FRONTLOAD_HINTS = {
+                        "ithome.com.tw": ("ai", "openai", "nvidia", "microsoft", "google", "amazon"),
+                        "bloomberg.com": ("ai", "openai", "microsoft", "google", "amazon", "anthropic"),
+                        "openai.com": ("openai", "api", "model", "release", "safety"),
+                    }
                     _hy_injected = 0
+                    _hy_frontload = 0
+                    for _hy_fd, _hy_min in _HY_FRONTLOAD_MIN.items():
+                        if _hy_dom_counts.get(_hy_fd, 0) >= _hy_min:
+                            continue
+                        _hy_hints = _HY_FRONTLOAD_HINTS.get(_hy_fd, ())
+                        for _hy_it in raw_items[_hydrate_n:]:
+                            if id(_hy_it) in _hy_pool_ids:
+                                continue
+                            _hy_u = str(getattr(_hy_it, "url", "") or getattr(_hy_it, "link", "") or "")
+                            _hy_dk = _hy_up(_hy_u).netloc.lower().lstrip("www.") if _hy_u else ""
+                            if _hy_dk != _hy_fd:
+                                continue
+                            _hy_title = str(getattr(_hy_it, "title", "") or "").lower()
+                            if _hy_hints and not any(_hy_hint in _hy_title for _hy_hint in _hy_hints):
+                                continue
+                            _targeted_pool.append(_hy_it)
+                            _hy_pool_ids.add(id(_hy_it))
+                            _hy_dom_counts[_hy_dk] += 1
+                            _hy_frontload += 1
+                            _hy_injected += 1
+                            if _hy_dom_counts[_hy_fd] >= _hy_min:
+                                break
+                    if _hy_frontload:
+                        log.info(
+                            "DAILY hydration frontload: injected %d items domains=%s",
+                            _hy_frontload,
+                            {k: _hy_dom_counts.get(k, 0) for k in _HY_FRONTLOAD_MIN},
+                        )
                     # Pass 1: under-represented domains (count < 2)
                     for _hy_it in raw_items[_hydrate_n:]:
                         if _hy_injected >= 20:
@@ -15487,7 +16493,7 @@ def run_pipeline() -> None:
     else:
         raw_items = fetch_all_feeds()
 
-    # Some Z0 snapshots include full_text/body but miss fulltext_len.
+    # Some Z0 snapshots include only content_text/summary but miss fulltext_len.
     # Infer it so downstream hard gates evaluate real content length.
     _fulltext_len_inferred = 0
     for _ri in raw_items:
@@ -15497,9 +16503,24 @@ def run_pipeline() -> None:
             _cur_len = 0
         if _cur_len > 0:
             continue
-        _ft_src = str(getattr(_ri, "full_text", "") or "").strip()
-        if not _ft_src:
-            _ft_src = str(getattr(_ri, "body", "") or "").strip()
+        _ft_src = ""
+        for _field in ("full_text", "body", "content_text", "content"):
+            _cand = str(getattr(_ri, _field, "") or "").strip()
+            if len(_cand) > len(_ft_src):
+                _ft_src = _cand
+        if len(_ft_src) < 240:
+            _fallback = " ".join(
+                _part
+                for _part in (
+                    str(getattr(_ri, "title", "") or "").strip(),
+                    str(getattr(_ri, "summary", "") or "").strip(),
+                    str(getattr(_ri, "snippet", "") or "").strip(),
+                    str(getattr(_ri, "description", "") or "").strip(),
+                )
+                if _part
+            ).strip()
+            if len(_fallback) > len(_ft_src):
+                _ft_src = _fallback
         if not _ft_src:
             continue
         try:
@@ -15508,7 +16529,7 @@ def run_pipeline() -> None:
         except Exception:
             pass
     if _fulltext_len_inferred > 0:
-        log.info("FULLTEXT_LEN_INFERRED: %d items from existing full_text/body", _fulltext_len_inferred)
+        log.info("FULLTEXT_LEN_INFERRED: %d items from existing full_text/body/content_text/summary", _fulltext_len_inferred)
 
     log.info("Fetched %d total raw items", len(raw_items))
     collector.fetched_total = len(raw_items)
@@ -15725,6 +16746,20 @@ def run_pipeline() -> None:
             int(getattr(item, "fulltext_len", 0) or 0),
             len(str(getattr(item, "full_text", "") or "").strip()),
             len(str(getattr(item, "body", "") or "").strip()),
+            len(str(getattr(item, "content_text", "") or "").strip()),
+            len(str(getattr(item, "content", "") or "").strip()),
+            len(
+                " ".join(
+                    _part
+                    for _part in (
+                        str(getattr(item, "title", "") or "").strip(),
+                        str(getattr(item, "summary", "") or "").strip(),
+                        str(getattr(item, "snippet", "") or "").strip(),
+                        str(getattr(item, "description", "") or "").strip(),
+                    )
+                    if _part
+                ).strip()
+            ),
         )
         for item in processing_items
     }
