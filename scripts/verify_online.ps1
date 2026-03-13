@@ -5795,6 +5795,104 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
+# iter84: RUMOR_SPECULATION_CAP_HARD — rumor_speculation_total <= 1
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_rsMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "RUMOR_SPECULATION_CAP_HARD:"
+    if (Test-Path $_rsMetaPath) {
+        try {
+            $_rsMeta = Get-Content $_rsMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_rsCount  = Get-MetaEffectiveInt $_rsMeta @('rumor_speculation_gate_total', 'rumor_speculation_total') 0
+            $_rsPass   = Get-MetaEffectiveBool $_rsMeta @('rumor_speculation_gate_cap_pass', 'rumor_speculation_cap_pass') $false
+            $_rsInjected = if ($_rsMeta.PSObject.Properties['rumor_speculation_test_injected']) { $_rsMeta.rumor_speculation_test_injected } else { $false }
+            Write-Output ("  rumor_speculation_total : {0}" -f $_rsCount)
+            Write-Output ("  rumor_speculation_pass  : {0}" -f $_rsPass)
+            if ($_rsInjected) {
+                Write-Output "  test_injected           : True"
+            }
+            if (-not $_rsPass) {
+                $_rsFail = ("RUMOR_SPECULATION_CAP_HARD_FAIL: rumor_speculation_total={0} > 1" -f $_rsCount)
+                Write-Output ("  => FAIL: {0}" -f $_rsFail)
+                Invoke-VerifyOnlineFailFast -Gate "RUMOR_SPECULATION_CAP_HARD" -Reason $_rsFail
+            }
+            Write-Output "  => RUMOR_SPECULATION_CAP_HARD: PASS"
+        } catch {
+            Write-Output ("  RUMOR_SPECULATION_CAP_HARD: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  RUMOR_SPECULATION_CAP_HARD: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter84: TUTORIAL_SEMANTIC_CAP_HARD — tutorial_semantic_total = 0
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_tsMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "TUTORIAL_SEMANTIC_CAP_HARD:"
+    if (Test-Path $_tsMetaPath) {
+        try {
+            $_tsMeta = Get-Content $_tsMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_tsCount  = Get-MetaEffectiveInt $_tsMeta @('tutorial_semantic_gate_total', 'tutorial_semantic_total') 0
+            $_tsPass   = Get-MetaEffectiveBool $_tsMeta @('tutorial_semantic_gate_cap_pass', 'tutorial_semantic_cap_pass') $false
+            $_tsInjected = if ($_tsMeta.PSObject.Properties['tutorial_semantic_test_injected']) { $_tsMeta.tutorial_semantic_test_injected } else { $false }
+            Write-Output ("  tutorial_semantic_total : {0}" -f $_tsCount)
+            Write-Output ("  tutorial_semantic_pass  : {0}" -f $_tsPass)
+            if ($_tsInjected) {
+                Write-Output "  test_injected           : True"
+            }
+            if (-not $_tsPass) {
+                $_tsFail = ("TUTORIAL_SEMANTIC_CAP_HARD_FAIL: tutorial_semantic_total={0} > 0" -f $_tsCount)
+                Write-Output ("  => FAIL: {0}" -f $_tsFail)
+                Invoke-VerifyOnlineFailFast -Gate "TUTORIAL_SEMANTIC_CAP_HARD" -Reason $_tsFail
+            }
+            Write-Output "  => TUTORIAL_SEMANTIC_CAP_HARD: PASS"
+        } catch {
+            Write-Output ("  TUTORIAL_SEMANTIC_CAP_HARD: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  TUTORIAL_SEMANTIC_CAP_HARD: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter84: EXECUTIVE_SEMANTIC_MIN_HARD — executive_semantic_axes_distinct >= 4
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_esMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "EXECUTIVE_SEMANTIC_MIN_HARD:"
+    if (Test-Path $_esMetaPath) {
+        try {
+            $_esMeta = Get-Content $_esMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_esCount  = Get-MetaEffectiveInt $_esMeta @('executive_semantic_gate_distinct', 'executive_semantic_axes_distinct') 0
+            $_esPass   = Get-MetaEffectiveBool $_esMeta @('executive_semantic_gate_pass', 'executive_semantic_min_pass') $false
+            $_esInjected = if ($_esMeta.PSObject.Properties['executive_semantic_test_injected']) { $_esMeta.executive_semantic_test_injected } else { $false }
+            $_esAxes   = if ($_esMeta.PSObject.Properties['executive_semantic_axes']) { ($_esMeta.executive_semantic_axes -join ", ") } else { "N/A" }
+            Write-Output ("  executive_semantic_axes_distinct : {0}" -f $_esCount)
+            Write-Output ("  executive_semantic_axes          : {0}" -f $_esAxes)
+            Write-Output ("  executive_semantic_pass          : {0}" -f $_esPass)
+            if ($_esInjected) {
+                Write-Output "  test_injected                    : True"
+            }
+            if (-not $_esPass) {
+                $_esFail = ("EXECUTIVE_SEMANTIC_MIN_HARD_FAIL: exec_sem_axes={0} < 4" -f $_esCount)
+                Write-Output ("  => FAIL: {0}" -f $_esFail)
+                Invoke-VerifyOnlineFailFast -Gate "EXECUTIVE_SEMANTIC_MIN_HARD" -Reason $_esFail
+            }
+            Write-Output "  => EXECUTIVE_SEMANTIC_MIN_HARD: PASS"
+        } catch {
+            Write-Output ("  EXECUTIVE_SEMANTIC_MIN_HARD: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  EXECUTIVE_SEMANTIC_MIN_HARD: WARN (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # iter78: TARGET_PLAYER_COVERAGE_HARD_DAILY — target_player_distinct >= 6
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {

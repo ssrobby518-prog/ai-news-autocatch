@@ -7717,6 +7717,89 @@ def _f600_run_fast_path(
     _TECHCRUNCH_RUMOR_SPEC_CAP = 1  # iter82
     _NON_STRATEGIC_GR_CAP = 1  # iter82
 
+    # iter84: broader rumor/speculation classifier (any source, not just TechCrunch)
+    _RUMOR_SPEC_ANY_RE = _ct71_re.compile(
+        r'(?:\brumor(?:ed|s)?\b|\bspeculat(?:ion|e|ed|ing)\b'
+        r'|\breportedly\b|\bsaid\s+to\b|\bexpected\s+to\b'
+        r'|\bunconfirmed\b|\ballegedly\b|\bsources?\s+say\b'
+        r'|\bsources?\s+familiar\b|\baccording\s+to\s+(?:people|sources)\b'
+        r'|\b傳聞\b|\b猜測\b|\b未證實\b|\b據傳\b|\b消息人士\b)', _ct71_re.I)
+    _RUMOR_SPEC_ANY_CAP = 1  # iter84
+
+    def _is_rumor_speculation_any(it) -> bool:
+        """iter84: True if item is rumor/speculation/unconfirmed from ANY source."""
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = _f6_snippet(it)
+        _blob = _title + " " + _snippet
+        _hits = len(_RUMOR_SPEC_ANY_RE.findall(_blob))
+        if _is_techcrunch(it):
+            return _hits >= 1
+        return _hits >= 2
+
+    # iter84: tutorial semantic classifier (broader, no blanket official/media exemption)
+    _TUTORIAL_SEMANTIC_RE = _ct71_re.compile(
+        r'(?:\btutorial\b|\bhow[\-\s]to\b|\bstep[\-\s]by[\-\s]step\b'
+        r'|\bwalkthrough\b|\bgetting[\-\s]started\b|\bquickstart\b'
+        r'|\bdeploy(?:ment|ing)?\s+(?:guide|on|to|with|using)\b'
+        r'|\btrain(?:ing)?\s+(?:guide|recipe|tutorial|walkthrough|with\s+\w+\s+and)\b'
+        r'|\bfine[\-\s]tun(?:e|ing)\s+(?:guide|recipe|tutorial|with)\b'
+        r'|\bsetup\s+guide\b|\binstall(?:ation)?\s+guide\b'
+        r'|\bcookbook\b|\bhandbook\b'
+        r'|\bbeginners?\s+guide\b|\bpractical\s+guide\b)', _ct71_re.I)
+    _TUTORIAL_SEMANTIC_CAP = 0  # iter84
+
+    def _is_tutorial_semantic(it) -> bool:
+        """iter84: True if item is tutorial/deploy/how-to by semantic check.
+        No blanket official/media exemption (unlike _is_tutorial_explainer).
+        Only exempt if title has strong executive signals (product launch, GA, etc.)."""
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = _f6_snippet(it)
+        _ft = _f6_text_blob(it, 2000)
+        _blob = _title + " " + _snippet + " " + _ft
+        if not _TUTORIAL_SEMANTIC_RE.search(_blob):
+            return False
+        # If title has strong executive signal, exempt (product launch mentioning deployment)
+        if _ct71_re.search(r'\b(?:launch|announce|GA|general\s+availab|rollout|acqui|partner|earnings)\b', _title, _ct71_re.I):
+            return False
+        return True
+
+    # iter84: executive semantic axes classifier
+    _EXEC_SEM_AXIS_PATTERNS = {
+        "leadership_politics_policy_governance": _ct71_re.compile(
+            r'\b(?:policy|regulat|governance|executive\s+order|legislation|hearing|testimony'
+            r'|compliance|sanction|tariff|export\s+control|entity\s+list|ban|restriction'
+            r'|White\s+House|Congress|Senate|EU\s+AI\s+Act|DOJ|FTC|NIST'
+            r'|minister|ministry|government|administration)\b', _ct71_re.I),
+        "product_launch_release_model_api": _ct71_re.compile(
+            r'\b(?:launch|release|announce|model|API|SDK|GA|general\s+availab|beta|preview'
+            r'|upgrade|new\s+version|new\s+feature|rollout|ship|available\s+(?:today|now)'
+            r'|Gemini|GPT|Claude|Llama|Qwen)\b', _ct71_re.I),
+        "distribution_ecosystem_partnership": _ct71_re.compile(
+            r'\b(?:partner(?:ship)?|distribut|ecosystem|alliance|OEM|integration|marketplace'
+            r'|platform|app\s+store|cloud\s+provider|resell|channel)\b', _ct71_re.I),
+        "economics_pricing_capex_monetization": _ct71_re.compile(
+            r'\b(?:pric(?:e|ing)|revenue|earnings|capex|invest(?:ment)?|funding|valuation'
+            r'|IPO|acquisition|merger|monetiz|subscription|tier|enterprise\s+(?:plan|pricing|rollout)'
+            r'|cost|budget|quarterly|ARR|MRR)\b', _ct71_re.I),
+        "china_ai_government_strategic": _ct71_re.compile(
+            r'(?:\bChina\b|\bChinese\b|\bMIIT\b|\bCAC\b|\bState\s+Council\b'
+            r'|\bBeijing\b|\bShanghai\b|\bShenzhen\b'
+            r'|\bBaidu\b|\bAlibaba\b|\bTencent\b|\bByteDance\b|\bDeepSeek\b|\bZhipu\b'
+            r'|算力|智算|芯片)', _ct71_re.I),
+    }
+    _EXECUTIVE_SEMANTIC_MIN_AXES = 4  # iter84
+
+    def _executive_semantic_axes(it) -> set:
+        """iter84: Return set of executive semantic axes present in item."""
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = _f6_snippet(it)
+        _blob = _title + " " + _snippet
+        _axes = set()
+        for _ax_name, _ax_re in _EXEC_SEM_AXIS_PATTERNS.items():
+            if _ax_re.search(_blob):
+                _axes.add(_ax_name)
+        return _axes
+
     # iter78: target player classifier — vendor in CEO-grade AI player set
     _TARGET_PLAYER_VENDORS = frozenset({
         "OpenAI", "Microsoft", "Google", "Meta", "Amazon", "NVIDIA", "Anthropic", "xAI", "Apple",
@@ -11155,6 +11238,12 @@ def _f600_run_fast_path(
     _cm82_tc_rumor_total = sum(1 for s in _selected if _is_techcrunch_rumor_speculation(s))  # iter82
     _cm82_nsgr_total = sum(1 for s in _selected if _is_non_strategic_google_research(s))  # iter82
     _cm82_exec_signal_total = sum(1 for s in _selected if _is_executive_signal(s))  # iter82
+    _cm84_rumor_spec_total = sum(1 for s in _selected if _is_rumor_speculation_any(s))  # iter84
+    _cm84_tutorial_sem_total = sum(1 for s in _selected if _is_tutorial_semantic(s))  # iter84
+    _cm84_exec_sem_axes_set = set()  # iter84
+    for _cm84_s in _selected:
+        _cm84_exec_sem_axes_set |= _executive_semantic_axes(_cm84_s)
+    _cm84_exec_sem_distinct = len(_cm84_exec_sem_axes_set)  # iter84
 
     # iter77: patch selection_audit.meta.json with prohibited-type totals (AFTER counts are computed)
     try:
@@ -11217,6 +11306,9 @@ def _f600_run_fast_path(
             "techcrunch_rumor_speculation_item": _is_techcrunch_rumor_speculation(_cm71_s),  # iter82
             "non_strategic_google_research_item": _is_non_strategic_google_research(_cm71_s),  # iter82
             "executive_signal_item": _is_executive_signal(_cm71_s),  # iter82
+            "rumor_speculation_item": _is_rumor_speculation_any(_cm71_s),  # iter84
+            "tutorial_semantic_item": _is_tutorial_semantic(_cm71_s),  # iter84
+            "executive_semantic_axes_item": sorted(_executive_semantic_axes(_cm71_s)),  # iter84
             "strategic_density_score": _sd_item.get("strategic_density_score", 0),
             "strategic_density_floor_pass": _sd_item.get("strategic_density_score", 0) >= _cm73_sd_floor,
         })
@@ -11242,6 +11334,9 @@ def _f600_run_fast_path(
     _cm82_inject_tc_rumor = os.environ.get("INJECT_TECHCRUNCH_RUMOR_SPECULATION_TOTAL", "")  # iter82
     _cm82_inject_nsgr = os.environ.get("INJECT_NON_STRATEGIC_GOOGLE_RESEARCH_TOTAL", "")  # iter82
     _cm82_inject_exec = os.environ.get("INJECT_EXECUTIVE_SIGNAL_TOTAL", "")  # iter82
+    _cm84_inject_rumor = os.environ.get("INJECT_RUMOR_SPECULATION_TOTAL", "")  # iter84
+    _cm84_inject_tut_sem = os.environ.get("INJECT_TUTORIAL_SEMANTIC_TOTAL", "")  # iter84
+    _cm84_inject_exec_sem = os.environ.get("INJECT_EXECUTIVE_SEMANTIC_TOTAL", "")  # iter84
     _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
     _cm71_rt_total_check = _cm71_rt_total
     _cm72_bom_check = _cm72_bt_om_actionable
@@ -11262,6 +11357,9 @@ def _f600_run_fast_path(
     _cm82_tc_rumor_check = _cm82_tc_rumor_total  # iter82
     _cm82_nsgr_check = _cm82_nsgr_total  # iter82
     _cm82_exec_check = _cm82_exec_signal_total  # iter82
+    _cm84_rumor_check = _cm84_rumor_spec_total  # iter84
+    _cm84_tut_sem_check = _cm84_tutorial_sem_total  # iter84
+    _cm84_exec_sem_check = _cm84_exec_sem_distinct  # iter84
     _cm71_rt_is_injected = bool(_cm71_inject_rt)
     _cm72_bom_is_injected = bool(_cm72_inject_bom)
     _cm73_lp_is_injected = bool(_cm73_inject_lp)
@@ -11281,6 +11379,9 @@ def _f600_run_fast_path(
     _cm82_tc_rumor_is_injected = bool(_cm82_inject_tc_rumor)  # iter82
     _cm82_nsgr_is_injected = bool(_cm82_inject_nsgr)  # iter82
     _cm82_exec_is_injected = bool(_cm82_inject_exec)  # iter82
+    _cm84_rumor_is_injected = bool(_cm84_inject_rumor)  # iter84
+    _cm84_tut_sem_is_injected = bool(_cm84_inject_tut_sem)  # iter84
+    _cm84_exec_sem_is_injected = bool(_cm84_inject_exec_sem)  # iter84
     if _cm78_tc_is_injected:
         try:
             _cm78_tc_check = int(_cm78_inject_tc)
@@ -11395,6 +11496,24 @@ def _f600_run_fast_path(
         except ValueError:
             pass
         _log.info("INJECT_EXECUTIVE_SIGNAL_TOTAL=%s: executive_signal overridden", _cm82_inject_exec)
+    if _cm84_rumor_is_injected:
+        try:
+            _cm84_rumor_check = int(_cm84_inject_rumor)
+        except ValueError:
+            pass
+        _log.info("INJECT_RUMOR_SPECULATION_TOTAL=%s: rumor_speculation overridden", _cm84_inject_rumor)
+    if _cm84_tut_sem_is_injected:
+        try:
+            _cm84_tut_sem_check = int(_cm84_inject_tut_sem)
+        except ValueError:
+            pass
+        _log.info("INJECT_TUTORIAL_SEMANTIC_TOTAL=%s: tutorial_semantic overridden", _cm84_inject_tut_sem)
+    if _cm84_exec_sem_is_injected:
+        try:
+            _cm84_exec_sem_check = int(_cm84_inject_exec_sem)
+        except ValueError:
+            pass
+        _log.info("INJECT_EXECUTIVE_SEMANTIC_TOTAL=%s: executive_semantic overridden", _cm84_inject_exec_sem)
 
     _cm71_bt_act_pass = (_cm71_bt_actionable >= 7)  # iter73: was 6
     _cm72_bom_pass = (_cm72_bom_check >= 8)  # iter77: raised from 7 to 8
@@ -11417,6 +11536,9 @@ def _f600_run_fast_path(
     _cm73_total_pass = (len(_selected) >= 10)  # iter73: new
     _cm82_tc_rumor_pass = (_cm82_tc_rumor_check <= _TECHCRUNCH_RUMOR_SPEC_CAP)  # iter82: rumor TC <= 1
     _cm82_nsgr_pass = (_cm82_nsgr_check <= _NON_STRATEGIC_GR_CAP)  # iter82: non-strategic GR <= 1
+    _cm84_rumor_pass = (_cm84_rumor_check <= _RUMOR_SPEC_ANY_CAP)  # iter84: rumor/speculation <= 1
+    _cm84_tut_sem_pass = (_cm84_tut_sem_check <= _TUTORIAL_SEMANTIC_CAP)  # iter84: tutorial_semantic = 0
+    _cm84_exec_sem_pass = (_cm84_exec_sem_check >= _EXECUTIVE_SEMANTIC_MIN_AXES)  # iter84: exec semantic axes >= 4
 
     try:
         _cm71_path = _outputs / "content_mix.meta.json"
@@ -11476,6 +11598,16 @@ def _f600_run_fast_path(
             "non_strategic_google_research_cap": _NON_STRATEGIC_GR_CAP,
             "non_strategic_google_research_cap_pass": _cm82_nsgr_pass,
             "executive_signal_total": _cm82_exec_check,  # iter82
+            "rumor_speculation_total": _cm84_rumor_check,  # iter84
+            "rumor_speculation_cap": _RUMOR_SPEC_ANY_CAP,
+            "rumor_speculation_cap_pass": _cm84_rumor_pass,
+            "tutorial_semantic_total": _cm84_tut_sem_check,  # iter84
+            "tutorial_semantic_cap": _TUTORIAL_SEMANTIC_CAP,
+            "tutorial_semantic_cap_pass": _cm84_tut_sem_pass,
+            "executive_semantic_axes_distinct": _cm84_exec_sem_check,  # iter84
+            "executive_semantic_axes": sorted(_cm84_exec_sem_axes_set),
+            "executive_semantic_min_axes": _EXECUTIVE_SEMANTIC_MIN_AXES,
+            "executive_semantic_min_pass": _cm84_exec_sem_pass,
             "target_player_distinct": _cm78_tp_check,  # iter78
             "target_players": _cm78_target_players,
             "target_player_coverage_min": 6,
@@ -11564,6 +11696,15 @@ def _f600_run_fast_path(
         if _cm82_exec_is_injected:
             _cm71_meta["executive_signal_test_injected"] = True
             _cm71_meta["injected_executive_signal_total"] = _cm82_inject_exec
+        if _cm84_rumor_is_injected:
+            _cm71_meta["rumor_speculation_test_injected"] = True
+            _cm71_meta["injected_rumor_speculation_total"] = _cm84_inject_rumor
+        if _cm84_tut_sem_is_injected:
+            _cm71_meta["tutorial_semantic_test_injected"] = True
+            _cm71_meta["injected_tutorial_semantic_total"] = _cm84_inject_tut_sem
+        if _cm84_exec_sem_is_injected:
+            _cm71_meta["executive_semantic_test_injected"] = True
+            _cm71_meta["injected_executive_semantic_total"] = _cm84_inject_exec_sem
         _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as _cm71_exc:
         _log.warning("content_mix.meta.json write failed: %s", _cm71_exc)
@@ -11849,6 +11990,51 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("ROLE_DIVERSITY_MIN_HARD_DAILY", _cm79_role_fail)
+
+    # iter84: RUMOR_SPECULATION_CAP_HARD gate — rumor/speculation <= 1 (any source)
+    if _is_daily and not _cm84_rumor_pass:
+        _cm84_rumor_fail = f"RUMOR_SPECULATION_CAP_HARD_FAIL: rumor_speculation_total={_cm84_rumor_check} > {_RUMOR_SPEC_ANY_CAP}"
+        if _cm84_rumor_is_injected:
+            _cm84_rumor_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "RUMOR_SPECULATION_CAP_HARD",
+            _cm84_rumor_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("RUMOR_SPECULATION_CAP_HARD", _cm84_rumor_fail)
+
+    # iter84: TUTORIAL_SEMANTIC_CAP_HARD gate — tutorial_semantic = 0
+    if _is_daily and not _cm84_tut_sem_pass:
+        _cm84_tut_sem_fail = f"TUTORIAL_SEMANTIC_CAP_HARD_FAIL: tutorial_semantic_total={_cm84_tut_sem_check} > {_TUTORIAL_SEMANTIC_CAP}"
+        if _cm84_tut_sem_is_injected:
+            _cm84_tut_sem_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "TUTORIAL_SEMANTIC_CAP_HARD",
+            _cm84_tut_sem_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("TUTORIAL_SEMANTIC_CAP_HARD", _cm84_tut_sem_fail)
+
+    # iter84: EXECUTIVE_SEMANTIC_MIN_HARD gate — executive semantic axes >= 4
+    if _is_daily and not _cm84_exec_sem_pass:
+        _cm84_exec_sem_fail = f"EXECUTIVE_SEMANTIC_MIN_HARD_FAIL: exec_sem_axes={_cm84_exec_sem_check} < {_EXECUTIVE_SEMANTIC_MIN_AXES}"
+        if _cm84_exec_sem_is_injected:
+            _cm84_exec_sem_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "EXECUTIVE_SEMANTIC_MIN_HARD",
+            _cm84_exec_sem_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("EXECUTIVE_SEMANTIC_MIN_HARD", _cm84_exec_sem_fail)
 
     # iter73→79: STRATEGIC_BUCKET_COVERAGE_HARD_DAILY gate — min 5 distinct strategic buckets
     # (moved after all concentration/injection caps in iter79 for correct fail-fast ordering)
@@ -13089,6 +13275,12 @@ def _f600_run_fast_path(
             _i83_tc_rumor_total  = sum(1 for s in _selected if _is_techcrunch_rumor_speculation(s))
             _i83_nsgr_total      = sum(1 for s in _selected if _is_non_strategic_google_research(s))
             _i83_exec_total      = sum(1 for s in _selected if _is_executive_signal(s))
+            _i83_rumor_total     = sum(1 for s in _selected if _is_rumor_speculation_any(s))
+            _i83_tut_sem_total   = sum(1 for s in _selected if _is_tutorial_semantic(s))
+            _i83_exec_sem_axes   = set()
+            for _i83_esa_s in _selected:
+                _i83_exec_sem_axes |= _executive_semantic_axes(_i83_esa_s)
+            _i83_exec_sem_distinct = len(_i83_exec_sem_axes)
             _i83_plat_total      = sum(1 for s in _selected if _is_platform_domain(s))
             _i83_buckets         = sorted(set(_ct72b_strategic_bucket(s) for s in _selected))
             _i83_buckets_distinct = len(_i83_buckets)
@@ -13127,6 +13319,9 @@ def _f600_run_fast_path(
                     "techcrunch_rumor_speculation_item": _is_techcrunch_rumor_speculation(_i83_s),
                     "non_strategic_google_research_item": _is_non_strategic_google_research(_i83_s),
                     "executive_signal_item": _is_executive_signal(_i83_s),
+                    "rumor_speculation_item": _is_rumor_speculation_any(_i83_s),
+                    "tutorial_semantic_item": _is_tutorial_semantic(_i83_s),
+                    "executive_semantic_axes_item": sorted(_executive_semantic_axes(_i83_s)),
                     "strategic_density_score": _i83_sd.get("strategic_density_score", 0),
                     "strategic_density_floor_pass": _i83_sd.get("strategic_density_score", 0) >= _cm73_sd_floor,
                 })
@@ -13171,6 +13366,9 @@ def _f600_run_fast_path(
             _i83_tcr_chk    = int(os.environ["INJECT_TECHCRUNCH_RUMOR_SPECULATION_TOTAL"]) if os.environ.get("INJECT_TECHCRUNCH_RUMOR_SPECULATION_TOTAL") else _i83_tc_rumor_total
             _i83_nsgr_chk   = int(os.environ["INJECT_NON_STRATEGIC_GOOGLE_RESEARCH_TOTAL"]) if os.environ.get("INJECT_NON_STRATEGIC_GOOGLE_RESEARCH_TOTAL") else _i83_nsgr_total
             _i83_exec_chk   = int(os.environ["INJECT_EXECUTIVE_SIGNAL_TOTAL"]) if os.environ.get("INJECT_EXECUTIVE_SIGNAL_TOTAL") else _i83_exec_total
+            _i83_rumor_chk  = int(os.environ["INJECT_RUMOR_SPECULATION_TOTAL"]) if os.environ.get("INJECT_RUMOR_SPECULATION_TOTAL") else _i83_rumor_total
+            _i83_tut_sem_chk = int(os.environ["INJECT_TUTORIAL_SEMANTIC_TOTAL"]) if os.environ.get("INJECT_TUTORIAL_SEMANTIC_TOTAL") else _i83_tut_sem_total
+            _i83_exec_sem_chk = int(os.environ["INJECT_EXECUTIVE_SEMANTIC_TOTAL"]) if os.environ.get("INJECT_EXECUTIVE_SEMANTIC_TOTAL") else _i83_exec_sem_distinct
             _i83_devrel_chk = int(os.environ["INJECT_DEVELOPER_RELEASE_TOTAL"]) if os.environ.get("INJECT_DEVELOPER_RELEASE_TOTAL") else _i83_devrel_total
             _i83_indie_chk  = int(os.environ["INJECT_INDIE_DEV_TONE_TOTAL"]) if os.environ.get("INJECT_INDIE_DEV_TONE_TOTAL") else _i83_indie_total
             _i83_forum_chk  = int(os.environ["INJECT_FORUM_DISCUSSION_TOTAL"]) if os.environ.get("INJECT_FORUM_DISCUSSION_TOTAL") else _i83_forum_total
@@ -13216,6 +13414,9 @@ def _f600_run_fast_path(
                 "techcrunch_rumor_speculation_total": _i83_tcr_chk,
                 "non_strategic_google_research_total": _i83_nsgr_chk,
                 "executive_signal_total": _i83_exec_chk,
+                "rumor_speculation_total": _i83_rumor_chk,
+                "tutorial_semantic_total": _i83_tut_sem_chk,
+                "executive_semantic_axes_distinct": _i83_exec_sem_chk,
             }
 
             # Recompute gate pass/fail from canonical values
@@ -13277,6 +13478,16 @@ def _f600_run_fast_path(
                 "non_strategic_google_research_cap": _NON_STRATEGIC_GR_CAP,
                 "non_strategic_google_research_cap_pass": _i83_nsgr_total <= _NON_STRATEGIC_GR_CAP,
                 "executive_signal_total": _i83_exec_total,
+                "rumor_speculation_total": _i83_rumor_total,
+                "rumor_speculation_cap": _RUMOR_SPEC_ANY_CAP,
+                "rumor_speculation_cap_pass": _i83_rumor_total <= _RUMOR_SPEC_ANY_CAP,
+                "tutorial_semantic_total": _i83_tut_sem_total,
+                "tutorial_semantic_cap": _TUTORIAL_SEMANTIC_CAP,
+                "tutorial_semantic_cap_pass": _i83_tut_sem_total <= _TUTORIAL_SEMANTIC_CAP,
+                "executive_semantic_axes_distinct": _i83_exec_sem_distinct,
+                "executive_semantic_axes": sorted(_i83_exec_sem_axes),
+                "executive_semantic_min_axes": _EXECUTIVE_SEMANTIC_MIN_AXES,
+                "executive_semantic_min_pass": _i83_exec_sem_distinct >= _EXECUTIVE_SEMANTIC_MIN_AXES,
                 "target_player_distinct": _i83_tp_distinct,
                 "target_players": _i83_tp_list,
                 "target_player_coverage_min": 6,
@@ -13349,6 +13560,12 @@ def _f600_run_fast_path(
                 "us_policy_gate_count": _i83_usp_chk,
                 "china_policy_gate_count": _i83_cnp_chk,
                 "us_china_policy_gate_pass": (_i83_usp_chk + _i83_cnp_chk) >= 2 and _i83_cnp_chk >= 1,
+                "rumor_speculation_gate_total": _i83_rumor_chk,
+                "rumor_speculation_gate_cap_pass": _i83_rumor_chk <= _RUMOR_SPEC_ANY_CAP,
+                "tutorial_semantic_gate_total": _i83_tut_sem_chk,
+                "tutorial_semantic_gate_cap_pass": _i83_tut_sem_chk <= _TUTORIAL_SEMANTIC_CAP,
+                "executive_semantic_gate_distinct": _i83_exec_sem_chk,
+                "executive_semantic_gate_pass": _i83_exec_sem_chk >= _EXECUTIVE_SEMANTIC_MIN_AXES,
             }
 
             # Carry forward injection flags from env
@@ -13373,6 +13590,9 @@ def _f600_run_fast_path(
                 ("INJECT_TECHCRUNCH_RUMOR_SPECULATION_TOTAL", "techcrunch_rumor_speculation_test_injected"),
                 ("INJECT_NON_STRATEGIC_GOOGLE_RESEARCH_TOTAL", "non_strategic_google_research_test_injected"),
                 ("INJECT_EXECUTIVE_SIGNAL_TOTAL", "executive_signal_test_injected"),
+                ("INJECT_RUMOR_SPECULATION_TOTAL", "rumor_speculation_test_injected"),
+                ("INJECT_TUTORIAL_SEMANTIC_TOTAL", "tutorial_semantic_test_injected"),
+                ("INJECT_EXECUTIVE_SEMANTIC_TOTAL", "executive_semantic_test_injected"),
             ]:
                 _i83_env_val = os.environ.get(_i83_ik, "")
                 if _i83_env_val:
@@ -13441,6 +13661,15 @@ def _f600_run_fast_path(
                 _i83_sa["non_strategic_google_research_gate_cap_pass"] = _i83_nsgr_chk <= _NON_STRATEGIC_GR_CAP
                 _i83_sa["executive_signal_total"] = _i83_exec_total
                 _i83_sa["executive_signal_gate_total"] = _i83_exec_chk
+                _i83_sa["rumor_speculation_total"] = _i83_rumor_total
+                _i83_sa["rumor_speculation_gate_total"] = _i83_rumor_chk
+                _i83_sa["rumor_speculation_gate_cap_pass"] = _i83_rumor_chk <= _RUMOR_SPEC_ANY_CAP
+                _i83_sa["tutorial_semantic_total"] = _i83_tut_sem_total
+                _i83_sa["tutorial_semantic_gate_total"] = _i83_tut_sem_chk
+                _i83_sa["tutorial_semantic_gate_cap_pass"] = _i83_tut_sem_chk <= _TUTORIAL_SEMANTIC_CAP
+                _i83_sa["executive_semantic_axes_distinct"] = _i83_exec_sem_distinct
+                _i83_sa["executive_semantic_gate_distinct"] = _i83_exec_sem_chk
+                _i83_sa["executive_semantic_gate_pass"] = _i83_exec_sem_chk >= _EXECUTIVE_SEMANTIC_MIN_AXES
                 _i83_sa["bigtech_official_media_count"] = _i83_bt_om
                 _i83_sa["bigtech_official_media_gate_count"] = _i83_bom_check
                 _i83_sa["bigtech_official_media_gate_pass"] = _i83_bom_check >= 8
@@ -13659,6 +13888,37 @@ def _f600_run_fast_path(
     _archive = _outputs / "runs" / _run_id
     _archive.mkdir(parents=True, exist_ok=True)
     (_archive / "brief_zh.md").write_text(_tfd_zh, encoding="utf-8")
+
+    # --- iter84: UTF8_CLEAN_OUTPUT_HARD gate — check latest_brief.md for encoding garbage ---
+    import re as _i84_re
+    _i84_mojibake_re = _i84_re.compile(r'[\ufffd\ufffe\uffff]|[\x00-\x08\x0b\x0c\x0e-\x1f]')
+    _i84_brief_text = _tfd_zh
+    _i84_mojibake_hits = _i84_mojibake_re.findall(_i84_brief_text)
+    if _i84_mojibake_hits:
+        _f6_fail("UTF8_CLEAN_OUTPUT_HARD", f"latest_brief.md contains {len(_i84_mojibake_hits)} encoding artifacts")
+
+    # --- iter84: EVENT_INTERNAL_DEDUP_HARD gate — check for duplicate bullets within events ---
+    _i84_event_blocks = _i84_re.split(r'\n##\s+', _i84_brief_text)
+    _i84_dup_events = []
+    for _i84_block in _i84_event_blocks:
+        _i84_bullets = [
+            _i84_re.sub(r'[\s\d\.\-\*\#\>\u3000]+', '', line.strip().lower())
+            for line in _i84_block.split('\n')
+            if line.strip().startswith(('-', '*', '•')) and len(line.strip()) > 10
+        ]
+        if len(_i84_bullets) < 2:
+            continue
+        for _i84_a in range(len(_i84_bullets)):
+            for _i84_b in range(_i84_a + 1, len(_i84_bullets)):
+                _i84_sa = set(_i84_bullets[_i84_a][i:i+4] for i in range(max(1, len(_i84_bullets[_i84_a]) - 3)))
+                _i84_sb = set(_i84_bullets[_i84_b][i:i+4] for i in range(max(1, len(_i84_bullets[_i84_b]) - 3)))
+                if _i84_sa and _i84_sb:
+                    _i84_isect = len(_i84_sa & _i84_sb)
+                    _i84_union = len(_i84_sa | _i84_sb)
+                    if _i84_union > 0 and (_i84_isect / _i84_union) > 0.70:
+                        _i84_dup_events.append((_i84_bullets[_i84_a][:50], _i84_bullets[_i84_b][:50]))
+    if len(_i84_dup_events) > 0:
+        _f6_fail("EVENT_INTERNAL_DEDUP_HARD", f"latest_brief.md has {len(_i84_dup_events)} near-duplicate bullet pairs")
 
     # --- Step 9: build DOCX (direct write + os.utime for timestamp coherence) ---
     stg["build_docx_start"] = time.time()
