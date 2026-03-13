@@ -9695,8 +9695,6 @@ def _f600_run_fast_path(
                                 and len(set(_ct72b_strategic_bucket(s) for s in _test_dd)) >= min(len(set(_ct72b_strategic_bucket(s) for s in _selected)), 5)
                                 and len(set(_role_axis(s) for s in _test_dd)) >= min(len(set(_role_axis(s) for s in _selected)), _ROLE_DIVERSITY_MIN)
                                 and sum(1 for s in _test_dd if _ct72b_source_class(s) in ("official", "media")) >= min(sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")), 8)
-                                and sum(1 for s in _test_dd if _is_techcrunch(s)) <= _TECHCRUNCH_CAP
-                                and sum(1 for s in _test_dd if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
                                 and not _is_developer_release(_bp_cand) and not _is_indie_dev_tone(_bp_cand)
                                 and not _is_forum_discussion(_bp_cand) and not _is_tutorial_explainer(_bp_cand)
                                 and _dedup_inv_allows(_test_dd)
@@ -9719,11 +9717,9 @@ def _f600_run_fast_path(
                             _fb_buck_ok = len(set(_ct72b_strategic_bucket(s) for s in _test_fb)) >= min(len(set(_ct72b_strategic_bucket(s) for s in _selected)), 5)
                             _fb_role_ok = len(set(_role_axis(s) for s in _test_fb)) >= min(len(set(_role_axis(s) for s in _selected)), _ROLE_DIVERSITY_MIN)
                             _fb_om_ok = sum(1 for s in _test_fb if _ct72b_source_class(s) in ("official", "media")) >= min(sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")), 8)
-                            _fb_tc_ok = sum(1 for s in _test_fb if _is_techcrunch(s)) <= _TECHCRUNCH_CAP
-                            _fb_gr_ok = sum(1 for s in _test_fb if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
                             _fb_inv_ok = _dedup_inv_allows(_test_fb)
                             _fb_devrel_ok = not _is_developer_release(_fb_cand) and not _is_indie_dev_tone(_fb_cand) and not _is_forum_discussion(_fb_cand) and not _is_tutorial_explainer(_fb_cand) and not _is_hf_blog_explainer(_fb_cand) and not _is_ceo_prohibited(_fb_cand)
-                            if _fb_plat_ok and _fb_buck_ok and _fb_role_ok and _fb_om_ok and _fb_tc_ok and _fb_gr_ok and _fb_inv_ok and _fb_devrel_ok:
+                            if _fb_plat_ok and _fb_buck_ok and _fb_role_ok and _fb_om_ok and _fb_inv_ok and _fb_devrel_ok:
                                 _backup_pool.pop(_fb_ci)
                                 _selected[_oi] = _fb_cand
                                 _replacements_made += 1
@@ -9733,14 +9729,13 @@ def _f600_run_fast_path(
                         if not _dedup_fb_done and _backup_pool:
                             _repl0 = _backup_pool[0]
                             _test_fb0 = [s if j != _oi else _repl0 for j, s in enumerate(_selected)]
-                            _log.info("iter81b: dedup fallback exhausted pool=%d (plat=%s buck=%s role=%s om=%s tc=%s gr=%s)",
+                            _log.info("iter81b: dedup fallback exhausted pool=%d (plat=%s buck=%s role=%s om=%s inv=%s)",
                                       len(_backup_pool),
                                       sum(1 for s in _test_fb0 if _is_platform_domain(s)) <= _PLATFORM_CAP,
                                       len(set(_ct72b_strategic_bucket(s) for s in _test_fb0)) >= min(len(set(_ct72b_strategic_bucket(s) for s in _selected)), 5),
                                       len(set(_role_axis(s) for s in _test_fb0)) >= min(len(set(_role_axis(s) for s in _selected)), _ROLE_DIVERSITY_MIN),
                                       sum(1 for s in _test_fb0 if _ct72b_source_class(s) in ("official", "media")) >= min(sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")), 8),
-                                      sum(1 for s in _test_fb0 if _is_techcrunch(s)) <= _TECHCRUNCH_CAP,
-                                      sum(1 for s in _test_fb0 if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP)
+                                      _dedup_inv_allows(_test_fb0))
                 _cur_hashes = [_item_hash(it) for it in _selected]
                 _overlap_count = sum(1 for h in _cur_hashes if h and h in _prev_ids)
             # iter76: only fail on overlap if dup gate is enabled (scheduled_task only)
