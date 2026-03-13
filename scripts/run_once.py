@@ -13255,11 +13255,16 @@ def _f600_run_fast_path(
         except Exception:
             pass
 
-    # --- iter83: CANONICAL SNAPSHOT — rewrite content_mix.meta.json from FINAL _selected ---
-    # Root cause: content_mix written at line ~11388 BEFORE density swap; selection_audit
-    # rebuilt at line ~12119 AFTER density swap.  This section re-derives ALL content totals
-    # from the definitive post-swap _selected list so both meta files are consistent.
-    _SELECTION_FINALIZED = True  # guard: no _selected mutations past this point
+    # ===================================================================
+    # iter85: STAGE 4 — FINALIZE SELECTION (immutable from this point)
+    # ===================================================================
+    # All 64 mutation sites (append/swap/rescue/dedup/density) are above.
+    # After this line, _selected is frozen; any mutation attempt = crash.
+    # The canonical snapshot below re-derives ALL counters from this
+    # frozen list and overwrites ALL meta files with final truth.
+    # ===================================================================
+    _SELECTION_FINALIZED = True
+    _selected = tuple(_selected)  # iter85: freeze — TypeError on any mutation attempt
     if _is_daily:
         try:
             _i83_bt_actionable   = sum(1 for s in _selected if _ct71_is_bigtech_actionable(s))
@@ -13823,8 +13828,34 @@ def _f600_run_fast_path(
                       len(_selected), _i83_bt_actionable, _i83_bt_om, _i83_tc_total, _i83_gr_total,
                       len(dict(_DivCounter(_f6_domain_key(s) for s in _selected))),
                       _i83_tp_distinct, _i83_buckets_distinct, _i83_role_distinct)
+
+            # --- iter85: POST-CANONICAL CONSISTENCY ASSERTION ---
+            # Verify content_mix.meta.json matches canonical counters (single truth)
+            try:
+                import json as _i85_j
+                _i85_cm = _i85_j.loads((_outputs / "content_mix.meta.json").read_text(encoding="utf-8"))
+                _i85_checks = [
+                    ("selected_events", _i85_cm.get("selected_events"), len(_selected)),
+                    ("techcrunch_total", _i85_cm.get("techcrunch_total"), _i83_tc_total),
+                    ("google_research_total", _i85_cm.get("google_research_total"), _i83_gr_total),
+                    ("bigtech_official_media_count", _i85_cm.get("bigtech_official_media_count"), _i83_bt_om),
+                    ("target_player_distinct", _i85_cm.get("target_player_distinct"), _i83_tp_distinct),
+                    ("strategic_buckets_distinct", _i85_cm.get("selected_strategic_buckets_distinct"), _i83_buckets_distinct),
+                    ("role_axes_distinct", _i85_cm.get("selected_role_axes_distinct"), _i83_role_distinct),
+                ]
+                _i85_mismatches = [(n, g, e) for n, g, e in _i85_checks if g != e]
+                if _i85_mismatches:
+                    _f6_fail("CANONICAL_CONSISTENCY_HARD",
+                             f"content_mix.meta.json diverges from canonical snapshot: {_i85_mismatches}")
+                _log.info("iter85 CANONICAL CONSISTENCY CHECK: PASS (7 fields verified)")
+            except FileNotFoundError:
+                _f6_fail("CANONICAL_CONSISTENCY_HARD", "content_mix.meta.json not found after canonical snapshot")
         except Exception as _i83_exc:
             _log.warning("iter83 canonical snapshot rebuild failed: %s", _i83_exc)
+
+    # ===================================================================
+    # iter85: STAGE 5 — ALL OUTPUTS BELOW READ ONLY FROM FROZEN _selected
+    # ===================================================================
 
     # --- Step 7: translate digest → latest_brief.md (iter40: singleflight + hard timeout) ---
     _tfd_endpoint = os.environ.get("LLAMA_HOST", "http://127.0.0.1:8080")
