@@ -9668,6 +9668,19 @@ def _f600_run_fast_path(
                     _dedup_replaced = False
                     _old_is_boma = _ct72b_is_bigtech_official_media_actionable(_selected[_oi])
                     _cur_boma = sum(1 for s in _selected if _ct72b_is_bigtech_official_media_actionable(s))
+                    _dedup_inv_before = _i80_invariant_snapshot(_selected)
+
+                    def _dedup_inv_allows(_test_sel) -> bool:
+                        _dedup_inv_after = _i80_invariant_snapshot(_test_sel)
+                        _dedup_inv_ok, _dedup_inv_reg = _i80_no_regression(_dedup_inv_before, _dedup_inv_after)
+                        if not _dedup_inv_ok:
+                            _dedup_deferrable = {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain", "max_vendor", "min_domains", "min_vendors"}
+                            _dedup_inv_ok = all(
+                                (not _dedup_inv_before[k]) or (k in _dedup_deferrable)
+                                for k in _dedup_inv_reg
+                            )
+                        return _dedup_inv_ok
+
                     for _bp_idx, _bp_cand in enumerate(_backup_pool):
                         # iter74: if replacing a BOMA item, ensure replacement is also BOMA (or BOMA count stays >= 7)
                         if _old_is_boma and not _ct72b_is_bigtech_official_media_actionable(_bp_cand) and _cur_boma <= 7:
@@ -9686,6 +9699,7 @@ def _f600_run_fast_path(
                                 and sum(1 for s in _test_dd if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
                                 and not _is_developer_release(_bp_cand) and not _is_indie_dev_tone(_bp_cand)
                                 and not _is_forum_discussion(_bp_cand) and not _is_tutorial_explainer(_bp_cand)
+                                and _dedup_inv_allows(_test_dd)
                                 and not _is_hf_blog_explainer(_bp_cand) and not _is_ceo_prohibited(_bp_cand)):
                             _selected[_oi] = _bp_cand
                             _backup_pool.pop(_bp_idx)
@@ -9707,8 +9721,9 @@ def _f600_run_fast_path(
                             _fb_om_ok = sum(1 for s in _test_fb if _ct72b_source_class(s) in ("official", "media")) >= min(sum(1 for s in _selected if _ct72b_source_class(s) in ("official", "media")), 8)
                             _fb_tc_ok = sum(1 for s in _test_fb if _is_techcrunch(s)) <= _TECHCRUNCH_CAP
                             _fb_gr_ok = sum(1 for s in _test_fb if _f6_is_google_research_blog(s)) <= _GOOGLE_RESEARCH_CAP
+                            _fb_inv_ok = _dedup_inv_allows(_test_fb)
                             _fb_devrel_ok = not _is_developer_release(_fb_cand) and not _is_indie_dev_tone(_fb_cand) and not _is_forum_discussion(_fb_cand) and not _is_tutorial_explainer(_fb_cand) and not _is_hf_blog_explainer(_fb_cand) and not _is_ceo_prohibited(_fb_cand)
-                            if _fb_plat_ok and _fb_buck_ok and _fb_role_ok and _fb_om_ok and _fb_tc_ok and _fb_gr_ok and _fb_devrel_ok:
+                            if _fb_plat_ok and _fb_buck_ok and _fb_role_ok and _fb_om_ok and _fb_tc_ok and _fb_gr_ok and _fb_inv_ok and _fb_devrel_ok:
                                 _backup_pool.pop(_fb_ci)
                                 _selected[_oi] = _fb_cand
                                 _replacements_made += 1
