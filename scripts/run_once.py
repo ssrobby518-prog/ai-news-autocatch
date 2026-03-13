@@ -9021,6 +9021,8 @@ def _f600_run_fast_path(
                 # and only regresses invariants that were already failing
                 _div1_diversity_improving = (_test_max_dc < _max_dc or _test_max_vc < _max_vc
                                              or len(_test_dc) > _dist_doms or len(_test_vc) > _dist_vens)
+                if not _div1_diversity_improving:
+                    continue
                 if not _div1_inv_ok and _div1_diversity_improving:
                     # all regressed keys were already False → tolerable
                     _div1_inv_ok = all(not _div1_inv_before[k] for k in _div1_inv_reg)
@@ -9891,6 +9893,10 @@ def _f600_run_fast_path(
                 _div2_inv_before = _i80_invariant_snapshot(_selected)
                 _div2_inv_after = _i80_invariant_snapshot(_test_sel2)
                 _div2_inv_ok, _div2_inv_reg = _i80_no_regression(_div2_inv_before, _div2_inv_after)
+                _div2_diversity_improving = (_test_max_dc2 < _max_dc2 or _test_max_vc2 < _max_vc2
+                                             or len(_test_dc2) > _dist_doms2 or len(_test_vc2) > _dist_vens2)
+                if not _div2_diversity_improving:
+                    continue
                 if not _div2_inv_ok:
                     _div2_inv_ok = all(not _div2_inv_before[k] for k in _div2_inv_reg)
                 _test_buckets2 = len(set(_ct72b_strategic_bucket(s) for s in _test_sel2))

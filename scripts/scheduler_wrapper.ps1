@@ -11,6 +11,9 @@ $env:PYTHONIOENCODING = "utf-8"
 $repoRoot = Split-Path $PSScriptRoot -Parent
 Set-Location $repoRoot
 
+$env:PIPELINE_SOFT_TARGET_SEC = "140"
+$env:PIPELINE_TIME_BUDGET_SEC = "250"
+$env:BIGTECH_GATES_ENFORCE = "1"
 $env:PIPELINE_ENTRYPOINT = "scheduled_task"
 
 $logPath = Join-Path $repoRoot "outputs\scheduler.log"
@@ -43,6 +46,9 @@ $header2 = @(
     "MODE=daily"
     "DUPLICATE_POLICY=daily_unique_only"
     "DAILY_DUP_GATE_ENABLED=true"
+    "DENSITY_MULTIPLIER_TARGET=1.5"
+    "soft_target=$($env:PIPELINE_SOFT_TARGET_SEC)s"
+    "hard_budget=$($env:PIPELINE_TIME_BUDGET_SEC)s"
     ""
 )
 $header2 | ForEach-Object { Add-Content -LiteralPath $logPath -Value $_ -Encoding utf8 }
