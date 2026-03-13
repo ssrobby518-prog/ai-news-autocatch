@@ -8128,11 +8128,11 @@ def _f600_run_fast_path(
             return _is_developer_release(it) or _is_indie_dev_tone(it)
 
         def _is_ceo_prohibited(it) -> bool:
-            """iter78: True if item is any type that must not enter CEO daily brief.
+            """iter84: True if item is any type that must not enter CEO daily brief.
             NOTE: google_research is NO LONGER prohibited (allowed up to 3)."""
             return (_is_developer_release(it) or _is_indie_dev_tone(it)
                     or _is_forum_discussion(it) or _is_tutorial_explainer(it)
-                    or _is_hf_blog_explainer(it))
+                    or _is_hf_blog_explainer(it) or _is_tutorial_semantic(it))
 
         # Pool BOMA: bigtech_official_media_actionable + non-platform + non-prohibited + density pass
         # iter77: unified _is_ceo_prohibited filter (forum/tutorial/devrel/indie/google_research)
