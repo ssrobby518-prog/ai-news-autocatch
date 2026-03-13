@@ -3838,7 +3838,7 @@ if (Test-Path $voLnkPath) {
 #   Skeleton is auto-generated if meta absent — no Admin, no schtasks required.
 # ---------------------------------------------------------------------------
 $voSchPath    = Join-Path $repoRoot "outputs\scheduler.meta.json"
-$voSchTaskRef = "AIIntelScraper_Daily_0900_Beijing"
+$voSchTaskRef = "AIIntelScraper_Daily_0900_BJ"
 
 # Helper: compute next Beijing 09:00 from current UTC, returns ISO string with +08:00
 function _Get-NextBeijing0900 {
@@ -3871,7 +3871,7 @@ if (-not (Test-Path $voSchPath)) {
                 outputs_written = @()
             }
             next_run_at_beijing = $voSchSkelNext
-            note                = "skeleton: run scripts\install_daily_task.ps1 as Administrator to activate"
+            note                = "skeleton: run scripts\install_daily_task_beijing_0900.ps1 to activate"
         }
         $voSchDir = Split-Path $voSchPath -Parent
         if (-not (Test-Path $voSchDir)) { New-Item -ItemType Directory -Path $voSchDir | Out-Null }
@@ -3961,7 +3961,7 @@ if (Test-Path $voSchPath) {
         Write-Output ("  SCHEDULER: WARN-OK (parse error: {0})" -f $_)
     }
 } else {
-    Write-Output "  SCHEDULER: WARN-OK (scheduler.meta.json missing; run scripts\install_daily_task.ps1)"
+    Write-Output "  SCHEDULER: WARN-OK (scheduler.meta.json missing; run scripts\install_daily_task_beijing_0900.ps1)"
 }
 
 # ---------------------------------------------------------------------------

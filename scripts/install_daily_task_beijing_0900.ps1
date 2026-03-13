@@ -2,7 +2,7 @@
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_daily_task_beijing_0900.ps1
 #
 # iter45: daily scheduler installer (CurrentUser, no admin required)
-# iter66: action now calls desktop_button.ps1 (with ENTRYPOINT=scheduled_task + scheduler.log tee)
+# iter83: canonical scheduled-task installer now calls scheduler_wrapper.ps1
 
 $ErrorActionPreference = "Stop"
 
@@ -11,10 +11,11 @@ chcp 65001 | Out-Null
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $taskName = "AIIntelScraper_Daily_0900_BJ"
-$btnScript = Join-Path $repoRoot "scripts\desktop_button.ps1"
+$wrapperScript = Join-Path $repoRoot "scripts\scheduler_wrapper.ps1"
+$schedulerMeta = Join-Path $repoRoot "outputs\scheduler.meta.json"
 
-if (-not (Test-Path $btnScript)) {
-    Write-Host "ERROR: desktop_button.ps1 not found at $btnScript"
+if (-not (Test-Path $wrapperScript)) {
+    Write-Host "ERROR: scheduler_wrapper.ps1 not found at $wrapperScript"
     exit 1
 }
 
@@ -34,7 +35,7 @@ Write-Host "Task name   : $taskName"
 Write-Host "Beijing time: 09:00 (UTC+8)"
 Write-Host "UTC time    : 01:00"
 Write-Host "Local time  : $triggerTimeStr ($(([System.TimeZoneInfo]::Local).DisplayName))"
-Write-Host "Script      : $btnScript"
+Write-Host "Script      : $wrapperScript"
 Write-Host "Working dir : $repoRoot"
 Write-Host ""
 
@@ -50,19 +51,16 @@ if ($existingTask) {
     Write-Host "  Removed."
 }
 
-# iter66: action calls desktop_button.ps1 with ENTRYPOINT=scheduled_task + tee to scheduler.log
-# The -Command form allows us to set env var + tee output to scheduler.log
-$schedulerLog = Join-Path $repoRoot "outputs\scheduler.log"
-$cmdArg = @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-    "`$env:PIPELINE_ENTRYPOINT = 'scheduled_task'; " +
-    "Set-Location '$repoRoot'; " +
-    "& '$btnScript' -Mode daily *>&1 | Tee-Object -FilePath '$schedulerLog' -Append"
+# Canonical path: scheduled task -> scheduler_wrapper.ps1 -> verify_online.ps1 -Mode daily
+$actionArgs = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", ('"{0}"' -f $wrapperScript)
 ) -join " "
 
 $action = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
-    -Argument $cmdArg `
+    -Argument $actionArgs `
     -WorkingDirectory $repoRoot
 
 $trigger = New-ScheduledTaskTrigger -Daily -At $triggerTimeStr
@@ -79,9 +77,45 @@ $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings 
 
 Register-ScheduledTask -TaskName $taskName -InputObject $task | Out-Null
 
+if (-not (Test-Path (Split-Path $schedulerMeta -Parent))) {
+    New-Item -ItemType Directory -Path (Split-Path $schedulerMeta -Parent) -Force | Out-Null
+}
+
+$nextRunBj = ""
+try {
+    $cstZone2   = [System.TimeZoneInfo]::FindSystemTimeZoneById("China Standard Time")
+    $nowUtc     = [System.DateTime]::UtcNow
+    $nowCst     = [System.TimeZoneInfo]::ConvertTimeFromUtc($nowUtc, $cstZone2)
+    $next09     = [System.DateTime]::new($nowCst.Year, $nowCst.Month, $nowCst.Day, 9, 0, 0)
+    if ($nowCst -ge $next09) { $next09 = $next09.AddDays(1) }
+    $nextRunBj  = $next09.ToString("yyyy-MM-ddTHH:mm:ss") + "+08:00"
+} catch {
+    $nextRunBj = "(unknown)"
+}
+
+$meta = [ordered]@{
+    generated_at        = (Get-Date -Format "o")
+    timezone            = "Asia/Shanghai"
+    daily_time          = "09:00"
+    task_name           = $taskName
+    installed           = $true
+    trigger_time_local  = $triggerTimeStr
+    trigger_tz_source   = "China Standard Time -> $(([System.TimeZoneInfo]::Local).Id)"
+    last_run            = [ordered]@{
+        run_id          = $null
+        started_at      = $null
+        finished_at     = $null
+        status          = "never"
+        outputs_written = @()
+    }
+    next_run_at_beijing = $nextRunBj
+    script_path         = $wrapperScript
+}
+$meta | ConvertTo-Json -Depth 5 | Out-File -FilePath $schedulerMeta -Encoding UTF8 -NoNewline
+
 Write-Host ""
 Write-Host "Task '$taskName' registered successfully."
-Write-Host "  Scheduler log: $schedulerLog"
+Write-Host "  Scheduler meta: $schedulerMeta"
 Write-Host ""
 Write-Host "=== Verification Commands ==="
 Write-Host ""

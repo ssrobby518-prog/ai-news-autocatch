@@ -1,8 +1,8 @@
 # FILE: scripts\install_daily_task.ps1
 # Stage 4 Scheduler — install Windows Task Scheduler entry for AI Intel Scraper.
-# Task name : AIIntelScraper_Daily_0900_Beijing
+# Task name : AIIntelScraper_Daily_0900_BJ
 # Schedule  : Daily 09:00 Asia/Shanghai; trigger converted to local TZ via .NET TimeZoneInfo
-# Action    : powershell.exe -ExecutionPolicy Bypass -File "...\run_pipeline.ps1" -Mode daily -AutoOpen false
+# Action    : powershell.exe -ExecutionPolicy Bypass -File "...\scheduler_wrapper.ps1"
 # Writes    : outputs\scheduler.meta.json (installed=true, timezone, daily_time, next_run_at_beijing)
 # Usage     : powershell -ExecutionPolicy Bypass -File scripts\install_daily_task.ps1
 # Requires  : Administrator privileges (schtasks /Create /RL HIGHEST)
@@ -10,9 +10,9 @@
 
 $ErrorActionPreference = "Stop"
 
-$taskName   = "AIIntelScraper_Daily_0900_Beijing"
+$taskName   = "AIIntelScraper_Daily_0900_BJ"
 $repoRoot   = Split-Path $PSScriptRoot -Parent
-$scriptPath = Join-Path $repoRoot "scripts\run_pipeline.ps1"
+$scriptPath = Join-Path $repoRoot "scripts\scheduler_wrapper.ps1"
 $outDir     = Join-Path $repoRoot "outputs"
 $metaPath   = Join-Path $outDir "scheduler.meta.json"
 
@@ -59,11 +59,10 @@ if ($LASTEXITCODE -eq 0) {
 
 # ---------------------------------------------------------------------------
 # Build action args
-# -Mode daily : run_pipeline.ps1 knows it was triggered by scheduler
-# -AutoOpen false : suppress file-open in headless scheduled context
+# Canonical path: scheduled task -> scheduler_wrapper.ps1 -> verify_online.ps1 -Mode daily
 # ---------------------------------------------------------------------------
 $scriptAbs = (Resolve-Path $scriptPath).Path
-$trAction  = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptAbs`" -Mode daily -AutoOpen false"
+$trAction  = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptAbs`""
 
 Write-Host ("  Creating task DAILY /ST {0} /RL HIGHEST..." -f $triggerTime)
 

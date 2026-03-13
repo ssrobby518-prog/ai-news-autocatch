@@ -1,11 +1,11 @@
 # uninstall_daily_task.ps1
-# Remove the AIIntelScraper_Daily_0900_Beijing scheduled task and update scheduler.meta.json.
+# Remove the AIIntelScraper_Daily_0900_BJ scheduled task and update scheduler.meta.json.
 # Usage: powershell -ExecutionPolicy Bypass -File scripts\uninstall_daily_task.ps1
 # Requires: Administrator privileges
 
 $ErrorActionPreference = "Stop"
 
-$taskName = "AIIntelScraper_Daily_0900_Beijing"
+$taskName = "AIIntelScraper_Daily_0900_BJ"
 $repoRoot = (Split-Path $PSScriptRoot -Parent)
 $metaPath = Join-Path $repoRoot "outputs\scheduler.meta.json"
 
