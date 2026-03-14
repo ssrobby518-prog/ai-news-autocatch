@@ -7886,7 +7886,7 @@ def _f600_run_fast_path(
         return ax
 
     # iter89: AWS developer/documentation classifier — soft exclusion (sort penalty + swap)
-    # NOT added to _is_ceo_prohibited (would break bucket coverage via pool exclusion)
+    # iter89: now added to _is_ceo_prohibited — tightened exec exemption prevents false positives
     # Title-pattern based: catches devdoc/tutorial content on aws.amazon.com
     # Exec exemption preserves CEO-grade AWS items (cross-region expansion, launches)
     _AWS_DEVDOC_TITLE_RE = _ct71_re.compile(
@@ -7907,9 +7907,14 @@ def _f600_run_fast_path(
         r'|\bcode[\s\-]?(?:sample|example)s?\b'
         r'|\bintegration[\s\-]?guide\b'
         r'|\bdeploy(?:ment)?\s+(?:guide|tutorial|walkthrough)\b'
+        r'|\bcross[\-\s]region\b'
+        r'|\bglobal\s+(?:cross[\-\s]region\s+)?inference\b'
+        r'|\binference\s+(?:in|for)\s+(?:the\s+)?(?:Middle|Asia|Europe|APAC|UAE|Bahrain|Thailand|Malaysia|Singapore|Indonesia|Taiwan)\b'
+        r'|\bregion(?:s|al)?\s+(?:inference|availab)\b'
         r')', _ct71_re.I)
+    # iter89: removed cross-region/global/introduc from exec exemption — these are deployment docs, not CEO-level
     _AWS_DEVDOC_EXEC_RE = _ct71_re.compile(
-        r'\b(?:launch|announce|GA|general\s+availab|rollout|acqui|partner|earnings|introduc|cross[\-\s]region|global)\b', _ct71_re.I)
+        r'\b(?:launch|announce|GA|general\s+availab|rollout|acqui|partner|earnings)\b', _ct71_re.I)
 
     def _is_aws_devdoc(it) -> bool:
         """iter89: True if item is AWS developer/documentation/tutorial content.
@@ -8181,11 +8186,13 @@ def _f600_run_fast_path(
             return _is_developer_release(it) or _is_indie_dev_tone(it)
 
         def _is_ceo_prohibited(it) -> bool:
-            """iter84: True if item is any type that must not enter CEO daily brief.
-            NOTE: google_research is NO LONGER prohibited (allowed up to 3)."""
+            """iter89: True if item is any type that must not enter CEO daily brief.
+            NOTE: google_research is NO LONGER prohibited (allowed up to 3).
+            iter89: added _is_aws_devdoc (region-expansion / ML-blog deployment docs)."""
             return (_is_developer_release(it) or _is_indie_dev_tone(it)
                     or _is_forum_discussion(it) or _is_tutorial_explainer(it)
-                    or _is_hf_blog_explainer(it) or _is_tutorial_semantic(it))
+                    or _is_hf_blog_explainer(it) or _is_tutorial_semantic(it)
+                    or _is_aws_devdoc(it))
 
         # Pool BOMA: bigtech_official_media_actionable + non-platform + non-prohibited + density pass
         # iter77: unified _is_ceo_prohibited filter (forum/tutorial/devrel/indie/google_research)
@@ -11358,6 +11365,7 @@ def _f600_run_fast_path(
     _cm82_exec_signal_total = sum(1 for s in _selected if _is_executive_signal(s))  # iter82
     _cm84_rumor_spec_total = sum(1 for s in _selected if _is_rumor_speculation_any(s))  # iter84
     _cm84_tutorial_sem_total = sum(1 for s in _selected if _is_tutorial_semantic(s))  # iter84
+    _cm89_aws_devdoc_total = sum(1 for s in _selected if _is_aws_devdoc(s))  # iter89
     _cm84_exec_sem_axes_set = set()  # iter84
     for _cm84_s in _selected:
         _cm84_exec_sem_axes_set |= _executive_semantic_axes(_cm84_s)
@@ -11455,6 +11463,7 @@ def _f600_run_fast_path(
     _cm84_inject_rumor = os.environ.get("INJECT_RUMOR_SPECULATION_TOTAL", "")  # iter84
     _cm84_inject_tut_sem = os.environ.get("INJECT_TUTORIAL_SEMANTIC_TOTAL", "")  # iter84
     _cm84_inject_exec_sem = os.environ.get("INJECT_EXECUTIVE_SEMANTIC_TOTAL", "")  # iter84
+    _cm89_inject_aws_devdoc = os.environ.get("INJECT_AWS_DEVDOC_TOTAL", "")  # iter89
     _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
     _cm71_rt_total_check = _cm71_rt_total
     _cm72_bom_check = _cm72_bt_om_actionable
@@ -11478,6 +11487,7 @@ def _f600_run_fast_path(
     _cm84_rumor_check = _cm84_rumor_spec_total  # iter84
     _cm84_tut_sem_check = _cm84_tutorial_sem_total  # iter84
     _cm84_exec_sem_check = _cm84_exec_sem_distinct  # iter84
+    _cm89_aws_devdoc_check = _cm89_aws_devdoc_total  # iter89
     _cm71_rt_is_injected = bool(_cm71_inject_rt)
     _cm72_bom_is_injected = bool(_cm72_inject_bom)
     _cm73_lp_is_injected = bool(_cm73_inject_lp)
@@ -11500,6 +11510,7 @@ def _f600_run_fast_path(
     _cm84_rumor_is_injected = bool(_cm84_inject_rumor)  # iter84
     _cm84_tut_sem_is_injected = bool(_cm84_inject_tut_sem)  # iter84
     _cm84_exec_sem_is_injected = bool(_cm84_inject_exec_sem)  # iter84
+    _cm89_aws_devdoc_is_injected = bool(_cm89_inject_aws_devdoc)  # iter89
     if _cm78_tc_is_injected:
         try:
             _cm78_tc_check = int(_cm78_inject_tc)
@@ -11632,6 +11643,12 @@ def _f600_run_fast_path(
         except ValueError:
             pass
         _log.info("INJECT_EXECUTIVE_SEMANTIC_TOTAL=%s: executive_semantic overridden", _cm84_inject_exec_sem)
+    if _cm89_aws_devdoc_is_injected:
+        try:
+            _cm89_aws_devdoc_check = int(_cm89_inject_aws_devdoc)
+        except ValueError:
+            pass
+        _log.info("INJECT_AWS_DEVDOC_TOTAL=%s: aws_devdoc overridden", _cm89_inject_aws_devdoc)
 
     _cm71_bt_act_pass = (_cm71_bt_actionable >= 7)  # iter73: was 6
     _cm72_bom_pass = (_cm72_bom_check >= 8)  # iter77: raised from 7 to 8
@@ -11656,6 +11673,7 @@ def _f600_run_fast_path(
     _cm82_nsgr_pass = (_cm82_nsgr_check <= _NON_STRATEGIC_GR_CAP)  # iter82: non-strategic GR <= 1
     _cm84_rumor_pass = (_cm84_rumor_check <= _RUMOR_SPEC_ANY_CAP)  # iter84: rumor/speculation <= 1
     _cm84_tut_sem_pass = (_cm84_tut_sem_check <= _TUTORIAL_SEMANTIC_CAP)  # iter84: tutorial_semantic = 0
+    _cm89_aws_devdoc_pass = (_cm89_aws_devdoc_check <= 0)  # iter89: aws_devdoc = 0
     _cm84_exec_sem_pass = (_cm84_exec_sem_check >= _EXECUTIVE_SEMANTIC_MIN_AXES)  # iter84: exec semantic axes >= 4
 
     try:
@@ -11722,6 +11740,10 @@ def _f600_run_fast_path(
             "tutorial_semantic_total": _cm84_tut_sem_check,  # iter84
             "tutorial_semantic_cap": _TUTORIAL_SEMANTIC_CAP,
             "tutorial_semantic_cap_pass": _cm84_tut_sem_pass,
+            "aws_devdoc_total": _cm89_aws_devdoc_check,  # iter89
+            "aws_devdoc_cap": 0,  # iter89
+            "aws_devdoc_cap_pass": _cm89_aws_devdoc_pass,  # iter89
+            "aws_devdoc_test_injected": _cm89_aws_devdoc_is_injected,  # iter89
             "aws_devdoc_found": _i88_aws_devdoc_found,  # iter88
             "aws_devdoc_swaps": _i88_aws_devdoc_swaps,  # iter88
             "aws_devdoc_remaining": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter88
@@ -12023,6 +12045,21 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("HF_BLOG_EXPLAINER_CAP_HARD_DAILY", _cm78_hfbe_fail)
+
+    # iter89: AWS_DEVDOC_CAP_HARD_DAILY gate — aws_devdoc_total = 0
+    if _is_daily and not _cm89_aws_devdoc_pass:
+        _cm89_aws_fail = f"AWS_DEVDOC_CAP_HARD_DAILY_FAIL: aws_devdoc_total={_cm89_aws_devdoc_check} > 0"
+        if _cm89_aws_devdoc_is_injected:
+            _cm89_aws_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "AWS_DEVDOC_CAP_HARD_DAILY",
+            _cm89_aws_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("AWS_DEVDOC_CAP_HARD_DAILY", _cm89_aws_fail)
 
     # iter82: TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY gate — rumor TC <= 1
     if _is_daily and not _cm82_tc_rumor_pass:
@@ -13545,6 +13582,7 @@ def _f600_run_fast_path(
                 "executive_signal_total": _i83_exec_chk,
                 "rumor_speculation_total": _i83_rumor_chk,
                 "tutorial_semantic_total": _i83_tut_sem_chk,
+                "aws_devdoc_total": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter89
                 "aws_devdoc_found": _i88_aws_devdoc_found,  # iter88
                 "aws_devdoc_swaps": _i88_aws_devdoc_swaps,  # iter88
                 "aws_devdoc_remaining": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter88
@@ -13616,6 +13654,9 @@ def _f600_run_fast_path(
                 "tutorial_semantic_total": _i83_tut_sem_total,
                 "tutorial_semantic_cap": _TUTORIAL_SEMANTIC_CAP,
                 "tutorial_semantic_cap_pass": _i83_tut_sem_total <= _TUTORIAL_SEMANTIC_CAP,
+                "aws_devdoc_total": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter89
+                "aws_devdoc_cap": 0,  # iter89
+                "aws_devdoc_cap_pass": sum(1 for s in _selected if _is_aws_devdoc(s)) <= 0,  # iter89
                 "aws_devdoc_found": _i88_aws_devdoc_found,  # iter88
                 "aws_devdoc_swaps": _i88_aws_devdoc_swaps,  # iter88
                 "aws_devdoc_remaining": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter88
