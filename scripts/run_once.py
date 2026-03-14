@@ -7885,6 +7885,37 @@ def _f600_run_fast_path(
             return "china_ai"
         return ax
 
+    # iter88: AWS developer/documentation classifier — soft exclusion (sort penalty + swap)
+    # NOT added to _is_ceo_prohibited (would break bucket coverage via pool exclusion)
+    _AWS_DEVDOC_TITLE_RE = _ct71_re.compile(
+        r'(?:\binference\s+container\b'
+        r'|\bcapabilit(?:y|ies)\s+and\s+(?:performance|feature)\b'
+        r'|\bperformance\s+enhancement\b'
+        r'|\bteaching\s+(?:AI|ML|model)\s+(?:through|with|via)\b'
+        r'|\breinforcement\s+fine[\-\s]tun(?:e|ing)\b'
+        r'|\bcontainer\s+(?:setup|image|configuration|deployment)\b'
+        r'|\bSDK\s+(?:usage|example|reference|integration)\b'
+        r'|\bdeveloper\s+guide\b'
+        r'|\blatest\s+capabilit(?:y|ies)\b'
+        r')', _ct71_re.I)
+    _AWS_DEVDOC_EXEC_RE = _ct71_re.compile(
+        r'\b(?:launch|announce|GA|general\s+availab|rollout|acqui|partner|earnings|introduc|cross[\-\s]region|global)\b', _ct71_re.I)
+
+    def _is_aws_devdoc(it) -> bool:
+        """iter88: True if item is AWS developer/documentation content.
+        Only checks aws.amazon.com domain. Exempt if title has executive signals."""
+        _dom = _f6_domain_key(it)
+        if _dom != "aws.amazon.com":
+            return False
+        _title = str(getattr(it, "title", "") or "")
+        _snippet = _f6_snippet(it)
+        _blob = _title + " " + _snippet
+        if not _AWS_DEVDOC_TITLE_RE.search(_blob):
+            return False
+        if _AWS_DEVDOC_EXEC_RE.search(_title):
+            return False
+        return True
+
     def _f6_sort_key(it) -> tuple:
         """iter40→72b: bigtech-first, official/media first, strategic density, then fulltext.
         iter72b: bigtech_official_media_actionable priority + strategic_density_score."""
@@ -7899,6 +7930,7 @@ def _f600_run_fast_path(
         _forum_p = -6 if _is_forum_discussion(it) else 0
         _tutorial_p = -5 if _is_tutorial_explainer(it) else 0
         _gresearch_p = -4 if _f6_is_google_research_blog(it) else 0
+        _aws_devdoc_p = -4 if _is_aws_devdoc(it) else 0  # iter88: AWS devdoc penalty
         # iter71→72b: actionable-type bonus
         _act71 = 3 if _ct71_is_actionable(it) else (-2 if _ct71_is_research_tutorial(it) else 0)
         # iter72b: bigtech_official_media_actionable super-priority
@@ -7916,7 +7948,7 @@ def _f600_run_fast_path(
         ftl = int(getattr(it, "fulltext_len", 0) or 0)
         # iter87: heavy penalty for short fulltext (<700 chars) — produces repetitive LLM digests
         _short_content_p = -10 if ftl < 700 else 0
-        return (bt, om, _boma, _act71, _short_content_p, rb, _forum_p, _devrel_p, _indie_p, _tutorial_p, _gresearch_p, dn, df_penalty, _sds, pss, ftl, _f6_bfp(it))
+        return (bt, om, _boma, _act71, _short_content_p, rb, _forum_p, _devrel_p, _indie_p, _tutorial_p, _gresearch_p, _aws_devdoc_p, dn, df_penalty, _sds, pss, ftl, _f6_bfp(it))
 
     def _f6_tier(min_len: int) -> list:
         return sorted(
@@ -10566,6 +10598,61 @@ def _f600_run_fast_path(
             except Exception:
                 pass
 
+    # --- iter88: AWS devdoc swap — try to replace AWS developer/documentation items ---
+    _i88_aws_devdoc_swaps = 0
+    _i88_aws_devdoc_found = 0
+    if _is_daily and len(_selected) >= _max_events:
+        _i88_aws_devdoc_found = sum(1 for s in _selected if _is_aws_devdoc(s))
+        if _i88_aws_devdoc_found > 0:
+            _i88_pool = [it for it in _f6_tier(300) if it not in _selected
+                         and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                         and not _is_aws_devdoc(it)
+                         and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+            for _i88_round in range(10):
+                _i88_target_idx = None
+                for _i88i, _i88s in enumerate(_selected):
+                    if _is_aws_devdoc(_i88s):
+                        _i88_target_idx = _i88i
+                        break
+                if _i88_target_idx is None:
+                    break
+                _i88_swapped = False
+                _i88_inv_b = _i80_invariant_snapshot(_selected)
+                for _i88_cand in _i88_pool:
+                    if _i88_cand in _selected:
+                        continue
+                    _i88_test = [s if j != _i88_target_idx else _i88_cand for j, s in enumerate(_selected)]
+                    _i88_inv_a = _i80_invariant_snapshot(_i88_test)
+                    _i88_ok, _i88_reg = _i80_no_regression(_i88_inv_b, _i88_inv_a)
+                    if not _i88_ok:
+                        _i88_ok = all(not _i88_inv_b[k] for k in _i88_reg)
+                    if _i88_ok:
+                        _log.info("iter88 AWS devdoc swap: replaced idx=%d title='%s' with '%s'",
+                                  _i88_target_idx,
+                                  str(getattr(_selected[_i88_target_idx], "title", ""))[:60],
+                                  str(getattr(_i88_cand, "title", ""))[:60])
+                        _selected[_i88_target_idx] = _i88_cand
+                        _i88_aws_devdoc_swaps += 1
+                        _i88_swapped = True
+                        break
+                if not _i88_swapped:
+                    _log.warning("iter88 AWS devdoc swap: could not replace idx=%d title='%s' (no non-regressing candidate)",
+                                 _i88_target_idx,
+                                 str(getattr(_selected[_i88_target_idx], "title", ""))[:60])
+                    break
+            if _i88_aws_devdoc_swaps > 0:
+                _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+                _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+                try:
+                    _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                except Exception:
+                    pass
+                _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+                _log.info("iter88 AWS devdoc swap done: found=%d swapped=%d remaining=%d",
+                          _i88_aws_devdoc_found, _i88_aws_devdoc_swaps,
+                          sum(1 for s in _selected if _is_aws_devdoc(s)))
+
     # --- iter80: final hard-cap enforcement — forcibly replace items that violate concentration caps ---
     if _is_daily and len(_selected) >= _max_events:
         _i80_final_pool = [it for it in _f6_tier(300) if it not in _selected
@@ -11625,6 +11712,9 @@ def _f600_run_fast_path(
             "tutorial_semantic_total": _cm84_tut_sem_check,  # iter84
             "tutorial_semantic_cap": _TUTORIAL_SEMANTIC_CAP,
             "tutorial_semantic_cap_pass": _cm84_tut_sem_pass,
+            "aws_devdoc_found": _i88_aws_devdoc_found,  # iter88
+            "aws_devdoc_swaps": _i88_aws_devdoc_swaps,  # iter88
+            "aws_devdoc_remaining": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter88
             "executive_semantic_axes_distinct": _cm84_exec_sem_check,  # iter84
             "executive_semantic_axes": sorted(_cm84_exec_sem_axes_set),
             "executive_semantic_min_axes": _EXECUTIVE_SEMANTIC_MIN_AXES,
@@ -13445,6 +13535,9 @@ def _f600_run_fast_path(
                 "executive_signal_total": _i83_exec_chk,
                 "rumor_speculation_total": _i83_rumor_chk,
                 "tutorial_semantic_total": _i83_tut_sem_chk,
+                "aws_devdoc_found": _i88_aws_devdoc_found,  # iter88
+                "aws_devdoc_swaps": _i88_aws_devdoc_swaps,  # iter88
+                "aws_devdoc_remaining": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter88
                 "executive_semantic_axes_distinct": _i83_exec_sem_chk,
             }
 
@@ -13513,6 +13606,9 @@ def _f600_run_fast_path(
                 "tutorial_semantic_total": _i83_tut_sem_total,
                 "tutorial_semantic_cap": _TUTORIAL_SEMANTIC_CAP,
                 "tutorial_semantic_cap_pass": _i83_tut_sem_total <= _TUTORIAL_SEMANTIC_CAP,
+                "aws_devdoc_found": _i88_aws_devdoc_found,  # iter88
+                "aws_devdoc_swaps": _i88_aws_devdoc_swaps,  # iter88
+                "aws_devdoc_remaining": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter88
                 "executive_semantic_axes_distinct": _i83_exec_sem_distinct,
                 "executive_semantic_axes": sorted(_i83_exec_sem_axes),
                 "executive_semantic_min_axes": _EXECUTIVE_SEMANTIC_MIN_AXES,
@@ -13696,6 +13792,9 @@ def _f600_run_fast_path(
                 _i83_sa["tutorial_semantic_total"] = _i83_tut_sem_total
                 _i83_sa["tutorial_semantic_gate_total"] = _i83_tut_sem_chk
                 _i83_sa["tutorial_semantic_gate_cap_pass"] = _i83_tut_sem_chk <= _TUTORIAL_SEMANTIC_CAP
+                _i83_sa["aws_devdoc_found"] = _i88_aws_devdoc_found  # iter88
+                _i83_sa["aws_devdoc_swaps"] = _i88_aws_devdoc_swaps  # iter88
+                _i83_sa["aws_devdoc_remaining"] = sum(1 for s in _selected if _is_aws_devdoc(s))  # iter88
                 _i83_sa["executive_semantic_axes_distinct"] = _i83_exec_sem_distinct
                 _i83_sa["executive_semantic_gate_distinct"] = _i83_exec_sem_chk
                 _i83_sa["executive_semantic_gate_pass"] = _i83_exec_sem_chk >= _EXECUTIVE_SEMANTIC_MIN_AXES
