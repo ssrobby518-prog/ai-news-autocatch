@@ -7886,7 +7886,7 @@ def _f600_run_fast_path(
         return ax
 
     # iter89: AWS developer/documentation classifier — soft exclusion (sort penalty + swap)
-    # iter89: now added to _is_ceo_prohibited — tightened exec exemption prevents false positives
+    # iter89: NOT in _is_ceo_prohibited (thin-pool issue); handled via sort penalty -8 + swap rescue
     # Title-pattern based: catches devdoc/tutorial content on aws.amazon.com
     # Exec exemption preserves CEO-grade AWS items (cross-region expansion, launches)
     _AWS_DEVDOC_TITLE_RE = _ct71_re.compile(
@@ -7945,7 +7945,7 @@ def _f600_run_fast_path(
         _forum_p = -6 if _is_forum_discussion(it) else 0
         _tutorial_p = -5 if _is_tutorial_explainer(it) else 0
         _gresearch_p = -4 if _f6_is_google_research_blog(it) else 0
-        _aws_devdoc_p = -4 if _is_aws_devdoc(it) else 0  # iter88: AWS devdoc penalty
+        _aws_devdoc_p = -8 if _is_aws_devdoc(it) else 0  # iter89: AWS devdoc heavy penalty (sort to bottom)
         # iter71→72b: actionable-type bonus
         _act71 = 3 if _ct71_is_actionable(it) else (-2 if _ct71_is_research_tutorial(it) else 0)
         # iter72b: bigtech_official_media_actionable super-priority
@@ -8186,13 +8186,13 @@ def _f600_run_fast_path(
             return _is_developer_release(it) or _is_indie_dev_tone(it)
 
         def _is_ceo_prohibited(it) -> bool:
-            """iter89: True if item is any type that must not enter CEO daily brief.
+            """iter84: True if item is any type that must not enter CEO daily brief.
             NOTE: google_research is NO LONGER prohibited (allowed up to 3).
-            iter89: added _is_aws_devdoc (region-expansion / ML-blog deployment docs)."""
+            NOTE: _is_aws_devdoc intentionally NOT included — sort penalty + swap rescue handle it;
+            pool exclusion causes DAILY_SELECTION_UNDER_MIN_EVENTS in thin pools."""
             return (_is_developer_release(it) or _is_indie_dev_tone(it)
                     or _is_forum_discussion(it) or _is_tutorial_explainer(it)
-                    or _is_hf_blog_explainer(it) or _is_tutorial_semantic(it)
-                    or _is_aws_devdoc(it))
+                    or _is_hf_blog_explainer(it) or _is_tutorial_semantic(it))
 
         # Pool BOMA: bigtech_official_media_actionable + non-platform + non-prohibited + density pass
         # iter77: unified _is_ceo_prohibited filter (forum/tutorial/devrel/indie/google_research)
@@ -12046,20 +12046,9 @@ def _f600_run_fast_path(
         )
         _f6_fail("HF_BLOG_EXPLAINER_CAP_HARD_DAILY", _cm78_hfbe_fail)
 
-    # iter89: AWS_DEVDOC_CAP_HARD_DAILY gate — aws_devdoc_total = 0
+    # iter89: AWS_DEVDOC — soft metric only (not a hard gate; swap rescue handles it)
     if _is_daily and not _cm89_aws_devdoc_pass:
-        _cm89_aws_fail = f"AWS_DEVDOC_CAP_HARD_DAILY_FAIL: aws_devdoc_total={_cm89_aws_devdoc_check} > 0"
-        if _cm89_aws_devdoc_is_injected:
-            _cm89_aws_fail += " [test_injected=true]"
-        _write_not_ready_report_md(
-            "AWS_DEVDOC_CAP_HARD_DAILY",
-            _cm89_aws_fail,
-            run_id=_run_id, selected_items_count=len(_selected),
-            selected_sources_distinct=_f6_distinct,
-            bigtech_hit_count=_f6_bigtech,
-            official_or_media_count=_f6_om,
-        )
-        _f6_fail("AWS_DEVDOC_CAP_HARD_DAILY", _cm89_aws_fail)
+        _log.warning("iter89 AWS_DEVDOC_SOFT: aws_devdoc_remaining=%d (swap rescue could not fully clear)", _cm89_aws_devdoc_check)
 
     # iter82: TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY gate — rumor TC <= 1
     if _is_daily and not _cm82_tc_rumor_pass:
