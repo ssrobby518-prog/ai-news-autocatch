@@ -7887,8 +7887,8 @@ def _f600_run_fast_path(
 
     # iter89: AWS developer/documentation classifier — soft exclusion (sort penalty + swap)
     # NOT added to _is_ceo_prohibited (would break bucket coverage via pool exclusion)
-    # Path A: specific devdoc title patterns → original exec exemption
-    # Path B: short AWS article (<700 chars) without strong launch verb → likely low-value devdoc
+    # Title-pattern based: catches devdoc/tutorial content on aws.amazon.com
+    # Exec exemption preserves CEO-grade AWS items (cross-region expansion, launches)
     _AWS_DEVDOC_TITLE_RE = _ct71_re.compile(
         r'(?:\binference\s+container\b'
         r'|\bcapabilit(?:y|ies)\s+and\s+(?:performance|feature)\b'
@@ -7910,31 +7910,21 @@ def _f600_run_fast_path(
         r')', _ct71_re.I)
     _AWS_DEVDOC_EXEC_RE = _ct71_re.compile(
         r'\b(?:launch|announce|GA|general\s+availab|rollout|acqui|partner|earnings|introduc|cross[\-\s]region|global)\b', _ct71_re.I)
-    # iter89: strong launch verbs only — for short-article exemption (no cross-region/global)
-    _AWS_DEVDOC_STRONG_LAUNCH_RE = _ct71_re.compile(
-        r'\b(?:introduc|launch|announce|GA\b|general\s+availab|rollout|acqui|partner|earnings|pricing|security|CVE|advisory)\b', _ct71_re.I)
 
     def _is_aws_devdoc(it) -> bool:
         """iter89: True if item is AWS developer/documentation/tutorial content.
-        Only checks aws.amazon.com domain.
-        Path A: title/snippet matches devdoc patterns → exempt if title has exec signals.
-        Path B: short fulltext (<700 chars) without strong launch verb → low-value devdoc."""
+        Only checks aws.amazon.com domain. Exempt if title has executive signals."""
         _dom = _f6_domain_key(it)
         if _dom != "aws.amazon.com":
             return False
         _title = str(getattr(it, "title", "") or "")
         _snippet = _f6_snippet(it)
         _blob = _title + " " + _snippet
-        # Path A: specific devdoc title patterns
-        if _AWS_DEVDOC_TITLE_RE.search(_blob):
-            if _AWS_DEVDOC_EXEC_RE.search(_title):
-                return False
-            return True
-        # Path B: short AWS article without strong launch verb
-        _ft = str(getattr(it, "fulltext", "") or "")
-        if len(_ft) < 700 and not _AWS_DEVDOC_STRONG_LAUNCH_RE.search(_title):
-            return True
-        return False
+        if not _AWS_DEVDOC_TITLE_RE.search(_blob):
+            return False
+        if _AWS_DEVDOC_EXEC_RE.search(_title):
+            return False
+        return True
 
     def _f6_sort_key(it) -> tuple:
         """iter40→72b: bigtech-first, official/media first, strategic density, then fulltext.
