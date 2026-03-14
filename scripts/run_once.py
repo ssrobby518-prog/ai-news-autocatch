@@ -17003,9 +17003,9 @@ def run_pipeline() -> None:
                     if _hy_injected:
                         log.info("DAILY hydration diversity: injected %d items from %d under-represented domains (priority=%d vendor=%d)",
                                  _hy_injected, len([d for d, c in _hy_dom_counts.items() if c <= 2 and d]), _hy_pri_injected, _hy_tp_injected)
-                # iter42: DAILY uses per-url=4s, batch_timeout=55s (hydrate_hard_deadline)
+                # iter42→89: DAILY uses per-url=4s, batch_timeout=53s (2s headroom for HYDRATE_HARD_DEADLINE=55s gate)
                 _hy_timeout = 4 if _is_daily else 8
-                _hy_batch   = 55 if _is_daily else 180
+                _hy_batch   = 53 if _is_daily else 180
                 _hydrated = hydrate_items_batch(_targeted_pool, timeout_s=_hy_timeout, batch_timeout=_hy_batch) or _targeted_pool
                 raw_items = _hydrated
                 log.info(
