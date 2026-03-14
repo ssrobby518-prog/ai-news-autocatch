@@ -11715,7 +11715,10 @@ def _f600_run_fast_path(
         if _cm84_exec_sem_is_injected:
             _cm71_meta["executive_semantic_test_injected"] = True
             _cm71_meta["injected_executive_semantic_total"] = _cm84_inject_exec_sem
-        _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        if not _is_daily:  # iter86: daily mode defers ALL meta writes to canonical snapshot
+            _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        else:
+            _log.info("iter86: skipping pre-canonical content_mix write (daily mode — canonical snapshot is sole truth)")
     except Exception as _cm71_exc:
         _log.warning("content_mix.meta.json write failed: %s", _cm71_exc)
 
@@ -13829,29 +13832,70 @@ def _f600_run_fast_path(
                       len(dict(_DivCounter(_f6_domain_key(s) for s in _selected))),
                       _i83_tp_distinct, _i83_buckets_distinct, _i83_role_distinct)
 
-            # --- iter85: POST-CANONICAL CONSISTENCY ASSERTION ---
-            # Verify content_mix.meta.json matches canonical counters (single truth)
-            try:
-                import json as _i85_j
-                _i85_cm = _i85_j.loads((_outputs / "content_mix.meta.json").read_text(encoding="utf-8"))
-                _i85_checks = [
-                    ("selected_events", _i85_cm.get("selected_events"), len(_selected)),
-                    ("techcrunch_total", _i85_cm.get("techcrunch_total"), _i83_tc_total),
-                    ("google_research_total", _i85_cm.get("google_research_total"), _i83_gr_total),
-                    ("bigtech_official_media_count", _i85_cm.get("bigtech_official_media_count"), _i83_bt_om),
-                    ("target_player_distinct", _i85_cm.get("target_player_distinct"), _i83_tp_distinct),
-                    ("strategic_buckets_distinct", _i85_cm.get("selected_strategic_buckets_distinct"), _i83_buckets_distinct),
-                    ("role_axes_distinct", _i85_cm.get("selected_role_axes_distinct"), _i83_role_distinct),
-                ]
-                _i85_mismatches = [(n, g, e) for n, g, e in _i85_checks if g != e]
-                if _i85_mismatches:
-                    _f6_fail("CANONICAL_CONSISTENCY_HARD",
-                             f"content_mix.meta.json diverges from canonical snapshot: {_i85_mismatches}")
-                _log.info("iter85 CANONICAL CONSISTENCY CHECK: PASS (7 fields verified)")
-            except FileNotFoundError:
+            # --- iter86: POST-CANONICAL CONSISTENCY ASSERTION (full cross-file) ---
+            # 1) Verify content_mix.meta.json matches canonical counters
+            import json as _i86_j
+            _i86_cm_path = _outputs / "content_mix.meta.json"
+            if not _i86_cm_path.exists():
                 _f6_fail("CANONICAL_CONSISTENCY_HARD", "content_mix.meta.json not found after canonical snapshot")
+            _i86_cm = _i86_j.loads(_i86_cm_path.read_text(encoding="utf-8"))
+            _i86_checks = [
+                ("cm.selected_events", _i86_cm.get("selected_events"), len(_selected)),
+                ("cm.techcrunch_total", _i86_cm.get("techcrunch_total"), _i83_tc_total),
+                ("cm.google_research_total", _i86_cm.get("google_research_total"), _i83_gr_total),
+                ("cm.bigtech_official_media_count", _i86_cm.get("bigtech_official_media_count"), _i83_bt_om),
+                ("cm.target_player_distinct", _i86_cm.get("target_player_distinct"), _i83_tp_distinct),
+                ("cm.strategic_buckets_distinct", _i86_cm.get("selected_strategic_buckets_distinct"), _i83_buckets_distinct),
+                ("cm.role_axes_distinct", _i86_cm.get("selected_role_axes_distinct"), _i83_role_distinct),
+                ("cm.leadership_politics_ai_count", _i86_cm.get("leadership_politics_ai_count"), _i83_lp_count),
+                ("cm.china_ai_gov_count", _i86_cm.get("china_ai_gov_count"), _i83_china_count),
+                ("cm.platform_total", _i86_cm.get("platform_total"), _i83_plat_total),
+                ("cm.forum_discussion_total", _i86_cm.get("forum_discussion_total"), _i83_forum_total),
+                ("cm.developer_release_total", _i86_cm.get("developer_release_total"), _i83_devrel_total),
+                ("cm.indie_dev_tone_total", _i86_cm.get("indie_dev_tone_total"), _i83_indie_total),
+                ("cm.tutorial_explainer_total", _i86_cm.get("tutorial_explainer_total"), _i83_tutorial_total),
+                ("cm.hf_blog_explainer_total", _i86_cm.get("hf_blog_explainer_total"), _i83_hfbe_total),
+                ("cm.techcrunch_google_research_total", _i86_cm.get("techcrunch_google_research_total"), _i83_tc_gr_combined),
+            ]
+            # 2) Cross-verify domain_counts vs per-classifier counts (the root divergence)
+            _i86_dc_tc = sum(v for k, v in _i83_domain_counts.items() if "techcrunch" in k)
+            _i86_dc_gr = _i83_domain_counts.get(_GOOGLE_RESEARCH_BLOG_DOMAIN, 0)
+            _i86_checks.extend([
+                ("domain_counts.techcrunch_vs_classifier", _i86_dc_tc, _i83_tc_total),
+                ("domain_counts.google_research_vs_classifier", _i86_dc_gr, _i83_gr_total),
+            ])
+            # 3) Cross-verify selection_audit.meta.json matches canonical
+            _i86_sa_path = _outputs / "selection_audit.meta.json"
+            if _i86_sa_path.exists():
+                _i86_sa = _i86_j.loads(_i86_sa_path.read_text(encoding="utf-8"))
+                _i86_sa_dc = _i86_sa.get("domain_counts", {})
+                _i86_sa_tc = sum(v for k, v in _i86_sa_dc.items() if "techcrunch" in k)
+                _i86_sa_gr = _i86_sa_dc.get(_GOOGLE_RESEARCH_BLOG_DOMAIN, 0)
+                _i86_checks.extend([
+                    ("sa.techcrunch_total", _i86_sa.get("techcrunch_total"), _i83_tc_total),
+                    ("sa.google_research_total", _i86_sa.get("google_research_total"), _i83_gr_total),
+                    ("sa.domain_counts.techcrunch", _i86_sa_tc, _i83_tc_total),
+                    ("sa.domain_counts.google_research", _i86_sa_gr, _i83_gr_total),
+                    ("sa.bigtech_official_media_count", _i86_sa.get("bigtech_official_media_count"), _i83_bt_om),
+                    ("sa.leadership_politics_ai_count", _i86_sa.get("leadership_politics_ai_count"), _i83_lp_count),
+                    ("sa.china_ai_gov_count", _i86_sa.get("china_ai_gov_count"), _i83_china_count),
+                    ("sa.target_player_distinct", _i86_sa.get("target_player_distinct"), _i83_tp_distinct),
+                    ("sa.selected_role_axes_distinct", _i86_sa.get("selected_role_axes_distinct"), _i83_role_distinct),
+                    ("sa.selected_domains_distinct", _i86_sa.get("selected_domains_distinct"), len(_i83_domain_counts)),
+                    ("sa.max_domain_count", _i86_sa.get("max_domain_count"), _i83_max_domain),
+                    ("sa.max_vendor_count", _i86_sa.get("max_vendor_count"), _i83_max_vendor),
+                ])
+            _i86_mismatches = [(n, g, e) for n, g, e in _i86_checks if g != e]
+            if _i86_mismatches:
+                _f6_fail("CANONICAL_CONSISTENCY_HARD",
+                         f"final truth divergence detected across meta files: {_i86_mismatches}")
+            _log.info("iter86 CANONICAL CONSISTENCY CHECK: PASS (%d fields verified across content_mix + selection_audit + domain_counts)", len(_i86_checks))
         except Exception as _i83_exc:
-            _log.warning("iter83 canonical snapshot rebuild failed: %s", _i83_exc)
+            _log.error("iter86 FATAL: canonical snapshot rebuild crashed: %s", _i83_exc)
+            import traceback as _i86_tb
+            _log.error("iter86 traceback: %s", _i86_tb.format_exc())
+            _f6_fail("CANONICAL_SNAPSHOT_FATAL",
+                     f"canonical snapshot rebuild crashed — refusing to produce incoherent output: {_i83_exc}")
 
     # ===================================================================
     # iter85: STAGE 5 — ALL OUTPUTS BELOW READ ONLY FROM FROZEN _selected
