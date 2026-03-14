@@ -7744,7 +7744,14 @@ def _f600_run_fast_path(
         r'|\bfine[\-\s]tun(?:e|ing)\s+(?:guide|recipe|tutorial|with)\b'
         r'|\bsetup\s+guide\b|\binstall(?:ation)?\s+guide\b'
         r'|\bcookbook\b|\bhandbook\b'
-        r'|\bbeginners?\s+guide\b|\bpractical\s+guide\b)', _ct71_re.I)
+        r'|\bbeginners?\s+guide\b|\bpractical\s+(?:guide|guidance|tips)\b'
+        r'|\bcode[\-\s](?:example|sample|snippet)s?\b'
+        r'|\bimplementation[\-\s](?:options?|details?|examples?|walkthrough)\b'
+        r'|\bhands[\-\s]on\b|\blearn[\-\s]how\b'
+        r'|\b(?:deployment|integration|migration)\s+guide\b'
+        r'|\bbuild\s+(?:a|an|your)\s+\w+\s+(?:with|using|on)\b'
+        r'|\bguide\s+to\s+(?:deploy|build|implement|integrat|migrat|set(?:ting)?\s+up)\b'
+        r')', _ct71_re.I)
     _TUTORIAL_SEMANTIC_CAP = 0  # iter84
 
     def _is_tutorial_semantic(it) -> bool:
@@ -13987,8 +13994,8 @@ def _f600_run_fast_path(
     _i84_event_blocks = _i84_re.split(r'\n##\s+', _i84_brief_text)
     _i84_dup_events = []
     _I84_NGRAM = 6
-    _I84_JACCARD_THRESH = 0.85
-    _I84_DUP_TOLERANCE = 2
+    _I84_JACCARD_THRESH = 0.75  # iter86b: tightened from 0.85 to catch more near-duplicate rewriting
+    _I84_DUP_TOLERANCE = 1     # iter86b: tightened from 2 — at most 1 near-dup pair allowed in entire brief
     for _i84_block in _i84_event_blocks:
         _i84_bullets = [
             _i84_re.sub(r'[\s\d\.\-\*\#\>\u3000]+', '', line.strip().lower())

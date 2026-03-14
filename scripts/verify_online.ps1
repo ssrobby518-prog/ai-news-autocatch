@@ -54,7 +54,7 @@ $_fast300Daily = ($env:FAST_300_DAILY -eq "1")
 # iter39: FAST_300_MODE — hard cap 300s, auto-enables FAST_600_MODE
 $_fast300Mode = ($env:FAST_300_MODE -eq "1") -or $_fast300Daily
 if ($_fast300Daily) {
-    $_voBudgetSec = if ($_voUserBudgetOverride) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 250 }  # iter82: DAILY default 250s (10 items need ~240s all-miss at 25 tok/s)
+    $_voBudgetSec = if ($_voUserBudgetOverride) { [int]$env:PIPELINE_TIME_BUDGET_SEC } else { 230 }  # iter86b: DAILY default 230s (hard-locked, no drift)
     $env:PIPELINE_TIME_BUDGET_SEC = [string]$_voBudgetSec
     $env:FAST_600_MODE = "1"
     $env:FAST_300_DAILY = "1"

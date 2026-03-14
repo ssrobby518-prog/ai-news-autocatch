@@ -11,8 +11,8 @@ $env:PYTHONIOENCODING = "utf-8"
 $repoRoot = Split-Path $PSScriptRoot -Parent
 Set-Location $repoRoot
 
-$env:PIPELINE_SOFT_TARGET_SEC = "140"
-$env:PIPELINE_TIME_BUDGET_SEC = "250"
+$env:PIPELINE_SOFT_TARGET_SEC = "175"   # iter86b: fixed daily budget (soft=175, hard=230)
+$env:PIPELINE_TIME_BUDGET_SEC = "230"   # iter86b: fixed daily budget — no drift allowed
 $env:BIGTECH_GATES_ENFORCE = "1"
 $env:PIPELINE_ENTRYPOINT = "scheduled_task"
 
