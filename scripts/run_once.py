@@ -7914,7 +7914,9 @@ def _f600_run_fast_path(
         else:
             df_penalty = 0
         ftl = int(getattr(it, "fulltext_len", 0) or 0)
-        return (bt, om, _boma, _act71, rb, _forum_p, _devrel_p, _indie_p, _tutorial_p, _gresearch_p, dn, df_penalty, _sds, pss, ftl, _f6_bfp(it))
+        # iter87: heavy penalty for short fulltext (<700 chars) — produces repetitive LLM digests
+        _short_content_p = -10 if ftl < 700 else 0
+        return (bt, om, _boma, _act71, _short_content_p, rb, _forum_p, _devrel_p, _indie_p, _tutorial_p, _gresearch_p, dn, df_penalty, _sds, pss, ftl, _f6_bfp(it))
 
     def _f6_tier(min_len: int) -> list:
         return sorted(
@@ -8028,16 +8030,18 @@ def _f600_run_fast_path(
     _pool_raw = _hdf_pool_items
 
     # iter40: bigtech-first selection — fill bigtech items first, then official/media, minimize dev noise
+    # iter87: fulltext content-quality floor — items below this get heavy sort penalty (not pool exclusion)
+    _POOL_FT_FLOOR = 700
     _bt_pool = [it for it in sorted(_pool_raw, key=_f6_sort_key, reverse=True) if int(getattr(it, "fulltext_len", 0) or 0) >= 300 and _f6_is_bigtech(it)]
     _pool_sorted = sorted(_pool_raw, key=_f6_sort_key, reverse=True)
-    _pool_300 = [it for it in _pool_sorted if int(getattr(it, "fulltext_len", 0) or 0) >= 300]
-    _om_pool = [it for it in _pool_300 if not _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
-    _other_pool = [it for it in _pool_300 if it not in _bt_pool and it not in _om_pool and not _f6_is_dev_noise(it)]
-    _devnoise_pool = [it for it in _pool_300 if _f6_is_dev_noise(it)]
+    _pool_700 = [it for it in _pool_sorted if int(getattr(it, "fulltext_len", 0) or 0) >= 300]
+    _om_pool = [it for it in _pool_700 if not _f6_is_bigtech(it) and _f6_src_type(it) in ("official", "media")]
+    _other_pool = [it for it in _pool_700 if it not in _bt_pool and it not in _om_pool and not _f6_is_dev_noise(it)]
+    _devnoise_pool = [it for it in _pool_700 if _f6_is_dev_noise(it)]
     # iter54: DAILY_BIGTECH_ONLY — pool of items that are bigtech AND (official/media/code_release)
     # code_release from bigtech (e.g. GitHub microsoft/autogen) counts as official for DAILY purposes
     _BT_OM_TYPES = ("official", "media", "code_release")
-    _bt_om_pool = [it for it in _pool_300 if _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
+    _bt_om_pool = [it for it in _pool_700 if _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
 
     # iter53: domain/vendor quota-aware selection
     _DIV_MAX_DOMAIN = 3  # iter73: 10 items, max 1/3 → 3
@@ -8144,7 +8148,7 @@ def _f600_run_fast_path(
         # Pool BOMA: bigtech_official_media_actionable + non-platform + non-prohibited + density pass
         # iter77: unified _is_ceo_prohibited filter (forum/tutorial/devrel/indie/google_research)
         _p72_pool_boma = _oa_partition(sorted([
-            it for it in _pool_300
+            it for it in _pool_700
             if not _is_platform_domain(it)
             and _ct72b_is_bigtech_official_media_actionable(it)
             and not _is_ceo_prohibited(it)
@@ -8152,7 +8156,7 @@ def _f600_run_fast_path(
         ], key=_sd73_key))
         # Pool BTA: bigtech_actionable (non-official/media) — iter77: exclude all ceo-prohibited
         _p72_pool_bta = _oa_partition(sorted([
-            it for it in _pool_300
+            it for it in _pool_700
             if not _is_platform_domain(it)
             and _ct71_is_bigtech_actionable(it)
             and not _is_ceo_prohibited(it)
@@ -8162,7 +8166,7 @@ def _f600_run_fast_path(
         # Pool C: bigtech + non-platform + density-pass (rescue)
         # iter77: exclude all ceo-prohibited (keeps pool clean; prevents google_research from entering selection)
         _p72_pool_c = _oa_partition(sorted([
-            it for it in _pool_300
+            it for it in _pool_700
             if not _is_platform_domain(it)
             and _f6_is_bigtech(it)
             and not _f6_is_dev_noise(it)
@@ -8175,7 +8179,7 @@ def _f600_run_fast_path(
         ], key=_sd73_key))
         # Pool RT: research/tutorial (cap=1) — iter77: excluded by _is_ceo_prohibited in other pools
         _p72_pool_rt = _oa_partition(sorted([
-            it for it in _pool_300
+            it for it in _pool_700
             if _ct71_is_research_tutorial(it)
             and _f6_is_bigtech(it)
             and not _f6_is_dev_noise(it)
@@ -8184,7 +8188,7 @@ def _f600_run_fast_path(
 
         # iter73→77: Pool LEADER — leadership/politics; exclude all ceo-prohibited
         _p73_pool_leader = _oa_partition(sorted([
-            it for it in _pool_300
+            it for it in _pool_700
             if _is_leadership_politics_ai(it)
             and not _is_platform_domain(it)
             and not _f6_is_dev_noise(it)
@@ -8193,7 +8197,7 @@ def _f600_run_fast_path(
         ], key=_sd73_key))
         # iter73→77: Pool CHINA — china_ai_gov; exclude all ceo-prohibited
         _p73_pool_china = _oa_partition(sorted([
-            it for it in _pool_300
+            it for it in _pool_700
             if _is_china_ai_gov(it)
             and not _is_platform_domain(it)
             and not _f6_is_dev_noise(it)
@@ -8295,7 +8299,7 @@ def _f600_run_fast_path(
         if _p73_china_count < 1:
             _p73_china_swap = False
             _p73_china_cands = _p73_pool_china + sorted([
-                it for it in _pool_300
+                it for it in _pool_700
                 if _is_china_ai_gov(it) and not _is_platform_domain(it) and not _f6_is_dev_noise(it)
                 and not _is_devrel_or_indie(it)
                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
@@ -8424,9 +8428,9 @@ def _f600_run_fast_path(
                         _p73_f5 = True
                         break
             if not _p73_f5:
-                # penultimate resort — bigtech items from _pool_300 with density + strategic density pass
+                # penultimate resort — bigtech items from _pool_700 with density + strategic density pass
                 # iter77: exclude all ceo-prohibited (prevents google_research/tutorial/forum from entering)
-                for it in _pool_300:
+                for it in _pool_700:
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
                             and not _is_ceo_prohibited(it)
@@ -8439,7 +8443,7 @@ def _f600_run_fast_path(
             if not _p73_f5:
                 # absolute last resort — bigtech items without strategic density pass (gate will check later)
                 # iter77: exclude all ceo-prohibited
-                for it in _pool_300:
+                for it in _pool_700:
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
                             and not _is_ceo_prohibited(it)
@@ -8550,7 +8554,7 @@ def _f600_run_fast_path(
         # Phase-7: 2-step swap rescue — if at max_events-1, try removing 1 and adding 2
         if len(_selected) == _max_events - 1:
             _p7_swap_pool = _oa_partition([
-                it for it in _pool_300
+                it for it in _pool_700
                 if it not in _selected
                 and not _f6_is_dev_noise(it)
                 and not _f6_is_google_research_blog(it)
@@ -9215,7 +9219,7 @@ def _f600_run_fast_path(
                     if _pt_vc.get(_pt_rv, 0) <= 1:
                         continue
                 _pt_test = [s for j, s in enumerate(_selected) if j != _pt_ri]
-                for _pt_cand in _pool_300:
+                for _pt_cand in _pool_700:
                     if (_pt_cand in _pt_test or _is_ceo_prohibited(_pt_cand)
                             or _f6_is_dev_noise(_pt_cand)
                             or _hdf_all_scores.get(id(_pt_cand), {}).get("density_score", 0) < _HDF_NEW_DENSITY_MIN):
@@ -9385,7 +9389,7 @@ def _f600_run_fast_path(
             _sf_vendor_blocked = 0
             _sf_domain_blocked = 0
             _sf_density_blocked = 0
-            for _sf_it in _pool_300:
+            for _sf_it in _pool_700:
                 if _sf_it in _selected or _f6_is_dev_noise(_sf_it) or not _f6_is_bigtech(_sf_it):
                     continue
                 _sf_ds = _hdf_all_scores.get(id(_sf_it), {}).get("density_score", 0)
@@ -10321,7 +10325,7 @@ def _f600_run_fast_path(
     if _is_daily and len(_selected) >= _max_events:
         _i80_snap_fr = list(_selected)  # iter80: snapshot before FINAL rescue
         _i80_inv_fr = _i80_invariant_snapshot(_selected)
-        _fr_pool = [it for it in _pool_300 if it not in _selected
+        _fr_pool = [it for it in _pool_700 if it not in _selected
                     and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
                     and not _is_hf_blog_explainer(it)
                     and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
