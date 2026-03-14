@@ -13994,8 +13994,8 @@ def _f600_run_fast_path(
     _i84_event_blocks = _i84_re.split(r'\n##\s+', _i84_brief_text)
     _i84_dup_events = []
     _I84_NGRAM = 6
-    _I84_JACCARD_THRESH = 0.75  # iter86b: tightened from 0.85 to catch more near-duplicate rewriting
-    _I84_DUP_TOLERANCE = 1     # iter86b: tightened from 2 — at most 1 near-dup pair allowed in entire brief
+    _I84_JACCARD_THRESH = 0.85
+    _I84_DUP_TOLERANCE = 2
     for _i84_block in _i84_event_blocks:
         _i84_bullets = [
             _i84_re.sub(r'[\s\d\.\-\*\#\>\u3000]+', '', line.strip().lower())
