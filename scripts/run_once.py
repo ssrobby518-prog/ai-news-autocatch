@@ -10684,10 +10684,11 @@ def _f600_run_fast_path(
                             and not _is_aws_devdoc(it)
                             and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]),
-                # Pass 2: broad pool (any non-devnoise, non-prohibited, non-aws-devdoc with density >= 8)
+                # Pass 2: broad pool (bigtech + non-devnoise, non-prohibited, non-aws-devdoc with density >= 8)
                 ("broad", [it for it in _f6_tier(300) if it not in _selected
                            and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                            and not _is_aws_devdoc(it)
+                           and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]),
             ]
             for _i90_pass_name, _i88_pool in _i90_pools:
@@ -10729,7 +10730,8 @@ def _f600_run_fast_path(
                 _i90_existing_domains = set(_f6_domain_key(s) for s in _selected if not _is_aws_devdoc(s))
                 _i90_nuclear_pool = [it for it in _f6_tier(300) if it not in _selected
                                      and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
-                                     and not _is_aws_devdoc(it)]
+                                     and not _is_aws_devdoc(it)
+                                     and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
                 # Sort: new domains first (to maintain min_domains), then by fulltext length
                 _i90_nuclear_pool.sort(key=lambda it: (
                     0 if _f6_domain_key(it) not in _i90_existing_domains else 1,
