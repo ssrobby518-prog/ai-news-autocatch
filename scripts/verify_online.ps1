@@ -5667,25 +5667,27 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter89: AWS_DEVDOC_SOFT — soft metric only (swap rescue handles; not a hard gate)
+# iter90: AWS_DEVDOC_REMAINING_HARD — aws_devdoc_remaining must be 0
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
     $_awsMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
-    Write-Output "AWS_DEVDOC_SOFT:"
+    Write-Output "AWS_DEVDOC_REMAINING_HARD:"
     if (Test-Path $_awsMetaPath) {
         try {
             $_awsMeta = Get-Content $_awsMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
             $_awsCount = if ($_awsMeta.PSObject.Properties['aws_devdoc_remaining']) { [int]$_awsMeta.aws_devdoc_remaining } else { 0 }
             Write-Output ("  aws_devdoc_remaining : {0}" -f $_awsCount)
             if ($_awsCount -gt 0) {
-                Write-Output ("  => WARN: aws_devdoc_remaining={0} (swap rescue could not clear)" -f $_awsCount)
+                $_awsFail = ("AWS_DEVDOC_REMAINING_HARD_FAIL: aws_devdoc_remaining={0} > 0" -f $_awsCount)
+                Write-Output ("  => FAIL: {0}" -f $_awsFail)
+                Invoke-VerifyOnlineFailFast -Gate "AWS_DEVDOC_REMAINING_HARD" -Reason $_awsFail
             }
-            Write-Output "  => AWS_DEVDOC_SOFT: OK"
+            Write-Output "  => AWS_DEVDOC_REMAINING_HARD: PASS"
         } catch {
-            Write-Output ("  AWS_DEVDOC_SOFT: WARN (parse error: {0})" -f $_)
+            Write-Output ("  AWS_DEVDOC_REMAINING_HARD: WARN (parse error: {0})" -f $_)
         }
     } else {
-        Write-Output "  AWS_DEVDOC_SOFT: SKIP (content_mix.meta.json not found)"
+        Write-Output "  AWS_DEVDOC_REMAINING_HARD: SKIP (content_mix.meta.json not found)"
     }
 }
 Write-Output ""
