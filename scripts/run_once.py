@@ -8206,6 +8206,11 @@ def _f600_run_fast_path(
 
         # Pool BOMA: bigtech_official_media_actionable + non-platform + non-prohibited + density pass
         # iter77: unified _is_ceo_prohibited filter (forum/tutorial/devrel/indie/google_research)
+        # iter90 diagnostic: count AWS devdoc items in pool_700
+        _i90_aws_in_pool = [it for it in _pool_700 if _is_aws_devdoc(it)]
+        _log.info("iter90 DIAG: pool_700 has %d AWS devdoc items: %s",
+                  len(_i90_aws_in_pool),
+                  [(str(getattr(it, "title", ""))[:50], _f6_domain_key(it)) for it in _i90_aws_in_pool[:5]])
         _p72_pool_boma = _oa_partition(sorted([
             it for it in _pool_700
             if not _is_platform_domain(it)
@@ -8214,6 +8219,8 @@ def _f600_run_fast_path(
             and not _is_aws_devdoc(it)  # iter90: exclude AWS devdoc from pools
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
+        _i90_aws_in_boma = [it for it in _p72_pool_boma if _is_aws_devdoc(it)]
+        _log.info("iter90 DIAG: boma pool has %d AWS devdoc items (should be 0)", len(_i90_aws_in_boma))
         # Pool BTA: bigtech_actionable (non-official/media) — iter77: exclude all ceo-prohibited
         _p72_pool_bta = _oa_partition(sorted([
             it for it in _pool_700
@@ -8366,7 +8373,7 @@ def _f600_run_fast_path(
             _p73_china_cands = _p73_pool_china + sorted([
                 it for it in _pool_700
                 if _is_china_ai_gov(it) and not _is_platform_domain(it) and not _f6_is_dev_noise(it)
-                and not _is_devrel_or_indie(it)
+                and not _is_devrel_or_indie(it) and not _is_aws_devdoc(it)  # iter90
                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             ], key=_sd73_key)
             for _cn_ri in range(len(_selected)):
@@ -8499,6 +8506,7 @@ def _f600_run_fast_path(
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
                             and not _is_ceo_prohibited(it)
+                            and not _is_aws_devdoc(it)  # iter90
                             and _f6_is_bigtech(it)
                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and _sd73_pass(it)):
@@ -8512,6 +8520,7 @@ def _f600_run_fast_path(
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
                             and not _is_ceo_prohibited(it)
+                            and not _is_aws_devdoc(it)  # iter90
                             and _f6_is_bigtech(it)
                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
                         _sel_append(it)
@@ -8624,6 +8633,7 @@ def _f600_run_fast_path(
                 and not _f6_is_dev_noise(it)
                 and not _f6_is_google_research_blog(it)
                 and not _is_devrel_or_indie(it)  # iter75
+                and not _is_aws_devdoc(it)  # iter90
                 and _f6_is_bigtech(it)
                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             ])
@@ -8981,7 +8991,7 @@ def _f600_run_fast_path(
     _f6_srcs = {_f6_src(it) for it in _selected}
     if len(_f6_srcs) < 3 and len(_selected) >= 3:
         _f6_repl_pool = [it for it in _f6_tier(300) if it not in _selected
-                         and not _f6_is_google_research_blog(it)
+                         and not _f6_is_google_research_blog(it) and not _is_aws_devdoc(it)  # iter90
                          and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))]
         _f6_new_src_items = [it for it in _f6_repl_pool if _f6_src(it) not in _f6_srcs]
         _f6_src_counts = _F6Counter(_f6_src(it) for it in _selected)
@@ -9083,7 +9093,7 @@ def _f600_run_fast_path(
         # iter77: sort non-platform first; filter ceo_prohibited + density floor
         _div_backup = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
                        and not _f6_is_google_research_blog(it) and not _is_ceo_prohibited(it)
-                       and not _is_hf_blog_explainer(it)
+                       and not _is_hf_blog_explainer(it) and not _is_aws_devdoc(it)  # iter90
                        and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                        and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         # iter81: if backup pool has no items from new domains, expand with relaxed density
@@ -9094,7 +9104,7 @@ def _f600_run_fast_path(
                           and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                           and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
                           and not _is_developer_release(it) and not _is_indie_dev_tone(it)
-                          and not _is_tutorial_explainer(it)
+                          and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)  # iter90
                           and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                           and _f6_domain_key(it) not in _div_cur_doms]
             if _div_extra:
@@ -9286,6 +9296,7 @@ def _f600_run_fast_path(
                 _pt_test = [s for j, s in enumerate(_selected) if j != _pt_ri]
                 for _pt_cand in _pool_700:
                     if (_pt_cand in _pt_test or _is_ceo_prohibited(_pt_cand)
+                            or _is_aws_devdoc(_pt_cand)  # iter90
                             or _f6_is_dev_noise(_pt_cand)
                             or _hdf_all_scores.get(id(_pt_cand), {}).get("density_score", 0) < _HDF_NEW_DENSITY_MIN):
                         continue
@@ -9375,6 +9386,7 @@ def _f600_run_fast_path(
             and _f6_src_type(it) not in ("dev_forum",)
             and not _f6_is_dev_noise(it)
             and not _f6_is_google_research_blog(it)
+            and not _is_aws_devdoc(it)  # iter90
             and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
         ]
         _non_df_backup.sort(key=_f6_sort_key, reverse=True)
@@ -9813,7 +9825,7 @@ def _f600_run_fast_path(
             if _oa_dup_gate_enabled and _overlap_count > 2:
                 # iter81b: also require fulltext >= 300 chars to avoid introducing thin digest items
                 _backup_pool_all = [it for it in raw_items if it not in _selected and not _f6_is_dev_noise(it)
-                                and not _f6_is_google_research_blog(it)
+                                and not _f6_is_google_research_blog(it) and not _is_aws_devdoc(it)  # iter90
                                 and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
                                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                                 and len(str(getattr(it, 'full_text', '') or getattr(it, 'body', '') or '')) >= 300]
@@ -9966,7 +9978,7 @@ def _f600_run_fast_path(
         # iter68→77: also filter by density, ceo_prohibited; sort non-platform first
         _div_backup2 = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
                         and not _f6_is_google_research_blog(it) and not _is_ceo_prohibited(it)
-                        and not _is_hf_blog_explainer(it)
+                        and not _is_hf_blog_explainer(it) and not _is_aws_devdoc(it)  # iter90
                         and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         _div_backup2.sort(key=lambda it: (0 if not _is_platform_domain(it) else 1,
@@ -10392,14 +10404,14 @@ def _f600_run_fast_path(
         _i80_inv_fr = _i80_invariant_snapshot(_selected)
         _fr_pool = [it for it in _pool_700 if it not in _selected
                     and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
-                    and not _is_hf_blog_explainer(it)
+                    and not _is_hf_blog_explainer(it) and not _is_aws_devdoc(it)  # iter90
                     and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         # iter81: sort FR pool so non-TC items come first (FR-1 picks first match → avoids TC bloat)
         _fr_pool.sort(key=lambda it: (1 if _is_techcrunch(it) else 0, -_f6_bfp(it)))
         # iter78b: also build wider pool (pool_sorted, relaxed density) for target_player rescue only
         _fr_pool_wide = [it for it in _pool_sorted if it not in _selected and it not in _fr_pool
                          and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
-                         and _is_target_player(it)
+                         and _is_target_player(it) and not _is_aws_devdoc(it)  # iter90
                          and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
         # iter81: sort wider pool too — prefer non-TC
         _fr_pool_wide.sort(key=lambda it: (1 if _is_techcrunch(it) else 0, -_f6_bfp(it)))
@@ -10844,6 +10856,7 @@ def _f600_run_fast_path(
     if _is_daily and len(_selected) >= _max_events:
         _i80_final_pool = [it for it in _f6_tier(300) if it not in _selected
                            and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                           and not _is_aws_devdoc(it)  # iter90
                            and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                            and not _is_techcrunch(it) and not _f6_is_google_research_blog(it)
                            and not _is_platform_domain(it) and not _is_hf_blog_explainer(it)
@@ -10852,6 +10865,7 @@ def _f600_run_fast_path(
         if not _i80_final_pool:
             _i80_final_pool = [it for it in _f6_tier(300) if it not in _selected
                                and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                               and not _is_aws_devdoc(it)  # iter90
                                and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                                and not _is_techcrunch(it) and not _f6_is_google_research_blog(it)
                                and not _is_platform_domain(it) and not _is_hf_blog_explainer(it)
@@ -12623,6 +12637,7 @@ def _f600_run_fast_path(
             if _is_indie_dev_tone(it): return False
             if _is_tutorial_explainer(it): return False
             if _is_ceo_prohibited(it): return False
+            if _is_aws_devdoc(it): return False  # iter90
             if _f6_is_dev_noise(it): return False
             if not _dd_candidate_swap_ok(it, allow_mid=allow_mid): return False
         return True
