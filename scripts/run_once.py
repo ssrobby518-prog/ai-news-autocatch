@@ -9989,6 +9989,77 @@ def _f600_run_fast_path(
         except Exception as _dde:
             _log.warning("daily cross-day dedup failed (non-fatal): %s", _dde)
 
+    # iter92: carryover swap — replace non-top-2 carryover items with fresh candidates
+    _co_swap_count = 0
+    if _is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes:
+        # Identify carryover items that are NOT in prev top-2 → must be replaced
+        _co_blocked_indices = []
+        for _co_ci, _co_cs in enumerate(_selected):
+            _co_ch = _oa_item_hash(_co_cs)
+            if _co_ch and _co_ch in _co_prev_all_hashes and _co_ch not in _co_prev_top2_hashes:
+                _co_blocked_indices.append(_co_ci)
+        if _co_blocked_indices:
+            _log.info("iter92 carryover swap: %d non-top2 carryover items to replace", len(_co_blocked_indices))
+            # Build fresh candidate pool: from raw_items, not in _selected, not in prev non-top-2, passes basic filters
+            _co_sel_ids = set(id(s) for s in _selected)
+            _co_sel_hashes = set(_oa_item_hash(s) for s in _selected if _oa_item_hash(s))
+            _co_swap_pool = []
+            for _co_ri in raw_items:
+                if id(_co_ri) in _co_sel_ids:
+                    continue
+                _co_rh = _oa_item_hash(_co_ri)
+                if _co_rh and _co_rh in _co_sel_hashes:
+                    continue
+                # Skip items that match previous day entirely (to maximize freshness)
+                if _co_rh and _co_rh in _co_prev_all_hashes:
+                    continue
+                # Basic quality filters
+                if _is_aws_devdoc(_co_ri):
+                    continue
+                if _is_developer_release(_co_ri):
+                    continue
+                if _is_indie_dev_tone(_co_ri):
+                    continue
+                if _is_forum_discussion(_co_ri):
+                    continue
+                if _is_tutorial_explainer(_co_ri):
+                    continue
+                if _is_hf_blog_explainer(_co_ri):
+                    continue
+                if not _f6_is_bigtech(_co_ri):
+                    continue
+                _co_ft = int(getattr(_co_ri, "fulltext_len", 0) or 0)
+                if _co_ft < 300:
+                    continue
+                _co_swap_pool.append(_co_ri)
+            # Sort pool: prefer bigtech+actionable+official/media, then fulltext length
+            _co_swap_pool.sort(key=lambda x: (
+                -int(_ct72b_is_bigtech_official_media_actionable(x)),
+                -int(_ct71_is_bigtech_actionable(x)),
+                -int(getattr(x, "fulltext_len", 0) or 0),
+            ))
+            _log.info("iter92 carryover swap: pool=%d for %d replacements", len(_co_swap_pool), len(_co_blocked_indices))
+            # Replace blocked items
+            _co_pool_idx = 0
+            for _co_bi in _co_blocked_indices:
+                if _co_pool_idx >= len(_co_swap_pool):
+                    break
+                _co_repl = _co_swap_pool[_co_pool_idx]
+                # Verify swap doesn't break critical invariants
+                _co_test_sel = list(_selected)
+                _co_test_sel[_co_bi] = _co_repl
+                _co_test_boma = sum(1 for s in _co_test_sel if _ct72b_is_bigtech_official_media_actionable(s))
+                _co_test_doms = len(set(_f6_domain_key(s) for s in _co_test_sel))
+                _co_test_buckets = len(set(_ct72b_strategic_bucket(s) for s in _co_test_sel))
+                if _co_test_boma >= 8 and _co_test_doms >= 4 and _co_test_buckets >= 5:
+                    _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
+                    _new_title = str(getattr(_co_repl, "title", "") or "")[:60]
+                    _selected[_co_bi] = _co_repl
+                    _co_swap_count += 1
+                    _log.info("iter92 carryover swap [%d→%d]: '%s' → '%s'", _co_bi, _co_pool_idx, _old_title, _new_title)
+                _co_pool_idx += 1
+            _log.info("iter92 carryover swap: completed %d/%d replacements", _co_swap_count, len(_co_blocked_indices))
+
     # iter92: compute carryover stats (after all dedup/swap, before gates)
     _co_per_item: list = []
     _co_carryover_total = 0
@@ -12093,6 +12164,7 @@ def _f600_run_fast_path(
             "carryover_gates_apply": _co_gates_apply,  # iter92
             "scheduled_previous_run_id": _co_prev_run_id,  # iter92
             "scheduled_previous_head": _co_prev_head,  # iter92
+                "previous_top2_ids": sorted(_co_prev_top2_hashes),  # iter92
             "executive_semantic_axes_distinct": _cm84_exec_sem_check,  # iter84
             "executive_semantic_axes": sorted(_cm84_exec_sem_axes_set),
             "executive_semantic_min_axes": _EXECUTIVE_SEMANTIC_MIN_AXES,
@@ -14118,6 +14190,7 @@ def _f600_run_fast_path(
                 "carryover_gates_apply": _co_gates_apply,  # iter92
                 "scheduled_previous_run_id": _co_prev_run_id,  # iter92
                 "scheduled_previous_head": _co_prev_head,  # iter92
+                "previous_top2_ids": sorted(_co_prev_top2_hashes),  # iter92
                 "executive_semantic_axes_distinct": _i83_exec_sem_distinct,
                 "executive_semantic_axes": sorted(_i83_exec_sem_axes),
                 "executive_semantic_min_axes": _EXECUTIVE_SEMANTIC_MIN_AXES,
@@ -14320,6 +14393,7 @@ def _f600_run_fast_path(
                 _i83_sa["carryover_gates_apply"] = _co_gates_apply
                 _i83_sa["scheduled_previous_run_id"] = _co_prev_run_id
                 _i83_sa["scheduled_previous_head"] = _co_prev_head
+                _i83_sa["previous_top2_ids"] = sorted(_co_prev_top2_hashes)
                 # iter91: enrich per-item rows with aws_devdoc + iter92 carryover fields
                 for _i91_idx2, _i91_row2 in enumerate(_i83_sa.get("items", [])):
                     if _i91_idx2 < len(_selected):
@@ -14887,11 +14961,19 @@ def _f600_run_fast_path(
         if _is_daily and _oa_entrypoint == "scheduled_task":
             _co_snap_items = []
             for _co_wi, _co_ws in enumerate(_selected):
+                _co_snap_title = str(getattr(_co_ws, "title", "") or "")[:120]
+                import hashlib as _co_hl
+                _co_title_hash = _co_hl.md5(_co_snap_title.lower().strip().encode("utf-8")).hexdigest()
                 _co_snap_items.append({
-                    "title": str(getattr(_co_ws, "title", "") or "")[:120],
-                    "url": str(getattr(_co_ws, "url", "") or getattr(_co_ws, "link", "") or "")[:200],
+                    "item_id": _oa_item_hash(_co_ws),
+                    "title": _co_snap_title,
+                    "canonical_url": str(getattr(_co_ws, "url", "") or getattr(_co_ws, "link", "") or "")[:200],
                     "url_hash": _oa_item_hash(_co_ws),
+                    "normalized_title_hash": _co_title_hash,
+                    "source_domain": _f6_domain_key(_co_ws),
+                    "vendor": _f6_vendor_key(_co_ws),
                     "rank": _co_wi,
+                    "final_score": int(getattr(_co_ws, "frontier_score", 0) or 0),
                 })
             _co_snap_top2 = [it["url_hash"] for it in _co_snap_items[:2] if it.get("url_hash")]
             try:
@@ -14899,11 +14981,15 @@ def _f600_run_fast_path(
                 _co_git_head = _co_sp.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, stderr=_co_sp.DEVNULL).strip()
             except Exception:
                 _co_git_head = ""
+            from datetime import datetime as _co_dt
             _co_snapshot_out = {
                 "run_id": _run_id,
                 "head": _co_git_head,
+                "entrypoint": "scheduled_task",
+                "generated_at": _co_dt.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "selected_count": len(_selected),
                 "top2_hashes": _co_snap_top2,
+                "top2_item_ids": _co_snap_top2,
                 "items": _co_snap_items,
             }
             _co_snapshot_file.write_text(
