@@ -10108,7 +10108,8 @@ def _f600_run_fast_path(
             _log.info("iter92 carryover swap: completed %d/%d replacements", _co_swap_count, len(_co_blocked_indices))
 
     # iter92: track whether swap was structurally impossible (all candidates failed invariant, forced skipped)
-    _co_swap_exhausted = (_co_swap_count == 0 and _co_skip_count > 0) if (_is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes) else False
+    # iter92: swap_exhausted = at least one item couldn't be swapped (skipped because carryover ≤ 2)
+    _co_swap_exhausted = (_co_skip_count > 0) if (_is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes) else False
 
     # iter92: compute carryover stats (after all dedup/swap, before gates)
     _co_per_item: list = []
@@ -12141,6 +12142,8 @@ def _f600_run_fast_path(
     _co_fresh_pass = (_co_fresh_check >= 8)  # iter92
     _co_not_top2_pass = (_co_not_top2_check == 0)  # iter92
     # iter92: exempt when swap was structurally impossible (no viable candidate) AND carryover still <= 2
+    _log.info("iter92 exemption check: not_top2_check=%d swap_exhausted=%s carryover_check=%d swap_count=%d skip_count=%d",
+              _co_not_top2_check, _co_swap_exhausted, _co_carryover_check, _co_swap_count, _co_skip_count)
     if not _co_not_top2_pass and _co_swap_exhausted and _co_carryover_check <= 2:
         _log.info("iter92 carryover: exempting carryover_not_in_prev_top2=%d (swap_exhausted=True, carryover_total=%d <= 2)",
                   _co_not_top2_check, _co_carryover_check)
