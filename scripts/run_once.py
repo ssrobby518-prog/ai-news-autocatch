@@ -9705,6 +9705,21 @@ def _f600_run_fast_path(
             )
 
     # --- Step 3b1b: iter54 DAILY_BIGTECH_ONLY_HARD — all selected must be bigtech+official_or_media ---
+    # iter90: pre-gate rescue — replace non-bigtech items with bigtech alternatives
+    if _is_daily and len(_selected) >= _max_events:
+        _bt_rescue_pool = [it for it in _f6_tier(300) if it not in _selected
+                           and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                           and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)]
+        _bt_rescue_pool.sort(key=lambda it: -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0))
+        for _bt_ri in range(len(_selected)):
+            _bt_it = _selected[_bt_ri]
+            if not (_f6_is_bigtech(_bt_it) and _f6_src_type(_bt_it) in _BT_OM_TYPES):
+                for _bt_cand in _bt_rescue_pool:
+                    if _bt_cand not in _selected:
+                        _log.info("iter90: bigtech rescue — replacing non-bigtech idx=%d vendor=%s with %s",
+                                  _bt_ri, _f6_vendor_key(_bt_it), str(getattr(_bt_cand, "title", ""))[:60])
+                        _selected[_bt_ri] = _bt_cand
+                        break
     if _is_daily:
         _non_bt_om = sum(1 for it in _selected if not (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
         if _non_bt_om > 0:
