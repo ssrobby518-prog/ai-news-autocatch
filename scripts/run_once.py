@@ -10674,6 +10674,7 @@ def _f600_run_fast_path(
     # --- iter90: AWS devdoc aggressive swap — two-pass: strict pool then broad pool ---
     _i88_aws_devdoc_swaps = 0
     _i88_aws_devdoc_found = 0
+    _i91_aws_swap_log: list = []  # iter91: per-swap audit trail
     if _is_daily and len(_selected) >= _max_events:
         _i88_aws_devdoc_found = sum(1 for s in _selected if _is_aws_devdoc(s))
         if _i88_aws_devdoc_found > 0:
@@ -10717,6 +10718,7 @@ def _f600_run_fast_path(
                                       _i90_pass_name, _i88_target_idx,
                                       str(getattr(_selected[_i88_target_idx], "title", ""))[:60],
                                       str(getattr(_i88_cand, "title", ""))[:60])
+                            _i91_aws_swap_log.append({"pass": _i90_pass_name, "swapped_out_title": str(getattr(_selected[_i88_target_idx], "title", ""))[:120], "swapped_in_title": str(getattr(_i88_cand, "title", ""))[:120], "swapped_out_domain": _f6_domain_key(_selected[_i88_target_idx]), "swapped_in_domain": _f6_domain_key(_i88_cand)})  # iter91
                             _selected[_i88_target_idx] = _i88_cand
                             _i88_aws_devdoc_swaps += 1
                             _i88_swapped = True
@@ -10768,6 +10770,7 @@ def _f600_run_fast_path(
                                       str(getattr(_selected[_i90_target_idx], "title", ""))[:60],
                                       str(getattr(_i90_cand, "title", ""))[:60],
                                       _f6_domain_key(_i90_cand))
+                            _i91_aws_swap_log.append({"pass": "nuclear", "swapped_out_title": str(getattr(_selected[_i90_target_idx], "title", ""))[:120], "swapped_in_title": str(getattr(_i90_cand, "title", ""))[:120], "swapped_out_domain": _f6_domain_key(_selected[_i90_target_idx]), "swapped_in_domain": _f6_domain_key(_i90_cand)})  # iter91
                             _selected[_i90_target_idx] = _i90_cand
                             _i88_aws_devdoc_swaps += 1
                             _i90_swapped = True
@@ -10842,6 +10845,7 @@ def _f600_run_fast_path(
                                               _i90_inject_idx,
                                               str(getattr(_i90_displaced, "title", ""))[:50],
                                               _i90_aws_idx)
+                                    _i91_aws_swap_log.append({"pass": "coordinated_A", "swapped_out_title": str(getattr(_selected[_i90_aws_idx], "title", ""))[:120], "swapped_in_title": str(getattr(_i90_displaced, "title", ""))[:120], "inject_amazon_tp": str(getattr(_i90_amz, "title", ""))[:120], "swapped_out_domain": _f6_domain_key(_selected[_i90_aws_idx]), "swapped_in_domain": _f6_domain_key(_i90_displaced)})  # iter91
                                     _selected[_i90_inject_idx] = _i90_amz
                                     _selected[_i90_aws_idx] = _i90_displaced
                                     _i88_aws_devdoc_swaps += 1
@@ -10864,6 +10868,7 @@ def _f600_run_fast_path(
                                                   str(getattr(_i90_amz, "title", ""))[:50],
                                                   _i90_inject_idx, _i90_aws_idx,
                                                   str(getattr(_i90_repl, "title", ""))[:50])
+                                        _i91_aws_swap_log.append({"pass": "coordinated_B", "swapped_out_title": str(getattr(_selected[_i90_aws_idx], "title", ""))[:120], "swapped_in_title": str(getattr(_i90_repl, "title", ""))[:120], "inject_amazon_tp": str(getattr(_i90_amz, "title", ""))[:120], "swapped_out_domain": _f6_domain_key(_selected[_i90_aws_idx]), "swapped_in_domain": _f6_domain_key(_i90_repl)})  # iter91
                                         _selected[_i90_inject_idx] = _i90_amz
                                         _selected[_i90_aws_idx] = _i90_repl
                                         _i88_aws_devdoc_swaps += 1
@@ -11612,6 +11617,25 @@ def _f600_run_fast_path(
             _sa77_d["techcrunch_rumor_speculation_total"] = _cm82_tc_rumor_total  # iter82
             _sa77_d["non_strategic_google_research_total"] = _cm82_nsgr_total  # iter82
             _sa77_d["executive_signal_total"] = _cm82_exec_signal_total  # iter82
+            # iter91: per-item aws_devdoc audit + swap log
+            _sa77_d["aws_devdoc_found"] = _i88_aws_devdoc_found
+            _sa77_d["aws_devdoc_swaps"] = _i88_aws_devdoc_swaps
+            _sa77_d["aws_devdoc_remaining"] = sum(1 for s in _selected if _is_aws_devdoc(s))
+            _sa77_d["aws_devdoc_swap_log"] = _i91_aws_swap_log
+            # Enrich per-item rows with aws_devdoc fields
+            _sa91_items = _sa77_d.get("items", [])
+            for _sa91_idx, _sa91_row in enumerate(_sa91_items):
+                if _sa91_idx < len(_selected):
+                    _sa91_s = _selected[_sa91_idx]
+                    _sa91_row["aws_devdoc_item"] = _is_aws_devdoc(_sa91_s)
+                    _sa91_row["aws_devdoc_reason"] = ("aws_domain+devdoc_pattern" if _is_aws_devdoc(_sa91_s) else ("not_aws_domain" if _f6_domain_key(_sa91_s) != "aws.amazon.com" else "aws_domain_but_not_devdoc"))
+                    _sa91_row["vendor"] = _f6_vendor_key(_sa91_s)
+                    _sa91_row["content_type"] = _ct71_classify(_sa91_s)
+                    _sa91_row["strategic_bucket"] = _ct72b_strategic_bucket(_sa91_s)
+                    _sa91_row["role_axis"] = _role_axis(_sa91_s)
+                    _sa91_row["kept_in_final_selection"] = True
+                    _sa91_row["swapped_out"] = False
+                    _sa91_row["swap_reason"] = "none"
             _sa77.write_text(_f6_j.dumps(_sa77_d, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -11656,6 +11680,8 @@ def _f600_run_fast_path(
             "executive_semantic_axes_item": sorted(_executive_semantic_axes(_cm71_s)),  # iter84
             "strategic_density_score": _sd_item.get("strategic_density_score", 0),
             "strategic_density_floor_pass": _sd_item.get("strategic_density_score", 0) >= _cm73_sd_floor,
+            "aws_devdoc_item": _is_aws_devdoc(_cm71_s),  # iter91
+            "aws_devdoc_reason": ("aws_domain+devdoc_pattern" if _is_aws_devdoc(_cm71_s) else ("not_aws_domain" if _f6_domain_key(_cm71_s) != "aws.amazon.com" else "aws_domain_but_not_devdoc")),  # iter91
         })
 
     # injection support
@@ -13750,6 +13776,8 @@ def _f600_run_fast_path(
                     "executive_semantic_axes_item": sorted(_executive_semantic_axes(_i83_s)),
                     "strategic_density_score": _i83_sd.get("strategic_density_score", 0),
                     "strategic_density_floor_pass": _i83_sd.get("strategic_density_score", 0) >= _cm73_sd_floor,
+                    "aws_devdoc_item": _is_aws_devdoc(_i83_s),  # iter91
+                    "aws_devdoc_reason": ("aws_domain+devdoc_pattern" if _is_aws_devdoc(_i83_s) else ("not_aws_domain" if _f6_domain_key(_i83_s) != "aws.amazon.com" else "aws_domain_but_not_devdoc")),  # iter91
                 })
             _i83_per_item_sd_failures = []
             for _i83_idx, _i83_row in enumerate(_i83_per_item):
@@ -13931,6 +13959,7 @@ def _f600_run_fast_path(
                 "aws_devdoc_found": _i88_aws_devdoc_found,  # iter88
                 "aws_devdoc_swaps": _i88_aws_devdoc_swaps,  # iter88
                 "aws_devdoc_remaining": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter88
+                "aws_devdoc_swap_log": _i91_aws_swap_log,  # iter91
                 "executive_semantic_axes_distinct": _i83_exec_sem_distinct,
                 "executive_semantic_axes": sorted(_i83_exec_sem_axes),
                 "executive_semantic_min_axes": _EXECUTIVE_SEMANTIC_MIN_AXES,
@@ -14117,6 +14146,20 @@ def _f600_run_fast_path(
                 _i83_sa["aws_devdoc_found"] = _i88_aws_devdoc_found  # iter88
                 _i83_sa["aws_devdoc_swaps"] = _i88_aws_devdoc_swaps  # iter88
                 _i83_sa["aws_devdoc_remaining"] = sum(1 for s in _selected if _is_aws_devdoc(s))  # iter88
+                _i83_sa["aws_devdoc_swap_log"] = _i91_aws_swap_log  # iter91
+                # iter91: enrich per-item rows with aws_devdoc fields
+                for _i91_idx2, _i91_row2 in enumerate(_i83_sa.get("items", [])):
+                    if _i91_idx2 < len(_selected):
+                        _i91_s2 = _selected[_i91_idx2]
+                        _i91_row2["aws_devdoc_item"] = _is_aws_devdoc(_i91_s2)
+                        _i91_row2["aws_devdoc_reason"] = ("aws_domain+devdoc_pattern" if _is_aws_devdoc(_i91_s2) else ("not_aws_domain" if _f6_domain_key(_i91_s2) != "aws.amazon.com" else "aws_domain_but_not_devdoc"))
+                        _i91_row2["vendor"] = _f6_vendor_key(_i91_s2)
+                        _i91_row2["content_type"] = _ct71_classify(_i91_s2)
+                        _i91_row2["strategic_bucket"] = _ct72b_strategic_bucket(_i91_s2)
+                        _i91_row2["role_axis"] = _role_axis(_i91_s2)
+                        _i91_row2["kept_in_final_selection"] = True
+                        _i91_row2["swapped_out"] = False
+                        _i91_row2["swap_reason"] = "none"
                 _i83_sa["executive_semantic_axes_distinct"] = _i83_exec_sem_distinct
                 _i83_sa["executive_semantic_gate_distinct"] = _i83_exec_sem_chk
                 _i83_sa["executive_semantic_gate_pass"] = _i83_exec_sem_chk >= _EXECUTIVE_SEMANTIC_MIN_AXES
