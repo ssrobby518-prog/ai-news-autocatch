@@ -9991,7 +9991,6 @@ def _f600_run_fast_path(
 
     # iter92: carryover swap — replace non-top-2 carryover items with fresh candidates
     _co_swap_count = 0
-    _co_swapped_out_hashes = set()  # iter92: track SPECIFIC items removed by carryover swap (for pool blocking)
     if _is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes:
         # Identify carryover items that are NOT in prev top-2 → must be replaced
         _co_blocked_indices = []
@@ -10029,6 +10028,10 @@ def _f600_run_fast_path(
                     continue
                 if _is_non_strategic_google_research(_co_ri):
                     continue
+                if _f6_is_google_research_blog(_co_ri):  # iter92: block ALL google research (combined cap)
+                    continue
+                if _is_techcrunch(_co_ri):  # iter92: block techcrunch (combined cap)
+                    continue
                 if _is_platform_domain(_co_ri):
                     continue
                 if _is_ceo_prohibited(_co_ri):
@@ -10065,16 +10068,10 @@ def _f600_run_fast_path(
                     _co_test_roles = len(set(_role_axis(s) for s in _co_test_sel))
                     _co_test_bt = sum(1 for s in _co_test_sel if _ct71_is_bigtech_actionable(s))
                     # Allow if at least the hard minimums are met
-                    _co_test_tc = sum(1 for s in _co_test_sel if _is_techcrunch(s))
-                    _co_test_gr = sum(1 for s in _co_test_sel if _f6_is_google_research_blog(s))
-                    _co_test_tp = len(set(_f6_vendor_key(s) for s in _co_test_sel if _is_target_player(s)))
                     if (_co_test_boma >= 8 and _co_test_bt >= 7 and _co_test_buckets >= 5
-                            and _co_test_roles >= 4 and _co_test_doms >= 4 and _co_test_vens >= 4
-                            and _co_test_tc <= 3 and _co_test_gr <= 3 and _co_test_tc + _co_test_gr <= 5
-                            and _co_test_tp >= 6):
+                            and _co_test_roles >= 4 and _co_test_doms >= 4 and _co_test_vens >= 4):
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
                         _new_title = str(getattr(_co_repl, "title", "") or "")[:60]
-                        _co_swapped_out_hashes.add(_oa_item_hash(_selected[_co_bi]))  # iter92
                         _selected[_co_bi] = _co_repl
                         _co_used_pool.add(_co_pi)
                         _co_swap_count += 1
@@ -10088,7 +10085,6 @@ def _f600_run_fast_path(
                             continue
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
                         _new_title = str(getattr(_co_repl2, "title", "") or "")[:60]
-                        _co_swapped_out_hashes.add(_oa_item_hash(_selected[_co_bi]))  # iter92
                         _selected[_co_bi] = _co_repl2
                         _co_used_pool.add(_co_pi2)
                         _co_swap_count += 1
@@ -10158,7 +10154,6 @@ def _f600_run_fast_path(
         _div_backup2 = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
                         and not _f6_is_google_research_blog(it) and not _is_ceo_prohibited(it)
                         and not _is_hf_blog_explainer(it)
-                        and (_oa_item_hash(it) or "") not in _co_swapped_out_hashes  # iter92: no carryover re-intro
                         and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         _div_backup2.sort(key=lambda it: (0 if not _is_platform_domain(it) else 1,
@@ -10585,7 +10580,6 @@ def _f600_run_fast_path(
         _fr_pool = [it for it in _pool_700 if it not in _selected
                     and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
                     and not _is_hf_blog_explainer(it) and not _is_aws_devdoc(it)  # iter92
-                    and (_oa_item_hash(it) or "") not in _co_swapped_out_hashes  # iter92: no carryover re-intro
                     and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         # iter81: sort FR pool so non-TC items come first (FR-1 picks first match → avoids TC bloat)
         _fr_pool.sort(key=lambda it: (1 if _is_techcrunch(it) else 0, -_f6_bfp(it)))
@@ -10593,7 +10587,6 @@ def _f600_run_fast_path(
         _fr_pool_wide = [it for it in _pool_sorted if it not in _selected and it not in _fr_pool
                          and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
                          and _is_target_player(it) and not _is_aws_devdoc(it)  # iter92
-                         and (_oa_item_hash(it) or "") not in _co_swapped_out_hashes  # iter92: no carryover re-intro
                          and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
         # iter81: sort wider pool too — prefer non-TC
         _fr_pool_wide.sort(key=lambda it: (1 if _is_techcrunch(it) else 0, -_f6_bfp(it)))
