@@ -12142,7 +12142,8 @@ def _f600_run_fast_path(
     _co_fresh_pass = (_co_fresh_check >= 8)  # iter92
     _co_not_top2_pass = (_co_not_top2_check == 0)  # iter92
     # iter92: exempt when swap was structurally impossible (no viable candidate) AND carryover still <= 2
-    if not _co_not_top2_pass and _co_swap_exhausted and _co_carryover_check <= 2:
+    # iter92: skip exemption when injection is active (test must exercise the gate, not the exemption)
+    if not _co_not_top2_pass and _co_swap_exhausted and _co_carryover_check <= 2 and not _co_not_top2_is_injected:
         _log.info("iter92 carryover: exempting carryover_not_in_prev_top2=%d (swap_exhausted=True, carryover_total=%d <= 2)",
                   _co_not_top2_check, _co_carryover_check)
         _co_not_top2_pass = True
