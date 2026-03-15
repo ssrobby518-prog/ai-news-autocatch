@@ -14894,9 +14894,14 @@ def _f600_run_fast_path(
                     "rank": _co_wi,
                 })
             _co_snap_top2 = [it["url_hash"] for it in _co_snap_items[:2] if it.get("url_hash")]
+            try:
+                import subprocess as _co_sp
+                _co_git_head = _co_sp.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, stderr=_co_sp.DEVNULL).strip()
+            except Exception:
+                _co_git_head = ""
             _co_snapshot_out = {
                 "run_id": _run_id,
-                "head": _f6_git_head,
+                "head": _co_git_head,
                 "selected_count": len(_selected),
                 "top2_hashes": _co_snap_top2,
                 "items": _co_snap_items,
