@@ -12527,7 +12527,7 @@ def _f600_run_fast_path(
     # --- Step 5: TIME_BUDGET_GUARD_BEFORE_TRANSLATION (iter42: DAILY 120s; else 150s) ---
     _elapsed_pre_xlat = time.time() - t_start
     stg["before_translation_seconds"] = round(_elapsed_pre_xlat, 1)
-    _pre_xlat_limit = 70 if _is_daily else 150
+    _pre_xlat_limit = 90 if _is_daily else 150  # iter90: raised from 70 to 90 for AWS devdoc swap rescue
     if _elapsed_pre_xlat > _pre_xlat_limit:
         _f6_fail(
             "TIME_BUDGET_GUARD_BEFORE_TRANSLATION",
