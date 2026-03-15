@@ -8137,6 +8137,25 @@ def _f600_run_fast_path(
             pass
     _log.info("iter76 overlap_policy=%s dup_gate_enabled=%s entrypoint=%s prev_ids=%d",
               _oa_overlap_policy, _oa_dup_gate_enabled, _oa_entrypoint, len(_oa_prev_ids))
+
+    # iter92: load previous scheduled_task snapshot for carryover tracking
+    _co_snapshot_file = _oa_state_dir / "scheduled_last_snapshot.json"
+    _co_prev_top2_hashes: set = set()
+    _co_prev_all_hashes: set = set()
+    _co_prev_run_id = ""
+    _co_prev_head = ""
+    if _is_daily and _oa_entrypoint == "scheduled_task" and _co_snapshot_file.exists():
+        try:
+            _co_prev_data = _f6_j.loads(_co_snapshot_file.read_text(encoding="utf-8"))
+            _co_prev_run_id = str(_co_prev_data.get("run_id", ""))
+            _co_prev_head = str(_co_prev_data.get("head", ""))
+            _co_prev_top2_hashes = set(_co_prev_data.get("top2_hashes", []))
+            _co_prev_all_hashes = set(it.get("url_hash", "") for it in _co_prev_data.get("items", []) if it.get("url_hash"))
+            _log.info("iter92 carryover: snapshot loaded prev_run_id=%s prev_top2=%d prev_all=%d",
+                      _co_prev_run_id, len(_co_prev_top2_hashes), len(_co_prev_all_hashes))
+        except Exception:
+            pass
+
     _oa_overlap_tracker = [0]  # [count] — incremented by _sel_append
 
     def _oa_item_hash(it) -> str:
@@ -9970,6 +9989,31 @@ def _f600_run_fast_path(
         except Exception as _dde:
             _log.warning("daily cross-day dedup failed (non-fatal): %s", _dde)
 
+    # iter92: compute carryover stats (after all dedup/swap, before gates)
+    _co_per_item: list = []
+    _co_carryover_total = 0
+    _co_fresh_total = len(_selected)
+    _co_not_in_prev_top2 = 0
+    if _is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes:
+        for _co_s in _selected:
+            _co_h = _oa_item_hash(_co_s)
+            _co_is_carry = bool(_co_h and _co_h in _co_prev_all_hashes)
+            _co_is_top2 = bool(_co_h and _co_h in _co_prev_top2_hashes)
+            _co_per_item.append({
+                "carryover_item": _co_is_carry,
+                "fresh_item": not _co_is_carry,
+                "prev_top2_item": _co_is_top2,
+                "carryover_match_key": _co_h if _co_is_carry else "",
+            })
+        _co_carryover_total = sum(1 for p in _co_per_item if p["carryover_item"])
+        _co_fresh_total = len(_selected) - _co_carryover_total
+        _co_not_in_prev_top2 = sum(1 for p in _co_per_item if p["carryover_item"] and not p["prev_top2_item"])
+        _log.info("iter92 carryover: total=%d fresh=%d not_in_prev_top2=%d",
+                  _co_carryover_total, _co_fresh_total, _co_not_in_prev_top2)
+    else:
+        for _ in _selected:
+            _co_per_item.append({"carryover_item": False, "fresh_item": True, "prev_top2_item": False, "carryover_match_key": ""})
+
     _i80_tc_diag("after_dedup")
     # iter41: overlap fields patched later (after all selection_audit rebuilds)
 
@@ -11636,6 +11680,14 @@ def _f600_run_fast_path(
                     _sa91_row["kept_in_final_selection"] = True
                     _sa91_row["swapped_out"] = False
                     _sa91_row["swap_reason"] = "none"
+                    _sa91_row["carryover_item"] = _co_per_item[_sa91_idx]["carryover_item"] if _sa91_idx < len(_co_per_item) else False  # iter92
+                    _sa91_row["fresh_item"] = _co_per_item[_sa91_idx]["fresh_item"] if _sa91_idx < len(_co_per_item) else True  # iter92
+                    _sa91_row["prev_top2_item"] = _co_per_item[_sa91_idx]["prev_top2_item"] if _sa91_idx < len(_co_per_item) else False  # iter92
+                    _sa91_row["carryover_match_key"] = _co_per_item[_sa91_idx]["carryover_match_key"] if _sa91_idx < len(_co_per_item) else ""  # iter92
+            _sa77_d["carryover_total"] = _co_carryover_check  # iter92
+            _sa77_d["fresh_items_total"] = _co_fresh_check  # iter92
+            _sa77_d["carryover_not_in_prev_top2"] = _co_not_top2_check  # iter92
+            _sa77_d["scheduled_previous_run_id"] = _co_prev_run_id  # iter92
             _sa77.write_text(_f6_j.dumps(_sa77_d, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
@@ -11643,7 +11695,7 @@ def _f600_run_fast_path(
     _cm72_strategic_buckets = sorted(set(_ct72b_strategic_bucket(s) for s in _selected))
     _cm72_strategic_buckets_distinct = len(_cm72_strategic_buckets)
     _cm71_per_item = []
-    for _cm71_s in _selected:
+    for _cm71_idx, _cm71_s in enumerate(_selected):
         _sd_item = _sd72_all_scores.get(id(_cm71_s), {})
         _cm71_per_item.append({
             "title": str(getattr(_cm71_s, "title", "") or "")[:120],
@@ -11682,6 +11734,10 @@ def _f600_run_fast_path(
             "strategic_density_floor_pass": _sd_item.get("strategic_density_score", 0) >= _cm73_sd_floor,
             "aws_devdoc_item": _is_aws_devdoc(_cm71_s),  # iter91
             "aws_devdoc_reason": ("aws_domain+devdoc_pattern" if _is_aws_devdoc(_cm71_s) else ("not_aws_domain" if _f6_domain_key(_cm71_s) != "aws.amazon.com" else "aws_domain_but_not_devdoc")),  # iter91
+            "carryover_item": _co_per_item[_cm71_idx]["carryover_item"] if _cm71_idx < len(_co_per_item) else False,  # iter92
+            "fresh_item": _co_per_item[_cm71_idx]["fresh_item"] if _cm71_idx < len(_co_per_item) else True,  # iter92
+            "prev_top2_item": _co_per_item[_cm71_idx]["prev_top2_item"] if _cm71_idx < len(_co_per_item) else False,  # iter92
+            "carryover_match_key": _co_per_item[_cm71_idx]["carryover_match_key"] if _cm71_idx < len(_co_per_item) else "",  # iter92
         })
 
     # injection support
@@ -11709,6 +11765,9 @@ def _f600_run_fast_path(
     _cm84_inject_tut_sem = os.environ.get("INJECT_TUTORIAL_SEMANTIC_TOTAL", "")  # iter84
     _cm84_inject_exec_sem = os.environ.get("INJECT_EXECUTIVE_SEMANTIC_TOTAL", "")  # iter84
     _cm89_inject_aws_devdoc = os.environ.get("INJECT_AWS_DEVDOC_TOTAL", "")  # iter89
+    _co_inject_carryover = os.environ.get("INJECT_SCHEDULED_CARRYOVER_TOTAL", "")  # iter92
+    _co_inject_fresh = os.environ.get("INJECT_SCHEDULED_FRESH_ITEMS_TOTAL", "")  # iter92
+    _co_inject_not_top2 = os.environ.get("INJECT_CARRYOVER_NOT_IN_PREV_TOP2", "")  # iter92
     _cm71_plat_total_check = _pdc_platform_total  # reuse platform total (may be injected)
     _cm71_rt_total_check = _cm71_rt_total
     _cm72_bom_check = _cm72_bt_om_actionable
@@ -11756,6 +11815,12 @@ def _f600_run_fast_path(
     _cm84_tut_sem_is_injected = bool(_cm84_inject_tut_sem)  # iter84
     _cm84_exec_sem_is_injected = bool(_cm84_inject_exec_sem)  # iter84
     _cm89_aws_devdoc_is_injected = bool(_cm89_inject_aws_devdoc)  # iter89
+    _co_carryover_is_injected = bool(_co_inject_carryover)  # iter92
+    _co_fresh_is_injected = bool(_co_inject_fresh)  # iter92
+    _co_not_top2_is_injected = bool(_co_inject_not_top2)  # iter92
+    _co_carryover_check = _co_carryover_total  # iter92
+    _co_fresh_check = _co_fresh_total  # iter92
+    _co_not_top2_check = _co_not_in_prev_top2  # iter92
     if _cm78_tc_is_injected:
         try:
             _cm78_tc_check = int(_cm78_inject_tc)
@@ -11894,6 +11959,24 @@ def _f600_run_fast_path(
         except ValueError:
             pass
         _log.info("INJECT_AWS_DEVDOC_TOTAL=%s: aws_devdoc overridden", _cm89_inject_aws_devdoc)
+    if _co_carryover_is_injected:  # iter92
+        try:
+            _co_carryover_check = int(_co_inject_carryover)
+        except ValueError:
+            pass
+        _log.info("INJECT_SCHEDULED_CARRYOVER_TOTAL=%s: carryover_total overridden", _co_inject_carryover)
+    if _co_fresh_is_injected:  # iter92
+        try:
+            _co_fresh_check = int(_co_inject_fresh)
+        except ValueError:
+            pass
+        _log.info("INJECT_SCHEDULED_FRESH_ITEMS_TOTAL=%s: fresh_items_total overridden", _co_inject_fresh)
+    if _co_not_top2_is_injected:  # iter92
+        try:
+            _co_not_top2_check = int(_co_inject_not_top2)
+        except ValueError:
+            pass
+        _log.info("INJECT_CARRYOVER_NOT_IN_PREV_TOP2=%s: carryover_not_in_prev_top2 overridden", _co_inject_not_top2)
 
     _cm71_bt_act_pass = (_cm71_bt_actionable >= 7)  # iter73: was 6
     _cm72_bom_pass = (_cm72_bom_check >= 8)  # iter77: raised from 7 to 8
@@ -11923,6 +12006,10 @@ def _f600_run_fast_path(
     _cm84_tut_sem_pass = (_cm84_tut_sem_check <= _TUTORIAL_SEMANTIC_CAP)  # iter84: tutorial_semantic = 0
     _cm89_aws_devdoc_pass = (_cm89_aws_devdoc_check <= 0)  # iter89: aws_devdoc = 0
     _cm84_exec_sem_pass = (_cm84_exec_sem_check >= _EXECUTIVE_SEMANTIC_MIN_AXES)  # iter84: exec semantic axes >= 4
+    _co_carryover_pass = (_co_carryover_check <= 2)  # iter92
+    _co_fresh_pass = (_co_fresh_check >= 8)  # iter92
+    _co_not_top2_pass = (_co_not_top2_check == 0)  # iter92
+    _co_gates_apply = (_oa_entrypoint == "scheduled_task" and len(_co_prev_all_hashes) > 0)  # iter92: only for scheduled with previous snapshot
 
     try:
         _cm71_path = _outputs / "content_mix.meta.json"
@@ -11995,6 +12082,17 @@ def _f600_run_fast_path(
             "aws_devdoc_found": _i88_aws_devdoc_found,  # iter88
             "aws_devdoc_swaps": _i88_aws_devdoc_swaps,  # iter88
             "aws_devdoc_remaining": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter88
+            "carryover_total": _co_carryover_check,  # iter92
+            "carryover_max": 2,  # iter92
+            "carryover_max_pass": _co_carryover_pass,  # iter92
+            "fresh_items_total": _co_fresh_check,  # iter92
+            "fresh_items_min": 8,  # iter92
+            "fresh_items_min_pass": _co_fresh_pass,  # iter92
+            "carryover_not_in_prev_top2": _co_not_top2_check,  # iter92
+            "carryover_top2_only_pass": _co_not_top2_pass,  # iter92
+            "carryover_gates_apply": _co_gates_apply,  # iter92
+            "scheduled_previous_run_id": _co_prev_run_id,  # iter92
+            "scheduled_previous_head": _co_prev_head,  # iter92
             "executive_semantic_axes_distinct": _cm84_exec_sem_check,  # iter84
             "executive_semantic_axes": sorted(_cm84_exec_sem_axes_set),
             "executive_semantic_min_axes": _EXECUTIVE_SEMANTIC_MIN_AXES,
@@ -12309,6 +12407,51 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("AWS_DEVDOC_REMAINING_HARD", _cm90_aws_fail)
+
+    # iter92: SCHEDULED_CARRYOVER_MAX_HARD_DAILY — carryover_total <= 2 (scheduled_task only)
+    if _is_daily and _co_gates_apply and not _co_carryover_pass:
+        _co_carry_fail = f"SCHEDULED_CARRYOVER_MAX_HARD_DAILY_FAIL: carryover_total={_co_carryover_check} > 2"
+        if _co_carryover_is_injected:
+            _co_carry_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "SCHEDULED_CARRYOVER_MAX_HARD_DAILY",
+            _co_carry_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("SCHEDULED_CARRYOVER_MAX_HARD_DAILY", _co_carry_fail)
+
+    # iter92: SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY — fresh_items_total >= 8 (scheduled_task only)
+    if _is_daily and _co_gates_apply and not _co_fresh_pass:
+        _co_fresh_fail = f"SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY_FAIL: fresh_items_total={_co_fresh_check} < 8"
+        if _co_fresh_is_injected:
+            _co_fresh_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY",
+            _co_fresh_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY", _co_fresh_fail)
+
+    # iter92: SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY — carryover not in prev top2 = 0 (scheduled_task only)
+    if _is_daily and _co_gates_apply and not _co_not_top2_pass:
+        _co_top2_fail = f"SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY_FAIL: carryover_not_in_prev_top2={_co_not_top2_check}"
+        if _co_not_top2_is_injected:
+            _co_top2_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY",
+            _co_top2_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY", _co_top2_fail)
 
     # iter82: TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY gate — rumor TC <= 1
     if _is_daily and not _cm82_tc_rumor_pass:
@@ -13739,7 +13882,7 @@ def _f600_run_fast_path(
 
             # Rebuild per-item data from final _selected
             _i83_per_item = []
-            for _i83_s in _selected:
+            for _i83_idx, _i83_s in enumerate(_selected):
                 _i83_sd = _sd72_all_scores.get(id(_i83_s), {})
                 _i83_per_item.append({
                     "title": str(getattr(_i83_s, "title", "") or "")[:120],
@@ -13778,6 +13921,10 @@ def _f600_run_fast_path(
                     "strategic_density_floor_pass": _i83_sd.get("strategic_density_score", 0) >= _cm73_sd_floor,
                     "aws_devdoc_item": _is_aws_devdoc(_i83_s),  # iter91
                     "aws_devdoc_reason": ("aws_domain+devdoc_pattern" if _is_aws_devdoc(_i83_s) else ("not_aws_domain" if _f6_domain_key(_i83_s) != "aws.amazon.com" else "aws_domain_but_not_devdoc")),  # iter91
+                    "carryover_item": _co_per_item[_i83_idx]["carryover_item"] if _i83_idx < len(_co_per_item) else False,  # iter92
+                    "fresh_item": _co_per_item[_i83_idx]["fresh_item"] if _i83_idx < len(_co_per_item) else True,  # iter92
+                    "prev_top2_item": _co_per_item[_i83_idx]["prev_top2_item"] if _i83_idx < len(_co_per_item) else False,  # iter92
+                    "carryover_match_key": _co_per_item[_i83_idx]["carryover_match_key"] if _i83_idx < len(_co_per_item) else "",  # iter92
                 })
             _i83_per_item_sd_failures = []
             for _i83_idx, _i83_row in enumerate(_i83_per_item):
@@ -13960,6 +14107,17 @@ def _f600_run_fast_path(
                 "aws_devdoc_swaps": _i88_aws_devdoc_swaps,  # iter88
                 "aws_devdoc_remaining": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter88
                 "aws_devdoc_swap_log": _i91_aws_swap_log,  # iter91
+                "carryover_total": _co_carryover_check,  # iter92
+                "carryover_max": 2,  # iter92
+                "carryover_max_pass": _co_carryover_pass,  # iter92
+                "fresh_items_total": _co_fresh_check,  # iter92
+                "fresh_items_min": 8,  # iter92
+                "fresh_items_min_pass": _co_fresh_pass,  # iter92
+                "carryover_not_in_prev_top2": _co_not_top2_check,  # iter92
+                "carryover_top2_only_pass": _co_not_top2_pass,  # iter92
+                "carryover_gates_apply": _co_gates_apply,  # iter92
+                "scheduled_previous_run_id": _co_prev_run_id,  # iter92
+                "scheduled_previous_head": _co_prev_head,  # iter92
                 "executive_semantic_axes_distinct": _i83_exec_sem_distinct,
                 "executive_semantic_axes": sorted(_i83_exec_sem_axes),
                 "executive_semantic_min_axes": _EXECUTIVE_SEMANTIC_MIN_AXES,
@@ -14069,6 +14227,9 @@ def _f600_run_fast_path(
                 ("INJECT_RUMOR_SPECULATION_TOTAL", "rumor_speculation_test_injected"),
                 ("INJECT_TUTORIAL_SEMANTIC_TOTAL", "tutorial_semantic_test_injected"),
                 ("INJECT_EXECUTIVE_SEMANTIC_TOTAL", "executive_semantic_test_injected"),
+                ("INJECT_SCHEDULED_CARRYOVER_TOTAL", "scheduled_carryover_test_injected"),  # iter92
+                ("INJECT_SCHEDULED_FRESH_ITEMS_TOTAL", "scheduled_fresh_items_test_injected"),  # iter92
+                ("INJECT_CARRYOVER_NOT_IN_PREV_TOP2", "carryover_not_in_prev_top2_test_injected"),  # iter92
             ]:
                 _i83_env_val = os.environ.get(_i83_ik, "")
                 if _i83_env_val:
@@ -14147,7 +14308,19 @@ def _f600_run_fast_path(
                 _i83_sa["aws_devdoc_swaps"] = _i88_aws_devdoc_swaps  # iter88
                 _i83_sa["aws_devdoc_remaining"] = sum(1 for s in _selected if _is_aws_devdoc(s))  # iter88
                 _i83_sa["aws_devdoc_swap_log"] = _i91_aws_swap_log  # iter91
-                # iter91: enrich per-item rows with aws_devdoc fields
+                # iter92: carryover top-level fields
+                _i83_sa["carryover_total"] = _co_carryover_check
+                _i83_sa["carryover_max"] = 2
+                _i83_sa["carryover_max_pass"] = _co_carryover_pass
+                _i83_sa["fresh_items_total"] = _co_fresh_check
+                _i83_sa["fresh_items_min"] = 8
+                _i83_sa["fresh_items_min_pass"] = _co_fresh_pass
+                _i83_sa["carryover_not_in_prev_top2"] = _co_not_top2_check
+                _i83_sa["carryover_top2_only_pass"] = _co_not_top2_pass
+                _i83_sa["carryover_gates_apply"] = _co_gates_apply
+                _i83_sa["scheduled_previous_run_id"] = _co_prev_run_id
+                _i83_sa["scheduled_previous_head"] = _co_prev_head
+                # iter91: enrich per-item rows with aws_devdoc + iter92 carryover fields
                 for _i91_idx2, _i91_row2 in enumerate(_i83_sa.get("items", [])):
                     if _i91_idx2 < len(_selected):
                         _i91_s2 = _selected[_i91_idx2]
@@ -14160,6 +14333,11 @@ def _f600_run_fast_path(
                         _i91_row2["kept_in_final_selection"] = True
                         _i91_row2["swapped_out"] = False
                         _i91_row2["swap_reason"] = "none"
+                        # iter92: per-item carryover fields
+                        _i91_row2["carryover_item"] = _co_per_item[_i91_idx2]["carryover_item"] if _i91_idx2 < len(_co_per_item) else False
+                        _i91_row2["fresh_item"] = _co_per_item[_i91_idx2]["fresh_item"] if _i91_idx2 < len(_co_per_item) else True
+                        _i91_row2["prev_top2_item"] = _co_per_item[_i91_idx2]["prev_top2_item"] if _i91_idx2 < len(_co_per_item) else False
+                        _i91_row2["carryover_match_key"] = _co_per_item[_i91_idx2]["carryover_match_key"] if _i91_idx2 < len(_co_per_item) else ""
                 _i83_sa["executive_semantic_axes_distinct"] = _i83_exec_sem_distinct
                 _i83_sa["executive_semantic_gate_distinct"] = _i83_exec_sem_chk
                 _i83_sa["executive_semantic_gate_pass"] = _i83_exec_sem_chk >= _EXECUTIVE_SEMANTIC_MIN_AXES
@@ -14703,6 +14881,34 @@ def _f600_run_fast_path(
             _log.info("iter76: daily_last_ids.json written (entrypoint=%s ids=%d)", _oa_entrypoint, len(_oa_deferred_ids))
     except Exception as _oa_we:
         _log.warning("iter76: daily_last_ids write failed (non-fatal): %s", _oa_we)
+
+    # iter92: deferred scheduled_last_snapshot.json write — only on success, only for scheduled_task
+    try:
+        if _is_daily and _oa_entrypoint == "scheduled_task":
+            _co_snap_items = []
+            for _co_wi, _co_ws in enumerate(_selected):
+                _co_snap_items.append({
+                    "title": str(getattr(_co_ws, "title", "") or "")[:120],
+                    "url": str(getattr(_co_ws, "url", "") or getattr(_co_ws, "link", "") or "")[:200],
+                    "url_hash": _oa_item_hash(_co_ws),
+                    "rank": _co_wi,
+                })
+            _co_snap_top2 = [it["url_hash"] for it in _co_snap_items[:2] if it.get("url_hash")]
+            _co_snapshot_out = {
+                "run_id": _run_id,
+                "head": _f6_git_head,
+                "selected_count": len(_selected),
+                "top2_hashes": _co_snap_top2,
+                "items": _co_snap_items,
+            }
+            _co_snapshot_file.write_text(
+                _f6_j.dumps(_co_snapshot_out, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            _log.info("iter92: scheduled_last_snapshot.json written (run_id=%s items=%d top2=%s)",
+                      _run_id, len(_co_snap_items), _co_snap_top2)
+    except Exception as _co_swe:
+        _log.warning("iter92: scheduled_last_snapshot write failed (non-fatal): %s", _co_swe)
 
     _log.info(
         "FAST_600_MODE: complete — selected=%d distinct_sources=%d bigtech=%d pool_status=%s overlap_policy=%s ids_written=%s",
