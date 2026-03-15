@@ -11312,7 +11312,7 @@ def _f600_run_fast_path(
                           and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                           and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
                           and not _is_developer_release(it) and not _is_indie_dev_tone(it)
-                          and not _is_tutorial_explainer(it)
+                          and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)  # iter92
                           and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                           and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
             # iter81: relaxed density fallback if pool empty
@@ -11321,7 +11321,7 @@ def _f600_run_fast_path(
                               and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                               and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
                               and not _is_developer_release(it) and not _is_indie_dev_tone(it)
-                              and not _is_tutorial_explainer(it)
+                              and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)  # iter92
                               and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                               and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
                 if _i80b_pool:
@@ -11334,7 +11334,7 @@ def _f600_run_fast_path(
                 and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                 and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
                 and not _is_developer_release(it) and not _is_indie_dev_tone(it)
-                and not _is_tutorial_explainer(it)
+                and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)  # iter92
                 and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                 and _f6_domain_key(it) not in _i80b_cur_doms_check
                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
