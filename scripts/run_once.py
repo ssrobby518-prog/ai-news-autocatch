@@ -10030,8 +10030,7 @@ def _f600_run_fast_path(
                     continue
                 if _f6_is_google_research_blog(_co_ri):  # iter92: block ALL google research (combined cap)
                     continue
-                if _is_techcrunch(_co_ri):  # iter92: block techcrunch (combined cap)
-                    continue
+                # iter92: TC items allowed in pool; tc enforcement delegated to final_cap_enforcement
                 if _is_platform_domain(_co_ri):
                     continue
                 if _is_ceo_prohibited(_co_ri):
@@ -10069,11 +10068,10 @@ def _f600_run_fast_path(
                     _co_test_roles = len(set(_role_axis(s) for s in _co_test_sel))
                     _co_test_bt = sum(1 for s in _co_test_sel if _ct71_is_bigtech_actionable(s))
                     _co_test_tp = len(set(_f6_vendor_key(s) for s in _co_test_sel if _is_target_player(s)))
-                    _co_test_tc = sum(1 for s in _co_test_sel if _is_techcrunch(s))
-                    # Allow if at least the hard minimums are met
+                    # Allow if at least the hard minimums are met (tc delegated to final_cap_enforcement)
                     if (_co_test_boma >= 8 and _co_test_bt >= 7 and _co_test_buckets >= 5
                             and _co_test_roles >= 4 and _co_test_doms >= 4 and _co_test_vens >= 4
-                            and _co_test_tp >= 6 and _co_test_tc <= 3):
+                            and _co_test_tp >= 6):
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
                         _new_title = str(getattr(_co_repl, "title", "") or "")[:60]
                         _selected[_co_bi] = _co_repl
