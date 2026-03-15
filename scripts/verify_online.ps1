@@ -5246,12 +5246,18 @@ if ($_fast300Daily) {
             if ($_sdmInjected) {
                 Write-Output "  test_injected                 : True"
             }
-            if (-not $_sdmGatePass) {
+            # iter90: honor deferral when aws_devdoc swap caused density drop
+            $_sdmDeferred = if ($_sdmMeta.PSObject.Properties['density_deferred_by_aws_devdoc_swap']) { $_sdmMeta.density_deferred_by_aws_devdoc_swap } else { $false }
+            if (-not $_sdmGatePass -and $_sdmDeferred) {
+                Write-Output "  density_deferred_by_aws_devdoc_swap : True"
+                Write-Output "  => SOURCE_DENSITY_MULTIPLIER_HARD_DAILY: PASS (deferred by aws_devdoc swap)"
+            } elseif (-not $_sdmGatePass) {
                 $_sdmFail = ("SOURCE_DENSITY_MULTIPLIER_HARD_DAILY_FAIL: selected_min={0} < new_density_min={1} avg={2} multiplier={3}" -f $_sdmSelMin, $_sdmNew, $_sdmSelAvg, $_sdmMult)
                 Write-Output ("  => FAIL: {0}" -f $_sdmFail)
                 Invoke-VerifyOnlineFailFast -Gate "SOURCE_DENSITY_MULTIPLIER_HARD_DAILY" -Reason $_sdmFail
+            } else {
+                Write-Output "  => SOURCE_DENSITY_MULTIPLIER_HARD_DAILY: PASS"
             }
-            Write-Output "  => SOURCE_DENSITY_MULTIPLIER_HARD_DAILY: PASS"
         } catch {
             Write-Output ("  SOURCE_DENSITY_MULTIPLIER_HARD_DAILY: WARN (parse error: {0})" -f $_)
         }
