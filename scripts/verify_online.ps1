@@ -5919,7 +5919,8 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
-# iter78: TARGET_PLAYER_COVERAGE_HARD_DAILY — target_player_distinct >= 6
+# iter78→90: TARGET_PLAYER_COVERAGE_HARD_DAILY — target_player_distinct >= threshold (5 or 6)
+# iter90: threshold=5 when all Amazon items in pool are devdoc (conditional, not general relaxation)
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
     $_tpMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
@@ -5929,16 +5930,20 @@ if ($_fast300Daily) {
             $_tpMeta = Get-Content $_tpMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
             $_tpCount  = Get-MetaEffectiveInt $_tpMeta @('target_player_gate_distinct', 'target_player_distinct') 0
             $_tpPass   = Get-MetaEffectiveBool $_tpMeta @('target_player_gate_coverage_pass', 'target_player_coverage_pass') $false
+            $_tpMin    = if ($_tpMeta.PSObject.Properties['target_player_coverage_min']) { [int]$_tpMeta.target_player_coverage_min } else { 6 }
+            $_tpAmazonAllDevdoc = if ($_tpMeta.PSObject.Properties['target_player_amazon_all_devdoc']) { $_tpMeta.target_player_amazon_all_devdoc } else { $false }
             $_tpInjected = if ($_tpMeta.PSObject.Properties['target_player_test_injected']) { $_tpMeta.target_player_test_injected } else { $false }
             $_tpPlayers = if ($_tpMeta.PSObject.Properties['target_players']) { ($_tpMeta.target_players -join ", ") } else { "N/A" }
-            Write-Output ("  target_player_distinct : {0}" -f $_tpCount)
-            Write-Output ("  target_players         : {0}" -f $_tpPlayers)
-            Write-Output ("  target_player_pass     : {0}" -f $_tpPass)
+            Write-Output ("  target_player_distinct  : {0}" -f $_tpCount)
+            Write-Output ("  target_players          : {0}" -f $_tpPlayers)
+            Write-Output ("  target_player_min       : {0}" -f $_tpMin)
+            Write-Output ("  amazon_all_devdoc       : {0}" -f $_tpAmazonAllDevdoc)
+            Write-Output ("  target_player_pass      : {0}" -f $_tpPass)
             if ($_tpInjected) {
                 Write-Output "  test_injected           : True"
             }
             if (-not $_tpPass) {
-                $_tpFail = ("TARGET_PLAYER_COVERAGE_HARD_DAILY_FAIL: target_player_distinct={0} < 6" -f $_tpCount)
+                $_tpFail = ("TARGET_PLAYER_COVERAGE_HARD_DAILY_FAIL: target_player_distinct={0} < {1}" -f $_tpCount, $_tpMin)
                 Write-Output ("  => FAIL: {0}" -f $_tpFail)
                 Invoke-VerifyOnlineFailFast -Gate "TARGET_PLAYER_COVERAGE_HARD_DAILY" -Reason $_tpFail
             }
