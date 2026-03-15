@@ -10026,7 +10026,15 @@ def _f600_run_fast_path(
                     continue
                 if _is_hf_blog_explainer(_co_ri):
                     continue
+                if _is_non_strategic_google_research(_co_ri):
+                    continue
+                if _is_platform_domain(_co_ri):
+                    continue
+                if _is_ceo_prohibited(_co_ri):
+                    continue
                 if not _f6_is_bigtech(_co_ri):
+                    continue
+                if not _ct72b_is_bigtech_official_media_actionable(_co_ri):
                     continue
                 _co_ft = int(getattr(_co_ri, "fulltext_len", 0) or 0)
                 if _co_ft < 300:
