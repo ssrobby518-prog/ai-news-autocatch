@@ -10865,8 +10865,12 @@ def _f600_run_fast_path(
                         break
                     _i88_swapped = False
                     _i88_inv_b = _i80_invariant_snapshot(_selected)
+                    _i88_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))  # iter92: absolute tc check
                     for _i88_cand in _i88_pool:
                         if _i88_cand in _selected:
+                            continue
+                        # iter92: absolute tc cap — never introduce TC when already at/above cap
+                        if _is_techcrunch(_i88_cand) and _i88_cur_tc >= 3 and not _is_techcrunch(_selected[_i88_target_idx]):
                             continue
                         _i88_test = [s if j != _i88_target_idx else _i88_cand for j, s in enumerate(_selected)]
                         _i88_inv_a = _i80_invariant_snapshot(_i88_test)
@@ -10915,8 +10919,12 @@ def _f600_run_fast_path(
                     # Clearing AWS devdoc is higher priority than maintaining density floor
                     _i90_inv_before = _i80_invariant_snapshot(_selected)
                     _i90_density_deferrable = {"density_floor", "per_item_sd", "sd_avg", "target_player"}
+                    _i90_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))  # iter92
                     for _i90_cand in _i90_nuclear_pool:
                         if _i90_cand in _selected:
+                            continue
+                        # iter92: absolute tc cap — never introduce TC when already at/above cap
+                        if _is_techcrunch(_i90_cand) and _i90_cur_tc >= 3 and not _is_techcrunch(_selected[_i90_target_idx]):
                             continue
                         _i90_test = [s if j != _i90_target_idx else _i90_cand for j, s in enumerate(_selected)]
                         _i90_inv = _i80_invariant_snapshot(_i90_test)
