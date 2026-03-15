@@ -10039,25 +10039,45 @@ def _f600_run_fast_path(
                 -int(getattr(x, "fulltext_len", 0) or 0),
             ))
             _log.info("iter92 carryover swap: pool=%d for %d replacements", len(_co_swap_pool), len(_co_blocked_indices))
-            # Replace blocked items
-            _co_pool_idx = 0
+            # Replace blocked items — try multiple candidates per position
+            _co_used_pool = set()
             for _co_bi in _co_blocked_indices:
-                if _co_pool_idx >= len(_co_swap_pool):
-                    break
-                _co_repl = _co_swap_pool[_co_pool_idx]
-                # Verify swap doesn't break critical invariants
-                _co_test_sel = list(_selected)
-                _co_test_sel[_co_bi] = _co_repl
-                _co_test_boma = sum(1 for s in _co_test_sel if _ct72b_is_bigtech_official_media_actionable(s))
-                _co_test_doms = len(set(_f6_domain_key(s) for s in _co_test_sel))
-                _co_test_buckets = len(set(_ct72b_strategic_bucket(s) for s in _co_test_sel))
-                if _co_test_boma >= 8 and _co_test_doms >= 4 and _co_test_buckets >= 5:
-                    _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
-                    _new_title = str(getattr(_co_repl, "title", "") or "")[:60]
-                    _selected[_co_bi] = _co_repl
-                    _co_swap_count += 1
-                    _log.info("iter92 carryover swap [%d→%d]: '%s' → '%s'", _co_bi, _co_pool_idx, _old_title, _new_title)
-                _co_pool_idx += 1
+                _co_swapped = False
+                for _co_pi, _co_repl in enumerate(_co_swap_pool):
+                    if _co_pi in _co_used_pool:
+                        continue
+                    # Light invariant check: only ensure we don't crash critical hard gates
+                    _co_test_sel = list(_selected)
+                    _co_test_sel[_co_bi] = _co_repl
+                    _co_test_boma = sum(1 for s in _co_test_sel if _ct72b_is_bigtech_official_media_actionable(s))
+                    _co_test_doms = len(set(_f6_domain_key(s) for s in _co_test_sel))
+                    _co_test_vens = len(set(_f6_vendor_key(s) for s in _co_test_sel) - {"other"})
+                    _co_test_buckets = len(set(_ct72b_strategic_bucket(s) for s in _co_test_sel))
+                    _co_test_roles = len(set(_role_axis(s) for s in _co_test_sel))
+                    _co_test_bt = sum(1 for s in _co_test_sel if _ct71_is_bigtech_actionable(s))
+                    # Allow if at least the hard minimums are met
+                    if (_co_test_boma >= 8 and _co_test_bt >= 7 and _co_test_buckets >= 5
+                            and _co_test_roles >= 4 and _co_test_doms >= 4 and _co_test_vens >= 4):
+                        _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
+                        _new_title = str(getattr(_co_repl, "title", "") or "")[:60]
+                        _selected[_co_bi] = _co_repl
+                        _co_used_pool.add(_co_pi)
+                        _co_swap_count += 1
+                        _co_swapped = True
+                        _log.info("iter92 carryover swap [idx=%d pool=%d]: '%s' → '%s'", _co_bi, _co_pi, _old_title, _new_title)
+                        break
+                if not _co_swapped:
+                    # Forced swap: carryover gate is a hard FAIL, so replace anyway with best candidate
+                    for _co_pi2, _co_repl2 in enumerate(_co_swap_pool):
+                        if _co_pi2 in _co_used_pool:
+                            continue
+                        _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
+                        _new_title = str(getattr(_co_repl2, "title", "") or "")[:60]
+                        _selected[_co_bi] = _co_repl2
+                        _co_used_pool.add(_co_pi2)
+                        _co_swap_count += 1
+                        _log.info("iter92 carryover FORCED swap [idx=%d pool=%d]: '%s' → '%s'", _co_bi, _co_pi2, _old_title, _new_title)
+                        break
             _log.info("iter92 carryover swap: completed %d/%d replacements", _co_swap_count, len(_co_blocked_indices))
 
     # iter92: compute carryover stats (after all dedup/swap, before gates)
