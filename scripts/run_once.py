@@ -10053,6 +10053,7 @@ def _f600_run_fast_path(
             _log.info("iter92 carryover swap: pool=%d for %d replacements", len(_co_swap_pool), len(_co_blocked_indices))
             # Replace blocked items — try multiple candidates per position
             _co_used_pool = set()
+            _co_skip_count = 0  # iter92: track skipped forced swaps
             for _co_bi in _co_blocked_indices:
                 _co_swapped = False
                 for _co_pi, _co_repl in enumerate(_co_swap_pool):
@@ -10079,6 +10080,13 @@ def _f600_run_fast_path(
                         _log.info("iter92 carryover swap [idx=%d pool=%d]: '%s' → '%s'", _co_bi, _co_pi, _old_title, _new_title)
                         break
                 if not _co_swapped:
+                    # iter92: skip forced swap if carryover total would still pass (<=2) without it
+                    _co_top2_in_sel = sum(1 for s in _selected if _oa_item_hash(s) in _co_prev_top2_hashes)
+                    _co_if_skip = _co_top2_in_sel + _co_skip_count + 1
+                    if _co_if_skip <= 2:
+                        _co_skip_count += 1
+                        _log.info("iter92 carryover swap: skip forced swap at idx=%d (projected carryover=%d <= 2)", _co_bi, _co_if_skip)
+                        continue
                     # Forced swap: carryover gate is a hard FAIL, so replace anyway with best candidate
                     for _co_pi2, _co_repl2 in enumerate(_co_swap_pool):
                         if _co_pi2 in _co_used_pool:
