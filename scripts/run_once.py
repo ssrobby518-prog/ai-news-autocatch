@@ -10730,6 +10730,100 @@ def _f600_run_fast_path(
                         _log.warning("iter90 AWS devdoc swap (nuclear): could not replace idx=%d; top candidate diagnostics: %s",
                                      _i90_target_idx, "; ".join(_i90_fail_reasons[:3]))
                         break
+            # iter90 pass 4: coordinated two-item swap for target_player deadlock
+            # When AWS devdoc item is sole Amazon tp, inject a non-devdoc Amazon-tp item
+            # at a safe position first, then swap out the AWS devdoc item
+            if sum(1 for s in _selected if _is_aws_devdoc(s)) > 0:
+                _i90_aws_indices = [i for i, s in enumerate(_selected) if _is_aws_devdoc(s)]
+                # Check if Amazon tp is only provided by AWS devdoc items
+                _i90_amazon_tp_non_devdoc = [i for i, s in enumerate(_selected)
+                                              if _f6_vendor_key(s) == "Amazon" and not _is_aws_devdoc(s)]
+                if not _i90_amazon_tp_non_devdoc:
+                    _log.info("iter90 coordinated swap: Amazon tp only from AWS devdoc, attempting two-item swap")
+                    # Find non-devdoc Amazon-tp candidates in the pool
+                    _i90_amazon_pool = [it for it in _f6_tier(300) if it not in _selected
+                                        and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                                        and not _is_aws_devdoc(it)
+                                        and _f6_vendor_key(it) == "Amazon"]
+                    _i90_amazon_pool.sort(key=lambda it: -int(getattr(it, "fulltext_len", 0) or 0))
+                    _log.info("iter90 coordinated swap: amazon_tp_pool=%d", len(_i90_amazon_pool))
+                    _i90_coord_done = False
+                    for _i90_amz in _i90_amazon_pool:
+                        if _i90_coord_done:
+                            break
+                        # Find a non-essential position to inject this Amazon-tp item
+                        # Prefer items from over-represented vendors (max_vendor count)
+                        _i90_vendor_counts: dict = {}
+                        for _i90vi, _i90vs in enumerate(_selected):
+                            if _i90vi not in _i90_aws_indices:
+                                _vk = _f6_vendor_key(_i90vs)
+                                _i90_vendor_counts.setdefault(_vk, []).append(_i90vi)
+                        # Sort by vendor count desc (over-represented first), skip Amazon
+                        _i90_inject_candidates = []
+                        for _vk, _idxs in sorted(_i90_vendor_counts.items(), key=lambda x: -len(x[1])):
+                            if _vk == "Amazon":
+                                continue
+                            if len(_idxs) >= 2:  # only from over-represented vendors
+                                _i90_inject_candidates.extend(_idxs)
+                        for _i90_inject_idx in _i90_inject_candidates:
+                            # Step 1: try injecting Amazon-tp item at inject_idx
+                            _i90_test1 = list(_selected)
+                            _i90_displaced = _i90_test1[_i90_inject_idx]
+                            _i90_test1[_i90_inject_idx] = _i90_amz
+                            _i90_inv1 = _i80_invariant_snapshot(_i90_test1)
+                            if not all(_i90_inv1.values()):
+                                continue  # injection itself breaks invariants
+                            # Step 2: now swap out the AWS devdoc item
+                            # Try displaced item first, then nuclear pool
+                            for _i90_aws_idx in _i90_aws_indices:
+                                _i90_test2 = list(_i90_test1)
+                                # Try displaced item as replacement for AWS devdoc
+                                _i90_test2[_i90_aws_idx] = _i90_displaced
+                                _i90_inv2 = _i80_invariant_snapshot(_i90_test2)
+                                if all(_i90_inv2.values()):
+                                    _log.info("iter90 coordinated swap: injected Amazon-tp '%s' at idx=%d, "
+                                              "moved displaced '%s' to idx=%d (was AWS devdoc)",
+                                              str(getattr(_i90_amz, "title", ""))[:50],
+                                              _i90_inject_idx,
+                                              str(getattr(_i90_displaced, "title", ""))[:50],
+                                              _i90_aws_idx)
+                                    _selected[_i90_inject_idx] = _i90_amz
+                                    _selected[_i90_aws_idx] = _i90_displaced
+                                    _i88_aws_devdoc_swaps += 1
+                                    _i90_coord_done = True
+                                    break
+                            if _i90_coord_done:
+                                break
+                            # Try nuclear pool candidates for the AWS devdoc position
+                            if not _i90_coord_done:
+                                _i90_nuc2 = [it for it in _f6_tier(300) if it not in _i90_test1
+                                             and it is not _i90_amz and it is not _i90_displaced
+                                             and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                                             and not _is_aws_devdoc(it)]
+                                for _i90_aws_idx in _i90_aws_indices:
+                                    for _i90_nuc_cand in _i90_nuc2:
+                                        _i90_test2 = list(_i90_test1)
+                                        _i90_test2[_i90_aws_idx] = _i90_nuc_cand
+                                        _i90_inv2 = _i80_invariant_snapshot(_i90_test2)
+                                        if all(_i90_inv2.values()):
+                                            _log.info("iter90 coordinated swap: injected Amazon-tp '%s' at idx=%d, "
+                                                      "replaced AWS devdoc at idx=%d with '%s'",
+                                                      str(getattr(_i90_amz, "title", ""))[:50],
+                                                      _i90_inject_idx,
+                                                      _i90_aws_idx,
+                                                      str(getattr(_i90_nuc_cand, "title", ""))[:50])
+                                            _selected[_i90_inject_idx] = _i90_amz
+                                            _selected[_i90_aws_idx] = _i90_nuc_cand
+                                            _i88_aws_devdoc_swaps += 1
+                                            _i90_coord_done = True
+                                            break
+                                    if _i90_coord_done:
+                                        break
+                        if _i90_coord_done:
+                            break
+                    if not _i90_coord_done:
+                        _log.warning("iter90 coordinated swap: FAILED — no valid two-item swap found "
+                                     "(amazon_pool=%d)", len(_i90_amazon_pool))
             if _i88_aws_devdoc_swaps > 0:
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
                 _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
