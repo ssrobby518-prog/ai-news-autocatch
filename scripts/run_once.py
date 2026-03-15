@@ -14978,9 +14978,11 @@ def _f600_run_fast_path(
         _log.warning("FAST_600_MODE: LAST_RUN_SUMMARY write failed (non-fatal): %s", _lrse)
 
     # iter76: deferred daily_last_ids write — only on success, only for scheduled_task
+    # iter92: recompute from final _selected (post-swap) to match snapshot
     _oa_ids_written = False
     try:
         if _is_daily and _oa_deferred_ids is not None:
+            _oa_deferred_ids = [_oa_item_hash(s) for s in _selected if _oa_item_hash(s)]  # iter92: use final selection
             _oa_prev_file.write_text(
                 _f6_j.dumps({"run_id": _run_id, "ids": _oa_deferred_ids}, ensure_ascii=False),
                 encoding="utf-8",
