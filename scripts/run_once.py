@@ -13452,7 +13452,7 @@ def _f600_run_fast_path(
                               and not _is_ceo_prohibited(it) and not _is_hf_blog_explainer(it)
                               and not _is_forum_discussion(it) and not _is_developer_release(it)
                               and not _is_indie_dev_tone(it) and not _is_tutorial_explainer(it)
-                              and _f6_src_type(it) in _BT_OM_TYPES
+                              and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                               and _i83_pdd_candidate_ok(it)
                               and _f6_domain_key(it) not in _pdd_cur_doms]
             if _pdd_wide_pool:
