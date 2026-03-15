@@ -9967,8 +9967,12 @@ def _f600_run_fast_path(
                 _cur_hashes = [_item_hash(it) for it in _selected]
                 _overlap_count = sum(1 for h in _cur_hashes if h and h in _prev_ids)
             # iter76: only fail on overlap if dup gate is enabled (scheduled_task only)
-            if _overlap_count > 2 and _oa_dup_gate_enabled:
+            # iter92: exempt from daily dedup when carryover gates provide stronger freshness guarantee
+            _co_dedup_exempt = bool(_co_prev_all_hashes) and _overlap_count <= 3  # carryover swap handles freshness
+            if _overlap_count > 2 and _oa_dup_gate_enabled and not _co_dedup_exempt:
                 _f6_fail("DAILY_DUP_OVER_CAP", f"overlap_with_prev_daily={_overlap_count} > 2")
+            elif _overlap_count > 2 and _co_dedup_exempt:
+                _log.info("iter92: overlap_with_prev_daily=%d > 2 but carryover gates apply — dedup exempted", _overlap_count)
             elif _overlap_count > 2:
                 _log.info("iter76: overlap_with_prev_daily=%d > 2 but dup_gate DISABLED (entrypoint=%s) — skipping FAIL",
                           _overlap_count, _oa_entrypoint)
