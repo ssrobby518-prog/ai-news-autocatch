@@ -7956,7 +7956,7 @@ def _f600_run_fast_path(
         _forum_p = -6 if _is_forum_discussion(it) else 0
         _tutorial_p = -5 if _is_tutorial_explainer(it) else 0
         _gresearch_p = -4 if _f6_is_google_research_blog(it) else 0
-        _aws_devdoc_p = -8 if _is_aws_devdoc(it) else 0  # iter89: AWS devdoc heavy penalty (sort to bottom)
+        _aws_devdoc_p = -20 if _is_aws_devdoc(it) else 0  # iter90: AWS devdoc extreme penalty (must not be selected)
         # iter71→72b: actionable-type bonus
         _act71 = 3 if _ct71_is_actionable(it) else (-2 if _ct71_is_research_tutorial(it) else 0)
         # iter72b: bigtech_official_media_actionable super-priority
@@ -8199,11 +8199,10 @@ def _f600_run_fast_path(
         def _is_ceo_prohibited(it) -> bool:
             """iter90: True if item is any type that must not enter CEO daily brief.
             NOTE: google_research is NO LONGER prohibited (allowed up to 3).
-            iter90: _is_aws_devdoc now included — hard-block from all pools."""
+            NOTE: _is_aws_devdoc NOT in pool filter — handled by sort penalty + aggressive swap + hard FAIL gate."""
             return (_is_developer_release(it) or _is_indie_dev_tone(it)
                     or _is_forum_discussion(it) or _is_tutorial_explainer(it)
-                    or _is_hf_blog_explainer(it) or _is_tutorial_semantic(it)
-                    or _is_aws_devdoc(it))
+                    or _is_hf_blog_explainer(it) or _is_tutorial_semantic(it))
 
         # Pool BOMA: bigtech_official_media_actionable + non-platform + non-prohibited + density pass
         # iter77: unified _is_ceo_prohibited filter (forum/tutorial/devrel/indie/google_research)
@@ -10626,49 +10625,59 @@ def _f600_run_fast_path(
             except Exception:
                 pass
 
-    # --- iter88: AWS devdoc swap — try to replace AWS developer/documentation items ---
+    # --- iter90: AWS devdoc aggressive swap — two-pass: strict pool then broad pool ---
     _i88_aws_devdoc_swaps = 0
     _i88_aws_devdoc_found = 0
     if _is_daily and len(_selected) >= _max_events:
         _i88_aws_devdoc_found = sum(1 for s in _selected if _is_aws_devdoc(s))
         if _i88_aws_devdoc_found > 0:
-            _i88_pool = [it for it in _f6_tier(300) if it not in _selected
-                         and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
-                         and not _is_aws_devdoc(it)
-                         and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
-                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
-            for _i88_round in range(10):
-                _i88_target_idx = None
-                for _i88i, _i88s in enumerate(_selected):
-                    if _is_aws_devdoc(_i88s):
-                        _i88_target_idx = _i88i
-                        break
-                if _i88_target_idx is None:
+            # Pass 1: strict pool (bigtech + official/media + density >= 12)
+            _i90_pools = [
+                ("strict", [it for it in _f6_tier(300) if it not in _selected
+                            and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                            and not _is_aws_devdoc(it)
+                            and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]),
+                # Pass 2: broad pool (any non-devnoise, non-prohibited, non-aws-devdoc with density >= 8)
+                ("broad", [it for it in _f6_tier(300) if it not in _selected
+                           and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                           and not _is_aws_devdoc(it)
+                           and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]),
+            ]
+            for _i90_pass_name, _i88_pool in _i90_pools:
+                if sum(1 for s in _selected if _is_aws_devdoc(s)) == 0:
                     break
-                _i88_swapped = False
-                _i88_inv_b = _i80_invariant_snapshot(_selected)
-                for _i88_cand in _i88_pool:
-                    if _i88_cand in _selected:
-                        continue
-                    _i88_test = [s if j != _i88_target_idx else _i88_cand for j, s in enumerate(_selected)]
-                    _i88_inv_a = _i80_invariant_snapshot(_i88_test)
-                    _i88_ok, _i88_reg = _i80_no_regression(_i88_inv_b, _i88_inv_a)
-                    if not _i88_ok:
-                        _i88_ok = all(not _i88_inv_b[k] for k in _i88_reg)
-                    if _i88_ok:
-                        _log.info("iter88 AWS devdoc swap: replaced idx=%d title='%s' with '%s'",
-                                  _i88_target_idx,
-                                  str(getattr(_selected[_i88_target_idx], "title", ""))[:60],
-                                  str(getattr(_i88_cand, "title", ""))[:60])
-                        _selected[_i88_target_idx] = _i88_cand
-                        _i88_aws_devdoc_swaps += 1
-                        _i88_swapped = True
+                for _i88_round in range(10):
+                    _i88_target_idx = None
+                    for _i88i, _i88s in enumerate(_selected):
+                        if _is_aws_devdoc(_i88s):
+                            _i88_target_idx = _i88i
+                            break
+                    if _i88_target_idx is None:
                         break
-                if not _i88_swapped:
-                    _log.warning("iter88 AWS devdoc swap: could not replace idx=%d title='%s' (no non-regressing candidate)",
-                                 _i88_target_idx,
-                                 str(getattr(_selected[_i88_target_idx], "title", ""))[:60])
-                    break
+                    _i88_swapped = False
+                    _i88_inv_b = _i80_invariant_snapshot(_selected)
+                    for _i88_cand in _i88_pool:
+                        if _i88_cand in _selected:
+                            continue
+                        _i88_test = [s if j != _i88_target_idx else _i88_cand for j, s in enumerate(_selected)]
+                        _i88_inv_a = _i80_invariant_snapshot(_i88_test)
+                        _i88_ok, _i88_reg = _i80_no_regression(_i88_inv_b, _i88_inv_a)
+                        if not _i88_ok:
+                            _i88_ok = all(not _i88_inv_b[k] for k in _i88_reg)
+                        if _i88_ok:
+                            _log.info("iter90 AWS devdoc swap (%s): replaced idx=%d title='%s' with '%s'",
+                                      _i90_pass_name, _i88_target_idx,
+                                      str(getattr(_selected[_i88_target_idx], "title", ""))[:60],
+                                      str(getattr(_i88_cand, "title", ""))[:60])
+                            _selected[_i88_target_idx] = _i88_cand
+                            _i88_aws_devdoc_swaps += 1
+                            _i88_swapped = True
+                            break
+                    if not _i88_swapped:
+                        _log.warning("iter90 AWS devdoc swap (%s): could not replace idx=%d (no non-regressing candidate)",
+                                     _i90_pass_name, _i88_target_idx)
+                        break
             if _i88_aws_devdoc_swaps > 0:
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
                 _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
@@ -10677,7 +10686,7 @@ def _f600_run_fast_path(
                 except Exception:
                     pass
                 _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
-                _log.info("iter88 AWS devdoc swap done: found=%d swapped=%d remaining=%d",
+                _log.info("iter90 AWS devdoc swap done: found=%d swapped=%d remaining=%d",
                           _i88_aws_devdoc_found, _i88_aws_devdoc_swaps,
                           sum(1 for s in _selected if _is_aws_devdoc(s)))
 
