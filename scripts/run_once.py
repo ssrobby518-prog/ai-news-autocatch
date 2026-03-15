@@ -10567,14 +10567,14 @@ def _f600_run_fast_path(
         _i80_inv_fr = _i80_invariant_snapshot(_selected)
         _fr_pool = [it for it in _pool_700 if it not in _selected
                     and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
-                    and not _is_hf_blog_explainer(it)
+                    and not _is_hf_blog_explainer(it) and not _is_aws_devdoc(it)  # iter92
                     and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         # iter81: sort FR pool so non-TC items come first (FR-1 picks first match → avoids TC bloat)
         _fr_pool.sort(key=lambda it: (1 if _is_techcrunch(it) else 0, -_f6_bfp(it)))
         # iter78b: also build wider pool (pool_sorted, relaxed density) for target_player rescue only
         _fr_pool_wide = [it for it in _pool_sorted if it not in _selected and it not in _fr_pool
                          and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
-                         and _is_target_player(it)
+                         and _is_target_player(it) and not _is_aws_devdoc(it)  # iter92
                          and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
         # iter81: sort wider pool too — prefer non-TC
         _fr_pool_wide.sort(key=lambda it: (1 if _is_techcrunch(it) else 0, -_f6_bfp(it)))
@@ -11036,6 +11036,7 @@ def _f600_run_fast_path(
                            and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                            and not _is_techcrunch(it) and not _f6_is_google_research_blog(it)
                            and not _is_platform_domain(it) and not _is_hf_blog_explainer(it)
+                           and not _is_aws_devdoc(it)  # iter92: prevent aws devdoc reintroduction
                            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         # iter81: if pool empty, try relaxed density (>=8) to avoid "no pool" deadlock
         if not _i80_final_pool:
@@ -11044,6 +11045,7 @@ def _f600_run_fast_path(
                                and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                                and not _is_techcrunch(it) and not _f6_is_google_research_blog(it)
                                and not _is_platform_domain(it) and not _is_hf_blog_explainer(it)
+                               and not _is_aws_devdoc(it)  # iter92: prevent aws devdoc reintroduction
                                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
             if _i80_final_pool:
                 _log.info("iter81: final cap pool relaxed density (>=%d→>=8), pool=%d", _HDF_NEW_DENSITY_MIN, len(_i80_final_pool))
