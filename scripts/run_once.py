@@ -10678,11 +10678,20 @@ def _f600_run_fast_path(
                         _log.warning("iter90 AWS devdoc swap (%s): could not replace idx=%d (no non-regressing candidate)",
                                      _i90_pass_name, _i88_target_idx)
                         break
-            # iter90 pass 3: nuclear — accept any swap where ALL hard gates still pass (allow regressions)
+            # iter90 pass 3: nuclear — prioritize new-domain candidates to maintain domain diversity
             if sum(1 for s in _selected if _is_aws_devdoc(s)) > 0:
+                _i90_existing_domains = set(_f6_domain_key(s) for s in _selected if not _is_aws_devdoc(s))
                 _i90_nuclear_pool = [it for it in _f6_tier(300) if it not in _selected
                                      and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                                      and not _is_aws_devdoc(it)]
+                # Sort: new domains first (to maintain min_domains), then by fulltext length
+                _i90_nuclear_pool.sort(key=lambda it: (
+                    0 if _f6_domain_key(it) not in _i90_existing_domains else 1,
+                    -int(getattr(it, "fulltext_len", 0) or 0)))
+                _log.info("iter90 nuclear pool: total=%d new_domain=%d existing_domain=%d",
+                          len(_i90_nuclear_pool),
+                          sum(1 for it in _i90_nuclear_pool if _f6_domain_key(it) not in _i90_existing_domains),
+                          sum(1 for it in _i90_nuclear_pool if _f6_domain_key(it) in _i90_existing_domains))
                 for _i90_round in range(10):
                     _i90_target_idx = None
                     for _i90i, _i90s in enumerate(_selected):
@@ -10699,17 +10708,27 @@ def _f600_run_fast_path(
                         _i90_inv = _i80_invariant_snapshot(_i90_test)
                         # Accept if ALL critical invariants pass (not no-regression, just absolute pass)
                         if all(_i90_inv.values()):
-                            _log.info("iter90 AWS devdoc swap (nuclear): replaced idx=%d title='%s' with '%s'",
+                            _log.info("iter90 AWS devdoc swap (nuclear): replaced idx=%d title='%s' with '%s' (domain=%s)",
                                       _i90_target_idx,
                                       str(getattr(_selected[_i90_target_idx], "title", ""))[:60],
-                                      str(getattr(_i90_cand, "title", ""))[:60])
+                                      str(getattr(_i90_cand, "title", ""))[:60],
+                                      _f6_domain_key(_i90_cand))
                             _selected[_i90_target_idx] = _i90_cand
                             _i88_aws_devdoc_swaps += 1
                             _i90_swapped = True
                             break
                     if not _i90_swapped:
-                        _log.warning("iter90 AWS devdoc swap (nuclear): could not replace idx=%d (no candidate passes all gates)",
-                                     _i90_target_idx)
+                        # Log which invariants are failing for the best candidates
+                        _i90_fail_reasons = []
+                        for _i90_dbg in _i90_nuclear_pool[:5]:
+                            if _i90_dbg in _selected:
+                                continue
+                            _i90_dbg_test = [s if j != _i90_target_idx else _i90_dbg for j, s in enumerate(_selected)]
+                            _i90_dbg_inv = _i80_invariant_snapshot(_i90_dbg_test)
+                            _i90_dbg_fails = [k for k, v in _i90_dbg_inv.items() if not v]
+                            _i90_fail_reasons.append(f"domain={_f6_domain_key(_i90_dbg)} fails={_i90_dbg_fails}")
+                        _log.warning("iter90 AWS devdoc swap (nuclear): could not replace idx=%d; top candidate diagnostics: %s",
+                                     _i90_target_idx, "; ".join(_i90_fail_reasons[:3]))
                         break
             if _i88_aws_devdoc_swaps > 0:
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
