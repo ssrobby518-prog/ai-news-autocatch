@@ -10678,6 +10678,39 @@ def _f600_run_fast_path(
                         _log.warning("iter90 AWS devdoc swap (%s): could not replace idx=%d (no non-regressing candidate)",
                                      _i90_pass_name, _i88_target_idx)
                         break
+            # iter90 pass 3: nuclear — accept any swap where ALL hard gates still pass (allow regressions)
+            if sum(1 for s in _selected if _is_aws_devdoc(s)) > 0:
+                _i90_nuclear_pool = [it for it in _f6_tier(300) if it not in _selected
+                                     and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                                     and not _is_aws_devdoc(it)]
+                for _i90_round in range(10):
+                    _i90_target_idx = None
+                    for _i90i, _i90s in enumerate(_selected):
+                        if _is_aws_devdoc(_i90s):
+                            _i90_target_idx = _i90i
+                            break
+                    if _i90_target_idx is None:
+                        break
+                    _i90_swapped = False
+                    for _i90_cand in _i90_nuclear_pool:
+                        if _i90_cand in _selected:
+                            continue
+                        _i90_test = [s if j != _i90_target_idx else _i90_cand for j, s in enumerate(_selected)]
+                        _i90_inv = _i80_invariant_snapshot(_i90_test)
+                        # Accept if ALL critical invariants pass (not no-regression, just absolute pass)
+                        if all(_i90_inv.values()):
+                            _log.info("iter90 AWS devdoc swap (nuclear): replaced idx=%d title='%s' with '%s'",
+                                      _i90_target_idx,
+                                      str(getattr(_selected[_i90_target_idx], "title", ""))[:60],
+                                      str(getattr(_i90_cand, "title", ""))[:60])
+                            _selected[_i90_target_idx] = _i90_cand
+                            _i88_aws_devdoc_swaps += 1
+                            _i90_swapped = True
+                            break
+                    if not _i90_swapped:
+                        _log.warning("iter90 AWS devdoc swap (nuclear): could not replace idx=%d (no candidate passes all gates)",
+                                     _i90_target_idx)
+                        break
             if _i88_aws_devdoc_swaps > 0:
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
                 _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
