@@ -10028,6 +10028,10 @@ def _f600_run_fast_path(
                     continue
                 if _is_non_strategic_google_research(_co_ri):
                     continue
+                if _f6_is_google_research_blog(_co_ri):  # iter92: block ALL google research (combined cap)
+                    continue
+                if _is_techcrunch(_co_ri):  # iter92: block techcrunch (combined cap)
+                    continue
                 if _is_platform_domain(_co_ri):
                     continue
                 if _is_ceo_prohibited(_co_ri):
