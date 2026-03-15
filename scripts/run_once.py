@@ -8211,6 +8211,7 @@ def _f600_run_fast_path(
             if not _is_platform_domain(it)
             and _ct72b_is_bigtech_official_media_actionable(it)
             and not _is_ceo_prohibited(it)
+            and not _is_aws_devdoc(it)  # iter90: exclude AWS devdoc from pools
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
         # Pool BTA: bigtech_actionable (non-official/media) — iter77: exclude all ceo-prohibited
@@ -8219,6 +8220,7 @@ def _f600_run_fast_path(
             if not _is_platform_domain(it)
             and _ct71_is_bigtech_actionable(it)
             and not _is_ceo_prohibited(it)
+            and not _is_aws_devdoc(it)  # iter90
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             and not _ct72b_is_bigtech_official_media_actionable(it)
         ], key=_sd73_key))
@@ -8230,11 +8232,13 @@ def _f600_run_fast_path(
             and _f6_is_bigtech(it)
             and not _f6_is_dev_noise(it)
             and not _is_ceo_prohibited(it)
+            and not _is_aws_devdoc(it)  # iter90
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
         # Pool PLAT: platform items (cap=1) — iter77: exclude all ceo-prohibited
         _p72_pool_plat = _oa_partition(sorted([
             it for it in _bt_om_pool_sorted if _is_platform_domain(it) and not _is_ceo_prohibited(it)
+            and not _is_aws_devdoc(it)  # iter90
         ], key=_sd73_key))
         # Pool RT: research/tutorial (cap=1) — iter77: excluded by _is_ceo_prohibited in other pools
         _p72_pool_rt = _oa_partition(sorted([
@@ -8252,6 +8256,7 @@ def _f600_run_fast_path(
             and not _is_platform_domain(it)
             and not _f6_is_dev_noise(it)
             and not _is_ceo_prohibited(it)
+            and not _is_aws_devdoc(it)  # iter90
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
         # iter73→77: Pool CHINA — china_ai_gov; exclude all ceo-prohibited
@@ -8261,6 +8266,7 @@ def _f600_run_fast_path(
             and not _is_platform_domain(it)
             and not _f6_is_dev_noise(it)
             and not _is_ceo_prohibited(it)
+            and not _is_aws_devdoc(it)  # iter90
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
 
