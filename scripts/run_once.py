@@ -9509,20 +9509,35 @@ def _f600_run_fast_path(
                  f"selected={len(_selected)} < target={_max_events} (INSUFFICIENT_ELIGIBLE_NON_PLATFORM_SUPPLY)")
 
     # --- iter90: pre-audit bigtech rescue — replace non-bigtech items with bigtech alternatives ---
+    # Check both _f6_is_bigtech (vendor+regex) AND audit-level (regex only on title+source)
+    def _i90_is_bigtech_audit(it) -> bool:
+        _t = str(getattr(it, "title", "") or "")
+        _s = str(getattr(it, "source_name", "") or "")
+        return bool(_BIGTECH_COMPANY_RE.search(_t) or _BIGTECH_COMPANY_RE.search(_s))
     if _is_daily and len(_selected) >= _max_events:
         _bt_rescue_pool = [it for it in _f6_tier(300) if it not in _selected
-                           and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                           and _f6_is_bigtech(it) and _i90_is_bigtech_audit(it)
+                           and _f6_src_type(it) in _BT_OM_TYPES
                            and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)]
         _bt_rescue_pool.sort(key=lambda it: -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0))
+        _i90_bt_rescue_count = 0
         for _bt_ri in range(len(_selected)):
             _bt_it = _selected[_bt_ri]
-            if not (_f6_is_bigtech(_bt_it) and _f6_src_type(_bt_it) in _BT_OM_TYPES):
+            _bt_ok = _f6_is_bigtech(_bt_it) and _i90_is_bigtech_audit(_bt_it) and _f6_src_type(_bt_it) in _BT_OM_TYPES
+            if not _bt_ok:
+                _log.info("iter90: non-bigtech detected idx=%d is_bt=%s audit_bt=%s src_type=%s vendor=%s title=%s",
+                          _bt_ri, _f6_is_bigtech(_bt_it), _i90_is_bigtech_audit(_bt_it),
+                          _f6_src_type(_bt_it), _f6_vendor_key(_bt_it),
+                          str(getattr(_bt_it, "title", ""))[:60])
                 for _bt_cand in _bt_rescue_pool:
                     if _bt_cand not in _selected:
                         _log.info("iter90: bigtech rescue — replacing non-bigtech idx=%d vendor=%s with %s",
                                   _bt_ri, _f6_vendor_key(_bt_it), str(getattr(_bt_cand, "title", ""))[:60])
                         _selected[_bt_ri] = _bt_cand
+                        _i90_bt_rescue_count += 1
                         break
+        if _i90_bt_rescue_count > 0:
+            _log.info("iter90: bigtech rescue replaced %d non-bigtech items", _i90_bt_rescue_count)
 
     # --- Step 2: write selection audit meta + bigtech_focus meta (card dicts) ---
     _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
