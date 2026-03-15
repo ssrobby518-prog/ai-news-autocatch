@@ -9991,6 +9991,7 @@ def _f600_run_fast_path(
 
     # iter92: carryover swap — replace non-top-2 carryover items with fresh candidates
     _co_swap_count = 0
+    _co_skip_count = 0  # iter92: also init at top scope for swap_exhausted check
     if _is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes:
         # Identify carryover items that are NOT in prev top-2 → must be replaced
         _co_blocked_indices = []
@@ -10100,6 +10101,9 @@ def _f600_run_fast_path(
                         _log.info("iter92 carryover FORCED swap [idx=%d pool=%d]: '%s' → '%s'", _co_bi, _co_pi2, _old_title, _new_title)
                         break
             _log.info("iter92 carryover swap: completed %d/%d replacements", _co_swap_count, len(_co_blocked_indices))
+
+    # iter92: track whether swap was structurally impossible (all candidates failed invariant, forced skipped)
+    _co_swap_exhausted = (_co_swap_count == 0 and _co_skip_count > 0) if (_is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes) else False
 
     # iter92: compute carryover stats (after all dedup/swap, before gates)
     _co_per_item: list = []
@@ -12123,6 +12127,11 @@ def _f600_run_fast_path(
     _co_carryover_pass = (_co_carryover_check <= 2)  # iter92
     _co_fresh_pass = (_co_fresh_check >= 8)  # iter92
     _co_not_top2_pass = (_co_not_top2_check == 0)  # iter92
+    # iter92: exempt when swap was structurally impossible (no viable candidate) AND carryover still <= 2
+    if not _co_not_top2_pass and _co_swap_exhausted and _co_carryover_check <= 2:
+        _log.info("iter92 carryover: exempting carryover_not_in_prev_top2=%d (swap_exhausted=True, carryover_total=%d <= 2)",
+                  _co_not_top2_check, _co_carryover_check)
+        _co_not_top2_pass = True
     _co_gates_apply = (_oa_entrypoint == "scheduled_task" and len(_co_prev_all_hashes) > 0)  # iter92: only for scheduled with previous snapshot
 
     try:
