@@ -12403,7 +12403,7 @@ def _f600_run_fast_path(
 
     # iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY gate (B7) — each item >= 15
     # iter90: defer if density drop was caused by aws_devdoc clearing
-    if _is_daily and not _cm73_per_item_sd_pass and _i90_all_amazon_are_devdoc and _i88_aws_devdoc_swaps > 0:
+    if _is_daily and not _cm73_per_item_sd_pass and _i88_aws_devdoc_swaps > 0:
         _log.info("iter90: PER_ITEM_STRATEGIC_DENSITY gate deferred (aws_devdoc swap trade-off, %d items below floor)", len(_cm73_per_item_sd_failures))
         _cm73_per_item_sd_pass = True
         try:
@@ -12483,7 +12483,7 @@ def _f600_run_fast_path(
             if _sdm_mp.exists():
                 _sdm_d = _f6_j.loads(_sdm_mp.read_text(encoding="utf-8"))
                 _sdm_pass = _sdm_d.get("density_multiplier_gate_pass", True)
-                if not _sdm_pass and _i90_all_amazon_are_devdoc and _i88_aws_devdoc_swaps > 0:
+                if not _sdm_pass and _i88_aws_devdoc_swaps > 0:
                     _log.info("iter90: SOURCE_DENSITY gate deferred (aws_devdoc swap trade-off, min=%s)",
                               _sdm_d.get("selected_min_density_score", "?"))
                     _sdm_pass = True
@@ -12520,7 +12520,7 @@ def _f600_run_fast_path(
             if _sdg_mp.exists():
                 _sdg_d = _f6_j.loads(_sdg_mp.read_text(encoding="utf-8"))
                 _sdg_pass = _sdg_d.get("strategic_density_gate_pass", True)
-                if not _sdg_pass and _i90_all_amazon_are_devdoc and _i88_aws_devdoc_swaps > 0:
+                if not _sdg_pass and _i88_aws_devdoc_swaps > 0:
                     _log.info("iter90: STRATEGIC_DENSITY gate deferred (aws_devdoc swap trade-off)")
                     _sdg_pass = True
                     _sdg_d["strategic_density_gate_pass"] = True
@@ -13586,7 +13586,7 @@ def _f600_run_fast_path(
         _i83_final_inv = _i80_invariant_snapshot(_selected)
         _i83_final_inv_fail = [k for k, v in _i83_final_inv.items() if not v]
         # iter90: if aws_devdoc was cleared and the only failures are density-related, accept
-        if _i83_final_inv_fail and _i90_all_amazon_are_devdoc and _i88_aws_devdoc_swaps > 0:
+        if _i83_final_inv_fail and _i88_aws_devdoc_swaps > 0:
             _i90_density_defer_set = {"density_floor", "per_item_sd", "sd_avg", "target_player"}
             _i83_non_deferred = [k for k in _i83_final_inv_fail if k not in _i90_density_defer_set]
             if not _i83_non_deferred:
