@@ -10716,19 +10716,20 @@ def _f600_run_fast_path(
                     if _i90_target_idx is None:
                         break
                     _i90_swapped = False
-                    # iter90: check if Amazon tp is solely from devdoc items — allow tp drop if so
-                    _i90_amazon_only_devdoc = (
-                        all(_is_aws_devdoc(s) for s in _selected if _f6_vendor_key(s) == "Amazon")
-                        and any(_f6_vendor_key(s) == "Amazon" for s in _selected))
+                    # iter90: use no-regression with deferrable density gates
+                    # Clearing AWS devdoc is higher priority than maintaining density floor
+                    _i90_inv_before = _i80_invariant_snapshot(_selected)
+                    _i90_density_deferrable = {"density_floor", "per_item_sd", "sd_avg", "target_player"}
                     for _i90_cand in _i90_nuclear_pool:
                         if _i90_cand in _selected:
                             continue
                         _i90_test = [s if j != _i90_target_idx else _i90_cand for j, s in enumerate(_selected)]
                         _i90_inv = _i80_invariant_snapshot(_i90_test)
-                        # Accept if ALL invariants pass, OR if only target_player fails
-                        # (when Amazon tp is solely from devdoc items — unavoidable loss)
-                        _i90_fails = [k for k, v in _i90_inv.items() if not v]
-                        if all(_i90_inv.values()) or (_i90_amazon_only_devdoc and _i90_fails == ["target_player"]):
+                        _i90_ok, _i90_reg = _i80_no_regression(_i90_inv_before, _i90_inv)
+                        # Accept if no regression, OR if only density/tp invariants regress
+                        if not _i90_ok:
+                            _i90_ok = all(k in _i90_density_deferrable for k in _i90_reg)
+                        if _i90_ok:
                             _log.info("iter90 AWS devdoc swap (nuclear): replaced idx=%d title='%s' with '%s' (domain=%s)",
                                       _i90_target_idx,
                                       str(getattr(_selected[_i90_target_idx], "title", ""))[:60],
