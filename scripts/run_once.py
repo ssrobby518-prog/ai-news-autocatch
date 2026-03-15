@@ -14315,7 +14315,7 @@ def _f600_run_fast_path(
                 "selected_role_axes_gate_distinct": _i83_role_chk,
                 "role_diversity_gate_pass": _i83_role_chk >= _ROLE_DIVERSITY_MIN,
                 "target_player_gate_distinct": _i83_tp_chk,
-                "target_player_gate_coverage_pass": _i83_tp_chk >= 6,
+                "target_player_gate_coverage_pass": _i83_tp_chk >= _i90_tp_threshold,
                 "us_policy_gate_count": _i83_usp_chk,
                 "china_policy_gate_count": _i83_cnp_chk,
                 "us_china_policy_gate_pass": (_i83_usp_chk + _i83_cnp_chk) >= 2 and _i83_cnp_chk >= 1,
