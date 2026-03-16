@@ -10109,10 +10109,13 @@ def _f600_run_fast_path(
                     _co_test_bt = sum(1 for s in _co_test_sel if _ct71_is_bigtech_actionable(s))
                     _co_test_tp = len(set(_f6_vendor_key(s) for s in _co_test_sel if _is_target_player(s)))
                     _co_test_cn = sum(1 for s in _co_test_sel if _is_china_policy(s))
-                    # Allow if at least the hard minimums are met (tc delegated to final_cap_enforcement)
+                    _co_test_tc = sum(1 for s in _co_test_sel if _is_techcrunch(s))  # iter93: enforce TC cap
+                    _co_test_gr = sum(1 for s in _co_test_sel if _f6_is_google_research_blog(s))  # iter93
+                    # iter93: enforce ALL hard minimums including TC/GR caps (no delegation)
                     if (_co_test_boma >= 8 and _co_test_bt >= 7 and _co_test_buckets >= 5
                             and _co_test_roles >= 4 and _co_test_doms >= 4 and _co_test_vens >= 4
-                            and _co_test_tp >= 6 and _co_test_cn >= 1):
+                            and _co_test_tp >= 6 and _co_test_cn >= 1
+                            and _co_test_tc <= 3 and _co_test_gr <= 3):
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
                         _new_title = str(getattr(_co_repl, "title", "") or "")[:60]
                         _selected[_co_bi] = _co_repl
@@ -10122,9 +10125,20 @@ def _f600_run_fast_path(
                         _log.info("iter92 carryover swap [idx=%d pool=%d]: '%s' → '%s'", _co_bi, _co_pi, _old_title, _new_title)
                         break
                 if not _co_swapped:
-                    # iter93: always force swap — if can't swap, gate will FAIL (no exemption)
+                    # iter93: forced swap with TC/GR awareness — skip items that would breach caps
+                    _co_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))
+                    _co_cur_gr = sum(1 for s in _selected if _f6_is_google_research_blog(s))
                     for _co_pi2, _co_repl2 in enumerate(_co_swap_pool):
                         if _co_pi2 in _co_used_pool:
+                            continue
+                        # iter93: skip TC/GR items if at cap (unless replacing a TC/GR item)
+                        _co_repl2_tc = _is_techcrunch(_co_repl2)
+                        _co_repl2_gr = _f6_is_google_research_blog(_co_repl2)
+                        _co_old_tc = _is_techcrunch(_selected[_co_bi])
+                        _co_old_gr = _f6_is_google_research_blog(_selected[_co_bi])
+                        if _co_repl2_tc and not _co_old_tc and _co_cur_tc >= 3:
+                            continue
+                        if _co_repl2_gr and not _co_old_gr and _co_cur_gr >= 3:
                             continue
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
                         _new_title = str(getattr(_co_repl2, "title", "") or "")[:60]
