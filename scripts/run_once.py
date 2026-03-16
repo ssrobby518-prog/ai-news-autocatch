@@ -5743,6 +5743,37 @@ def _write_selection_audit_meta(final_cards: list[dict], run_id: str = "", selec
         return 0, 0, 0
 
 
+def _compute_selection_stats(final_cards: list[dict]) -> tuple:
+    """iter93: compute selection stats WITHOUT writing files.
+
+    Returns (selected_sources_distinct, bigtech_hit_count, official_or_media_count).
+    Used by intermediate swap/rescue stages that need stats but must not write meta files.
+    The canonical snapshot is the SOLE writer of selection_audit.meta.json.
+    """
+    try:
+        from urllib.parse import urlparse as _up_cs
+        _bt_count = 0
+        _om_count = 0
+        _domains: set = set()
+        for fc in final_cards:
+            _title = str(fc.get("title", "") or "")
+            _sn = str(fc.get("source_name", "") or "unknown")
+            _fu = str(fc.get("final_url", "") or "")
+            try:
+                _nl = _up_cs(_fu).netloc or _sn
+            except Exception:
+                _nl = _sn
+            _domains.add(_nl)
+            if _BIGTECH_COMPANY_RE.search(_title) or _BIGTECH_COMPANY_RE.search(_sn):
+                _bt_count += 1
+            _st = _classify_source_type(_sn, _fu)
+            if _st in ("official", "media"):
+                _om_count += 1
+        return len(_domains), _bt_count, _om_count
+    except Exception:
+        return 0, 0, 0
+
+
 def _write_bigtech_focus_meta(
     selected_cards: list[dict],
     rejected_pool: list[dict],
@@ -9562,13 +9593,20 @@ def _f600_run_fast_path(
     _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
     _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
     try:
-        _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+        _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
     except Exception as _f6_sau_exc:
         _log.warning("FAST_600_MODE: selection_audit meta failed (non-fatal): %s", _f6_sau_exc)
         _f6_distinct = len({str(getattr(it, "source_name", "") or "") for it in _selected})
         _f6_bigtech = 0
         _f6_om = 0
-    _f6_focus = _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+    # iter93: compute devnoise inline instead of writing bigtech_focus.meta.json
+    # (canonical snapshot is the sole writer of all meta files)
+    _f6_focus = {"non_bigtech_dev_noise_count": sum(
+        1 for fc in _card_dicts
+        if _classify_source_type(str(fc.get("source_name", "") or ""), str(fc.get("final_url", "") or ""))
+           in ("dev_forum", "code_release", "social", "code")
+        and not (_BIGTECH_COMPANY_RE.search(str(fc.get("title", "") or "")) or _BIGTECH_COMPANY_RE.search(str(fc.get("source_name", "") or "")))
+    )}
 
     # iter73: per-item strategic density floor (defined early — used by source_density patch + content_mix gate)
     _cm73_sd_baseline = 10
@@ -9967,12 +10005,9 @@ def _f600_run_fast_path(
                 _cur_hashes = [_item_hash(it) for it in _selected]
                 _overlap_count = sum(1 for h in _cur_hashes if h and h in _prev_ids)
             # iter76: only fail on overlap if dup gate is enabled (scheduled_task only)
-            # iter92: exempt from daily dedup when carryover gates provide stronger freshness guarantee
-            _co_dedup_exempt = bool(_co_prev_all_hashes) and _overlap_count <= 3  # carryover swap handles freshness
-            if _overlap_count > 2 and _oa_dup_gate_enabled and not _co_dedup_exempt:
+            # iter93: hard dedup gate, no exemption
+            if _overlap_count > 2 and _oa_dup_gate_enabled:
                 _f6_fail("DAILY_DUP_OVER_CAP", f"overlap_with_prev_daily={_overlap_count} > 2")
-            elif _overlap_count > 2 and _co_dedup_exempt:
-                _log.info("iter92: overlap_with_prev_daily=%d > 2 but carryover gates apply — dedup exempted", _overlap_count)
             elif _overlap_count > 2:
                 _log.info("iter76: overlap_with_prev_daily=%d > 2 but dup_gate DISABLED (entrypoint=%s) — skipping FAIL",
                           _overlap_count, _oa_entrypoint)
@@ -9986,8 +10021,8 @@ def _f600_run_fast_path(
             if _replacements_made > 0:
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
                 _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
-                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
-                _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+                _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
+                pass  # iter93: removed intermediate bigtech_focus write (canonical snapshot is sole writer)
         except SystemExit:
             raise
         except Exception as _dde:
@@ -9995,7 +10030,7 @@ def _f600_run_fast_path(
 
     # iter92: carryover swap — replace non-top-2 carryover items with fresh candidates
     _co_swap_count = 0
-    _co_skip_count = 0  # iter92: also init at top scope for swap_exhausted check
+    # iter93: _co_skip_count removed (no exemption path)
     if _is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes:
         # Identify carryover items that are NOT in prev top-2 → must be replaced
         _co_blocked_indices = []
@@ -10057,7 +10092,7 @@ def _f600_run_fast_path(
             _log.info("iter92 carryover swap: pool=%d for %d replacements", len(_co_swap_pool), len(_co_blocked_indices))
             # Replace blocked items — try multiple candidates per position
             _co_used_pool = set()
-            _co_skip_count = 0  # iter92: track skipped forced swaps
+            # iter93: always force swap, no skip path
             for _co_bi in _co_blocked_indices:
                 _co_swapped = False
                 for _co_pi, _co_repl in enumerate(_co_swap_pool):
@@ -10087,14 +10122,7 @@ def _f600_run_fast_path(
                         _log.info("iter92 carryover swap [idx=%d pool=%d]: '%s' → '%s'", _co_bi, _co_pi, _old_title, _new_title)
                         break
                 if not _co_swapped:
-                    # iter92: skip forced swap if carryover total would still pass (<=2) without it
-                    _co_top2_in_sel = sum(1 for s in _selected if _oa_item_hash(s) in _co_prev_top2_hashes)
-                    _co_if_skip = _co_top2_in_sel + _co_skip_count + 1
-                    if _co_if_skip <= 2:
-                        _co_skip_count += 1
-                        _log.info("iter92 carryover swap: skip forced swap at idx=%d (projected carryover=%d <= 2)", _co_bi, _co_if_skip)
-                        continue
-                    # Forced swap: carryover gate is a hard FAIL, so replace anyway with best candidate
+                    # iter93: always force swap — if can't swap, gate will FAIL (no exemption)
                     for _co_pi2, _co_repl2 in enumerate(_co_swap_pool):
                         if _co_pi2 in _co_used_pool:
                             continue
@@ -10103,13 +10131,11 @@ def _f600_run_fast_path(
                         _selected[_co_bi] = _co_repl2
                         _co_used_pool.add(_co_pi2)
                         _co_swap_count += 1
-                        _log.info("iter92 carryover FORCED swap [idx=%d pool=%d]: '%s' → '%s'", _co_bi, _co_pi2, _old_title, _new_title)
+                        _log.info("iter93 carryover FORCED swap [idx=%d pool=%d]: '%s' → '%s'", _co_bi, _co_pi2, _old_title, _new_title)
                         break
             _log.info("iter92 carryover swap: completed %d/%d replacements", _co_swap_count, len(_co_blocked_indices))
 
-    # iter92: track whether swap was structurally impossible (all candidates failed invariant, forced skipped)
-    # iter92: swap_exhausted = at least one item couldn't be swapped (skipped because carryover ≤ 2)
-    _co_swap_exhausted = (_co_skip_count > 0) if (_is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes) else False
+    # iter93: no swap_exhausted exemption — gate is hard FAIL
 
     # iter92: compute carryover stats (after all dedup/swap, before gates)
     _co_per_item: list = []
@@ -10301,10 +10327,10 @@ def _f600_run_fast_path(
         _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
         _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
         try:
-            _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+            _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
         except Exception:
             pass
-        _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+        pass  # iter93: removed intermediate bigtech_focus write
         _d_fin = _DivCounter(_f6_domain_key(s) for s in _selected)
         _v_fin = _DivCounter(_f6_vendor_key(s) for s in _selected)
         _log.info("FAST_600_MODE iter53: post-dedup diversity final domains=%d max_domain=%d vendors=%d max_vendor=%d",
@@ -10323,7 +10349,7 @@ def _f600_run_fast_path(
             _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
             _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
             try:
-                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
             except Exception:
                 pass
 
@@ -10458,10 +10484,10 @@ def _f600_run_fast_path(
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
                 _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
                 try:
-                    _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                    _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
                 except Exception:
                     pass
-                _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+                pass  # iter93: removed intermediate bigtech_focus write (canonical snapshot is sole writer)
                 # iter72b-fix5: re-patch source_density.meta.json after platform swap
                 try:
                     _hdf_mp_ps = _outputs / "source_density.meta.json"
@@ -10587,7 +10613,7 @@ def _f600_run_fast_path(
             _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
             _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
             try:
-                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
             except Exception:
                 pass
 
@@ -10803,10 +10829,10 @@ def _f600_run_fast_path(
             _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
             _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
             try:
-                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
             except Exception:
                 pass
-            _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+            pass  # iter93: removed intermediate bigtech_focus write
             _log.info("iter78b FINAL rescue: tp=%d us=%d cn=%d om=%d tc=%d gr=%d prohib=%d",
                       len(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))),
                       sum(1 for s in _selected if _is_us_policy(s)),
@@ -10833,7 +10859,7 @@ def _f600_run_fast_path(
             _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
             _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
             try:
-                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
             except Exception:
                 pass
 
@@ -11060,10 +11086,10 @@ def _f600_run_fast_path(
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
                 _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
                 try:
-                    _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                    _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
                 except Exception:
                     pass
-                _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+                pass  # iter93: removed intermediate bigtech_focus write (canonical snapshot is sole writer)
                 _log.info("iter90 AWS devdoc swap done: found=%d swapped=%d remaining=%d",
                           _i88_aws_devdoc_found, _i88_aws_devdoc_swaps,
                           sum(1 for s in _selected if _is_aws_devdoc(s)))
@@ -11302,10 +11328,10 @@ def _f600_run_fast_path(
             _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
             _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
             try:
-                _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
             except Exception:
                 pass
-            _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+            pass  # iter93: removed intermediate bigtech_focus write
             _log.info("iter80 final cap enforcement done: tc=%d gr=%d hfbe=%d buckets=%d roles=%d",
                       sum(1 for s in _selected if _is_techcrunch(s)),
                       sum(1 for s in _selected if _f6_is_google_research_blog(s)),
@@ -11461,10 +11487,10 @@ def _f600_run_fast_path(
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
                 _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
                 try:
-                    _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+                    _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
                 except Exception:
                     pass
-                _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+                pass  # iter93: removed intermediate bigtech_focus write (canonical snapshot is sole writer)
                 _log.info("iter80b domain diversity done: domains=%d tc=%d gr=%d buckets=%d tp=%d",
                           len(_DivCounter(_f6_domain_key(s) for s in _selected)),
                           sum(1 for s in _selected if _is_techcrunch(s)),
@@ -11478,10 +11504,10 @@ def _f600_run_fast_path(
         _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
         _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
         try:
-            _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+            _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
         except Exception:
             pass
-        _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
+        pass  # iter93: removed intermediate bigtech_focus write
 
     # --- iter53: domain/vendor diversity meta + gate ---
     _div_domain_counts = dict(_DivCounter(_f6_domain_key(s) for s in _selected))
@@ -11543,44 +11569,8 @@ def _f600_run_fast_path(
     _vsc_share_ratio = round(_vsc_max_vendor_count / _vsc_selected_events, 4) if _vsc_selected_events > 0 else 1.0
     _vsc_pass = (_vsc_max_vendor_count * _VENDOR_SHARE_CAP_MULTIPLIER <= _vsc_selected_events)
 
-    # Patch selection_audit.meta.json with diversity fields
-    try:
-        _sa_path2 = _outputs / "selection_audit.meta.json"
-        if _sa_path2.exists():
-            _sa2 = _f6_j.loads(_sa_path2.read_text(encoding="utf-8"))
-            _sa2["selected_domains_distinct"] = _div_domains_distinct
-            _sa2["selected_vendors_distinct"] = _div_vendors_distinct
-            _sa2["domain_counts"] = _div_domain_counts
-            _sa2["vendor_counts"] = _div_vendor_counts
-            _sa2["max_domain_count"] = _div_max_domain
-            _sa2["max_vendor_count"] = _div_max_vendor
-            _sa2["diversity_constraints"] = {
-                "min_domains": _DIV_MIN_DOMAINS, "max_domain": _DIV_MAX_DOMAIN,
-                "min_vendors": _DIV_MIN_VENDORS, "max_vendor": _DIV_MAX_VENDOR,
-            }
-            _sa2["diversity_pass"] = _div_pass
-            if _div_is_injected:
-                _sa2["diversity_test_injected"] = True
-            # iter65: domain share cap fields
-            _sa2["domain_share_cap_pass"] = _dsc_pass
-            _sa2["domain_share_cap_rule"] = "max_domain_count*3 <= selected_events"
-            _sa2["domain_share_cap_max_domain_count"] = _dsc_max_domain_count
-            _sa2["domain_share_cap_ratio"] = _dsc_share_ratio
-            if _dsc_is_injected:
-                _sa2["domain_share_cap_test_injected"] = True
-                _sa2["domain_share_cap_injected_count"] = _dsc_inject_count
-                _sa2["domain_share_cap_injected_name"] = _dsc_inject_name
-            # iter56: vendor share cap fields
-            _sa2["vendor_share_cap_pass"] = _vsc_pass
-            _sa2["vendor_share_cap_rule"] = "max_vendor_count*3 <= selected_events"
-            _sa2["vendor_share_cap_max_vendor_count"] = _vsc_max_vendor_count
-            _sa2["vendor_share_cap_ratio"] = _vsc_share_ratio
-            if _vsc_is_injected:
-                _sa2["vendor_share_cap_test_injected"] = True
-                _sa2["vendor_share_cap_injected_count"] = _vsc_inject_count
-            _sa_path2.write_text(_f6_j.dumps(_sa2, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    # iter93: removed intermediate selection_audit.meta.json diversity patch
+    # (canonical snapshot is the sole writer of all meta files)
 
     # Write bigtech_diversity.meta.json
     try:
@@ -11688,41 +11678,8 @@ def _f600_run_fast_path(
     except Exception as _pdc_exc:
         _log.warning("dev_platform_cap.meta.json write failed: %s", _pdc_exc)
 
-    # Patch selection_audit.meta.json with platform cap fields
-    try:
-        _sa_pdc = _outputs / "selection_audit.meta.json"
-        if _sa_pdc.exists():
-            _sa_pdc_d = _f6_j.loads(_sa_pdc.read_text(encoding="utf-8"))
-            _sa_pdc_d["platform_domain_total_count"] = _pdc_platform_total
-            _sa_pdc_d["platform_cap_pass"] = _pdc_pass
-            if _pdc_is_injected:
-                _sa_pdc_d["platform_cap_test_injected"] = True
-            _sa_pdc.write_text(_f6_j.dumps(_sa_pdc_d, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
-
-    # iter41+iter69b: patch selection_audit.meta.json with overlap fields (AFTER all rebuilds)
-    try:
-        _sa_ov = _outputs / "selection_audit.meta.json"
-        if _sa_ov.exists():
-            _sa_ov_d = _f6_j.loads(_sa_ov.read_text(encoding="utf-8"))
-            _sa_ov_d["overlap_with_prev_daily"] = _overlap_count
-            _sa_ov_d["overlap_cap"] = _OVERLAP_CAP
-            _sa_ov_d["overlap_cap_pass"] = (_overlap_count <= _OVERLAP_CAP) if _oa_dup_gate_enabled else True
-            _sa_ov_d["replacements_made"] = _replacements_made
-            _sa_ov_d["prev_daily_file_used"] = _prev_daily_file
-            # iter76: overlap policy fields
-            _sa_ov_d["overlap_policy"] = _oa_overlap_policy
-            _sa_ov_d["daily_dup_gate_enabled"] = _oa_dup_gate_enabled
-            _sa_ov_d["daily_last_ids_read"] = bool(_oa_prev_ids) if _oa_dup_gate_enabled else False
-            # iter70: swap stats
-            _sa_ov_d["swap_attempts"] = _swap_attempts if _is_daily else 0
-            _sa_ov_d["swap_successes"] = _swap_successes if _is_daily else 0
-            _sa_ov_d["rescue_attempts"] = _p6c_rescue_attempts if _is_daily else 0
-            _sa_ov_d["rescue_successes"] = _p6c_rescue_successes if _is_daily else 0
-            _sa_ov.write_text(_f6_j.dumps(_sa_ov_d, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    # iter93: removed intermediate selection_audit.meta.json patches (platform cap, overlap)
+    # (canonical snapshot is the sole writer of all meta files)
 
     # DEV_PLATFORM_DOMAIN_CAP_HARD_DAILY gate (daily mode — all entrypoints)
     if _is_daily and not _pdc_pass:
@@ -11771,58 +11728,8 @@ def _f600_run_fast_path(
         _cm84_exec_sem_axes_set |= _executive_semantic_axes(_cm84_s)
     _cm84_exec_sem_distinct = len(_cm84_exec_sem_axes_set)  # iter84
 
-    # iter77: patch selection_audit.meta.json with prohibited-type totals (AFTER counts are computed)
-    try:
-        _sa77 = _outputs / "selection_audit.meta.json"
-        if _sa77.exists():
-            _sa77_d = _f6_j.loads(_sa77.read_text(encoding="utf-8"))
-            _sa77_d["forum_discussion_total"] = _cm77_forum_total
-            _sa77_d["developer_release_total"] = _cm75_devrel_total
-            _sa77_d["indie_dev_tone_total"] = _cm75_indie_total
-            _sa77_d["tutorial_explainer_total"] = _cm77_tutorial_total
-            _sa77_d["google_research_total"] = _cm74_google_research_total
-            _sa77_d["official_media_count"] = _cm77_official_media_count
-            _sa77_d["techcrunch_total"] = _cm78_tc_total  # iter78
-            _sa77_d["hf_blog_explainer_total"] = _cm78_hfbe_total  # iter78
-            _sa77_d["target_player_distinct"] = _cm78_target_player_distinct  # iter78
-            _sa77_d["target_players"] = _cm78_target_players  # iter78
-            _sa77_d["us_policy_count"] = _cm78_us_policy_count  # iter78
-            _sa77_d["china_policy_count"] = _cm78_china_policy_count  # iter78
-            _sa77_d["techcrunch_google_research_total"] = _cm79_tc_gr_combined  # iter79
-            _sa77_d["selected_role_axes_distinct"] = _cm79_role_axes_distinct  # iter79
-            _sa77_d["techcrunch_rumor_speculation_total"] = _cm82_tc_rumor_total  # iter82
-            _sa77_d["non_strategic_google_research_total"] = _cm82_nsgr_total  # iter82
-            _sa77_d["executive_signal_total"] = _cm82_exec_signal_total  # iter82
-            # iter91: per-item aws_devdoc audit + swap log
-            _sa77_d["aws_devdoc_found"] = _i88_aws_devdoc_found
-            _sa77_d["aws_devdoc_swaps"] = _i88_aws_devdoc_swaps
-            _sa77_d["aws_devdoc_remaining"] = sum(1 for s in _selected if _is_aws_devdoc(s))
-            _sa77_d["aws_devdoc_swap_log"] = _i91_aws_swap_log
-            # Enrich per-item rows with aws_devdoc fields
-            _sa91_items = _sa77_d.get("items", [])
-            for _sa91_idx, _sa91_row in enumerate(_sa91_items):
-                if _sa91_idx < len(_selected):
-                    _sa91_s = _selected[_sa91_idx]
-                    _sa91_row["aws_devdoc_item"] = _is_aws_devdoc(_sa91_s)
-                    _sa91_row["aws_devdoc_reason"] = ("aws_domain+devdoc_pattern" if _is_aws_devdoc(_sa91_s) else ("not_aws_domain" if _f6_domain_key(_sa91_s) != "aws.amazon.com" else "aws_domain_but_not_devdoc"))
-                    _sa91_row["vendor"] = _f6_vendor_key(_sa91_s)
-                    _sa91_row["content_type"] = _ct71_classify(_sa91_s)
-                    _sa91_row["strategic_bucket"] = _ct72b_strategic_bucket(_sa91_s)
-                    _sa91_row["role_axis"] = _role_axis(_sa91_s)
-                    _sa91_row["kept_in_final_selection"] = True
-                    _sa91_row["swapped_out"] = False
-                    _sa91_row["swap_reason"] = "none"
-                    _sa91_row["carryover_item"] = _co_per_item[_sa91_idx]["carryover_item"] if _sa91_idx < len(_co_per_item) else False  # iter92
-                    _sa91_row["fresh_item"] = _co_per_item[_sa91_idx]["fresh_item"] if _sa91_idx < len(_co_per_item) else True  # iter92
-                    _sa91_row["prev_top2_item"] = _co_per_item[_sa91_idx]["prev_top2_item"] if _sa91_idx < len(_co_per_item) else False  # iter92
-                    _sa91_row["carryover_match_key"] = _co_per_item[_sa91_idx]["carryover_match_key"] if _sa91_idx < len(_co_per_item) else ""  # iter92
-            _sa77_d["carryover_total"] = _co_carryover_check  # iter92
-            _sa77_d["fresh_items_total"] = _co_fresh_check  # iter92
-            _sa77_d["carryover_not_in_prev_top2"] = _co_not_top2_check  # iter92
-            _sa77_d["scheduled_previous_run_id"] = _co_prev_run_id  # iter92
-            _sa77.write_text(_f6_j.dumps(_sa77_d, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    # iter93: removed intermediate selection_audit.meta.json prohibited-type/carryover patch
+    # (canonical snapshot is the sole writer of all meta files)
 
     _cm72_strategic_buckets = sorted(set(_ct72b_strategic_bucket(s) for s in _selected))
     _cm72_strategic_buckets_distinct = len(_cm72_strategic_buckets)
@@ -12140,13 +12047,7 @@ def _f600_run_fast_path(
     _cm84_exec_sem_pass = (_cm84_exec_sem_check >= _EXECUTIVE_SEMANTIC_MIN_AXES)  # iter84: exec semantic axes >= 4
     _co_carryover_pass = (_co_carryover_check <= 2)  # iter92
     _co_fresh_pass = (_co_fresh_check >= 8)  # iter92
-    _co_not_top2_pass = (_co_not_top2_check == 0)  # iter92
-    # iter92: exempt when swap was structurally impossible (no viable candidate) AND carryover still <= 2
-    # iter92: skip exemption when injection is active (test must exercise the gate, not the exemption)
-    if not _co_not_top2_pass and _co_swap_exhausted and _co_carryover_check <= 2 and not _co_not_top2_is_injected:
-        _log.info("iter92 carryover: exempting carryover_not_in_prev_top2=%d (swap_exhausted=True, carryover_total=%d <= 2)",
-                  _co_not_top2_check, _co_carryover_check)
-        _co_not_top2_pass = True
+    _co_not_top2_pass = (_co_not_top2_check == 0)  # iter93: hard gate, no exemption
     _co_gates_apply = (_oa_entrypoint == "scheduled_task" and len(_co_prev_all_hashes) > 0)  # iter92: only for scheduled with previous snapshot
 
     try:
@@ -13945,34 +13846,11 @@ def _f600_run_fast_path(
         _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
         _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
         try:
-            _f6_distinct, _f6_bigtech, _f6_om = _write_selection_audit_meta(_card_dicts, run_id=_run_id, selected_items=_selected)
+            _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)  # iter93: compute-only, no file write
         except Exception:
             pass
-        _write_bigtech_focus_meta(_card_dicts, _rejected_dicts, run_id=_run_id)
-        # Re-patch diversity fields into selection_audit.meta.json (density swap may have changed selection)
-        try:
-            _fmr_sa_path = _outputs / "selection_audit.meta.json"
-            if _fmr_sa_path.exists():
-                _fmr_sa = _f6_j.loads(_fmr_sa_path.read_text(encoding="utf-8"))
-                _fmr_dc = dict(_DivCounter(_f6_domain_key(s) for s in _selected))
-                _fmr_vc = dict(_DivCounter(_f6_vendor_key(s) for s in _selected))
-                _fmr_vs = set(_f6_vendor_key(s) for s in _selected) - {"other"}
-                _fmr_sa["selected_domains_distinct"] = len(_fmr_dc)
-                _fmr_sa["selected_vendors_distinct"] = len(_fmr_vs)
-                _fmr_sa["domain_counts"] = _fmr_dc
-                _fmr_sa["vendor_counts"] = _fmr_vc
-                _fmr_sa["max_domain_count"] = max(_fmr_dc.values()) if _fmr_dc else 0
-                _fmr_sa["max_vendor_count"] = max(_fmr_vc.values()) if _fmr_vc else 0
-                _fmr_sa["diversity_pass"] = (
-                    len(_fmr_dc) >= _DIV_MIN_DOMAINS and max(_fmr_dc.values(), default=99) <= _DIV_MAX_DOMAIN
-                    and len(_fmr_vs) >= _DIV_MIN_VENDORS and max(_fmr_vc.values(), default=99) <= _DIV_MAX_VENDOR
-                )
-                _fmr_sa_path.write_text(_f6_j.dumps(_fmr_sa, ensure_ascii=False, indent=2), encoding="utf-8")
-                _log.info("iter81c final meta rebuild: domains=%d vendors=%d max_dom=%d max_ven=%d pass=%s",
-                          len(_fmr_dc), len(_fmr_vs), max(_fmr_dc.values(), default=0),
-                          max(_fmr_vc.values(), default=0), _fmr_sa["diversity_pass"])
-        except Exception:
-            pass
+        pass  # iter93: removed intermediate bigtech_focus write
+        # iter93: removed post-density diversity re-patch (canonical snapshot is sole writer)
 
     # ===================================================================
     # iter85: STAGE 4 — FINALIZE SELECTION (immutable from this point)
