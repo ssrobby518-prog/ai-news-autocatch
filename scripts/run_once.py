@@ -10130,8 +10130,6 @@ def _f600_run_fast_path(
                     _co_cur_gr = sum(1 for s in _selected if _f6_is_google_research_blog(s))
                     _co_old_tc = _is_techcrunch(_selected[_co_bi])
                     _co_old_gr = _f6_is_google_research_blog(_selected[_co_bi])
-                    _log.info("iter93 carryover forced PRE: idx=%d cur_tc=%d cur_gr=%d old_tc=%s old_gr=%s pool=%d",
-                              _co_bi, _co_cur_tc, _co_cur_gr, _co_old_tc, _co_old_gr, len(_co_swap_pool))
                     _co_forced_swapped = False
                     for _co_pi2, _co_repl2 in enumerate(_co_swap_pool):
                         if _co_pi2 in _co_used_pool:
@@ -10141,19 +10139,14 @@ def _f600_run_fast_path(
                         _co_repl2_gr = _f6_is_google_research_blog(_co_repl2)
                         _co_repl2_dom = _f6_domain_key(_co_repl2)
                         if _co_repl2_tc and not _co_old_tc and _co_cur_tc >= 3:
-                            _log.info("iter93 carryover forced: SKIP pool=%d tc (dom=%s)", _co_pi2, _co_repl2_dom)
                             continue
                         if _co_repl2_gr and not _co_old_gr and _co_cur_gr >= 3:
-                            _log.info("iter93 carryover forced: SKIP pool=%d gr (dom=%s)", _co_pi2, _co_repl2_dom)
                             continue
-                        _log.info("iter93 carryover forced: ACCEPT pool=%d (tc=%s gr=%s dom=%s)",
-                                  _co_pi2, _co_repl2_tc, _co_repl2_gr, _co_repl2_dom)
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
                         _new_title = str(getattr(_co_repl2, "title", "") or "")[:60]
                         _selected[_co_bi] = _co_repl2
                         _co_used_pool.add(_co_pi2)
                         _co_swap_count += 1
-                        _log.info("iter93 carryover FORCED swap [idx=%d pool=%d]: '%s' → '%s'", _co_bi, _co_pi2, _old_title, _new_title)
                         break
             _log.info("iter92 carryover swap: completed %d/%d replacements", _co_swap_count, len(_co_blocked_indices))
 
@@ -12277,6 +12270,52 @@ def _f600_run_fast_path(
         )
         _f6_fail("TOTAL_EVENTS_HARD_DAILY", _cm73_total_fail)
 
+    # iter93: carryover gates moved before content-quality gates — data-integrity first
+    # iter92: SCHEDULED_CARRYOVER_MAX_HARD_DAILY — carryover_total <= 2 (scheduled_task only)
+    if _is_daily and _co_gates_apply and not _co_carryover_pass:
+        _co_carry_fail = f"SCHEDULED_CARRYOVER_MAX_HARD_DAILY_FAIL: carryover_total={_co_carryover_check} > 2"
+        if _co_carryover_is_injected:
+            _co_carry_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "SCHEDULED_CARRYOVER_MAX_HARD_DAILY",
+            _co_carry_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("SCHEDULED_CARRYOVER_MAX_HARD_DAILY", _co_carry_fail)
+
+    # iter92: SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY — fresh_items_total >= 8 (scheduled_task only)
+    if _is_daily and _co_gates_apply and not _co_fresh_pass:
+        _co_fresh_fail = f"SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY_FAIL: fresh_items_total={_co_fresh_check} < 8"
+        if _co_fresh_is_injected:
+            _co_fresh_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY",
+            _co_fresh_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY", _co_fresh_fail)
+
+    # iter92: SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY — carryover not in prev top2 = 0 (scheduled_task only)
+    if _is_daily and _co_gates_apply and not _co_not_top2_pass:
+        _co_top2_fail = f"SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY_FAIL: carryover_not_in_prev_top2={_co_not_top2_check}"
+        if _co_not_top2_is_injected:
+            _co_top2_fail += " [test_injected=true]"
+        _write_not_ready_report_md(
+            "SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY",
+            _co_top2_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY", _co_top2_fail)
+
     # BIGTECH_ACTIONABLE_MIN_HARD_DAILY gate (B1) — iter73: threshold raised to 7
     if _is_daily and not _cm71_bt_act_pass:
         _cm71_bt_fail = f"BIGTECH_ACTIONABLE_MIN_HARD_DAILY_FAIL: actionable={_cm71_bt_actionable} < 7"
@@ -12469,51 +12508,6 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("AWS_DEVDOC_REMAINING_HARD", _cm90_aws_fail)
-
-    # iter92: SCHEDULED_CARRYOVER_MAX_HARD_DAILY — carryover_total <= 2 (scheduled_task only)
-    if _is_daily and _co_gates_apply and not _co_carryover_pass:
-        _co_carry_fail = f"SCHEDULED_CARRYOVER_MAX_HARD_DAILY_FAIL: carryover_total={_co_carryover_check} > 2"
-        if _co_carryover_is_injected:
-            _co_carry_fail += " [test_injected=true]"
-        _write_not_ready_report_md(
-            "SCHEDULED_CARRYOVER_MAX_HARD_DAILY",
-            _co_carry_fail,
-            run_id=_run_id, selected_items_count=len(_selected),
-            selected_sources_distinct=_f6_distinct,
-            bigtech_hit_count=_f6_bigtech,
-            official_or_media_count=_f6_om,
-        )
-        _f6_fail("SCHEDULED_CARRYOVER_MAX_HARD_DAILY", _co_carry_fail)
-
-    # iter92: SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY — fresh_items_total >= 8 (scheduled_task only)
-    if _is_daily and _co_gates_apply and not _co_fresh_pass:
-        _co_fresh_fail = f"SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY_FAIL: fresh_items_total={_co_fresh_check} < 8"
-        if _co_fresh_is_injected:
-            _co_fresh_fail += " [test_injected=true]"
-        _write_not_ready_report_md(
-            "SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY",
-            _co_fresh_fail,
-            run_id=_run_id, selected_items_count=len(_selected),
-            selected_sources_distinct=_f6_distinct,
-            bigtech_hit_count=_f6_bigtech,
-            official_or_media_count=_f6_om,
-        )
-        _f6_fail("SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY", _co_fresh_fail)
-
-    # iter92: SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY — carryover not in prev top2 = 0 (scheduled_task only)
-    if _is_daily and _co_gates_apply and not _co_not_top2_pass:
-        _co_top2_fail = f"SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY_FAIL: carryover_not_in_prev_top2={_co_not_top2_check}"
-        if _co_not_top2_is_injected:
-            _co_top2_fail += " [test_injected=true]"
-        _write_not_ready_report_md(
-            "SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY",
-            _co_top2_fail,
-            run_id=_run_id, selected_items_count=len(_selected),
-            selected_sources_distinct=_f6_distinct,
-            bigtech_hit_count=_f6_bigtech,
-            official_or_media_count=_f6_om,
-        )
-        _f6_fail("SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY", _co_top2_fail)
 
     # iter82: TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY gate — rumor TC <= 1
     if _is_daily and not _cm82_tc_rumor_pass:
