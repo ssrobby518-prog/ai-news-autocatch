@@ -10128,6 +10128,7 @@ def _f600_run_fast_path(
                     # iter93: forced swap with TC/GR awareness — skip items that would breach caps
                     _co_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))
                     _co_cur_gr = sum(1 for s in _selected if _f6_is_google_research_blog(s))
+                    _co_forced_swapped = False
                     for _co_pi2, _co_repl2 in enumerate(_co_swap_pool):
                         if _co_pi2 in _co_used_pool:
                             continue
@@ -10137,8 +10138,11 @@ def _f600_run_fast_path(
                         _co_old_tc = _is_techcrunch(_selected[_co_bi])
                         _co_old_gr = _f6_is_google_research_blog(_selected[_co_bi])
                         if _co_repl2_tc and not _co_old_tc and _co_cur_tc >= 3:
+                            _log.info("iter93 carryover forced: SKIP pool=%d (tc=%d, repl_tc=%s, old_tc=%s, dom=%s)",
+                                      _co_pi2, _co_cur_tc, _co_repl2_tc, _co_old_tc, _f6_domain_key(_co_repl2))
                             continue
                         if _co_repl2_gr and not _co_old_gr and _co_cur_gr >= 3:
+                            _log.info("iter93 carryover forced: SKIP pool=%d (gr=%d, dom=%s)", _co_pi2, _co_cur_gr, _f6_domain_key(_co_repl2))
                             continue
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
                         _new_title = str(getattr(_co_repl2, "title", "") or "")[:60]
