@@ -10042,19 +10042,12 @@ def _f600_run_fast_path(
                                       _dedup_inv_allows(_test_fb0))
                 _cur_hashes = [_item_hash(it) for it in _selected]
                 _overlap_count = sum(1 for h in _cur_hashes if h and h in _prev_ids)
-            # iter76: only fail on overlap if dup gate is enabled (scheduled_task only)
-            # iter93: hard dedup gate, no exemption
-            if _overlap_count > 2 and _oa_dup_gate_enabled:
-                _f6_fail("DAILY_DUP_OVER_CAP", f"overlap_with_prev_daily={_overlap_count} > 2")
-            elif _overlap_count > 2:
-                _log.info("iter76: overlap_with_prev_daily=%d > 2 but dup_gate DISABLED (entrypoint=%s) — skipping FAIL",
-                          _overlap_count, _oa_entrypoint)
-            # iter76: defer state write to after all gates pass (only scheduled_task, only on success)
-            # _oa_deferred_ids set here, written at Step 18 (before sys.exit(0))
-            if _oa_dup_gate_enabled:
-                _oa_deferred_ids = [h for h in _cur_hashes if h]
-            else:
-                _oa_deferred_ids = None
+            # iter93: defer DAILY_DUP_OVER_CAP check until AFTER carryover swap
+            # (carryover swap at line ~10069 replaces non-top-2 items, reducing overlap)
+            _pre_carryover_overlap = _overlap_count
+            if _overlap_count > 2:
+                _log.info("iter93: pre-carryover overlap=%d > 2 (will re-check after carryover swap)", _overlap_count)
+            # iter93: deferred_ids moved to post-carryover-swap check
             # Rebuild card_dicts after possible replacements
             if _replacements_made > 0:
                 _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
@@ -10150,9 +10143,12 @@ def _f600_run_fast_path(
                     _co_test_cn = sum(1 for s in _co_test_sel if _is_china_policy(s))
                     _co_test_tc = sum(1 for s in _co_test_sel if _is_techcrunch(s))  # iter93: enforce TC cap
                     _co_test_gr = sum(1 for s in _co_test_sel if _f6_is_google_research_blog(s))  # iter93
-                    # iter93: enforce ALL hard minimums including TC/GR caps (no delegation)
+                    _co_test_max_dom = max(_DivCounter(_f6_domain_key(s) for s in _co_test_sel).values(), default=0)
+                    _co_test_max_ven = max(_DivCounter(_f6_vendor_key(s) for s in _co_test_sel).values(), default=0)
+                    # iter93: enforce ALL hard minimums including diversity + TC/GR caps
                     if (_co_test_boma >= 8 and _co_test_bt >= 7 and _co_test_buckets >= 5
                             and _co_test_roles >= 4 and _co_test_doms >= 4 and _co_test_vens >= 4
+                            and _co_test_max_dom <= 3 and _co_test_max_ven <= 3  # iter93: diversity caps
                             and _co_test_tp >= 6 and _co_test_cn >= 1
                             and _co_test_tc <= 3 and _co_test_gr <= 3):
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
@@ -10176,16 +10172,22 @@ def _f600_run_fast_path(
                         # iter93: skip TC/GR items if at cap (unless replacing a TC/GR item)
                         _co_repl2_tc = _is_techcrunch(_co_repl2)
                         _co_repl2_gr = _f6_is_google_research_blog(_co_repl2)
-                        _co_repl2_dom = _f6_domain_key(_co_repl2)
                         if _co_repl2_tc and not _co_old_tc and _co_cur_tc >= 3:
                             continue
                         if _co_repl2_gr and not _co_old_gr and _co_cur_gr >= 3:
+                            continue
+                        # iter93: check vendor concentration won't exceed cap
+                        _co_f_test = list(_selected)
+                        _co_f_test[_co_bi] = _co_repl2
+                        _co_f_max_ven = max(_DivCounter(_f6_vendor_key(s) for s in _co_f_test).values(), default=0)
+                        if _co_f_max_ven > 3:
                             continue
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
                         _new_title = str(getattr(_co_repl2, "title", "") or "")[:60]
                         _selected[_co_bi] = _co_repl2
                         _co_used_pool.add(_co_pi2)
                         _co_swap_count += 1
+                        _co_forced_swapped = True
                         break
             _log.info("iter92 carryover swap: completed %d/%d replacements", _co_swap_count, len(_co_blocked_indices))
 
@@ -10215,6 +10217,19 @@ def _f600_run_fast_path(
     else:
         for _ in _selected:
             _co_per_item.append({"carryover_item": False, "fresh_item": True, "prev_top2_item": False, "carryover_match_key": ""})
+
+    # iter93: DAILY_DUP_OVER_CAP — check AFTER carryover swap has had a chance to reduce overlap
+    if _is_daily:
+        _post_co_hashes = [_oa_item_hash(it) for it in _selected]
+        _post_co_overlap = sum(1 for h in _post_co_hashes if h and h in _oa_prev_ids) if _oa_prev_ids else 0
+        if _post_co_overlap > 2 and _oa_dup_gate_enabled:
+            _f6_fail("DAILY_DUP_OVER_CAP", f"overlap_with_prev_daily={_post_co_overlap} > 2 (after carryover swap)")
+        elif _post_co_overlap > 2:
+            _log.info("iter76: overlap_with_prev_daily=%d > 2 but dup_gate DISABLED (entrypoint=%s) — skipping FAIL",
+                      _post_co_overlap, _oa_entrypoint)
+        # Update deferred IDs for state write
+        if _oa_dup_gate_enabled:
+            _oa_deferred_ids = [h for h in _post_co_hashes if h]
 
     _i80_tc_diag("after_dedup")
     # iter41: overlap fields patched later (after all selection_audit rebuilds)
@@ -11282,6 +11297,49 @@ def _f600_run_fast_path(
                     break
             if not _i80_gr_swapped:
                 _log.warning("iter80b final cap: stuck at gr=%d, no valid replacement", _i80_gr)
+                break
+        # iter93: enforce combined TC+GR cap (<=5) — individual caps may pass but combined may not
+        for _i80_tcgr_round in range(10):
+            _i80_tcgr = sum(1 for s in _selected if _is_techcrunch(s) or _f6_is_google_research_blog(s))
+            if _i80_tcgr <= _TECHCRUNCH_GOOGLE_RESEARCH_COMBINED_CAP:
+                break
+            if not _i80_final_pool:
+                _log.warning("iter93 final cap: no pool for TC+GR combined reduction (combined=%d)", _i80_tcgr)
+                break
+            # Prefer replacing GR items over TC (GR is less likely to carry TP vendors)
+            _i80_tcgr_items = sorted(
+                [(i, s) for i, s in enumerate(_selected) if _is_techcrunch(s) or _f6_is_google_research_blog(s)],
+                key=lambda x: (0 if _f6_is_google_research_blog(x[1]) else 1, _f6_bfp(x[1]))
+            )
+            _i80_tcgr_swapped = False
+            for _i80_tcgr_idx, _i80_tcgr_item in _i80_tcgr_items:
+                if _i80_tcgr_swapped:
+                    break
+                for _i80_tcgr_ci, _i80_tcgr_cand in enumerate(_i80_final_pool):
+                    _i80_tcgr_test = [s if j != _i80_tcgr_idx else _i80_tcgr_cand for j, s in enumerate(_selected)]
+                    _i80_tcgr_cur = _i80_invariant_snapshot(_selected)
+                    _i80_tcgr_new = _i80_invariant_snapshot(_i80_tcgr_test)
+                    _i80_tcgr_ok, _i80_tcgr_reg = _i80_no_regression(_i80_tcgr_cur, _i80_tcgr_new)
+                    if not _i80_tcgr_ok:
+                        _i80_tcgr_ok = all(not _i80_tcgr_cur[k] for k in _i80_tcgr_reg)
+                    if not _i80_tcgr_ok:
+                        _i80_tcgr_ok = all(
+                            (not _i80_tcgr_cur[k]) or (k in {"max_domain"})
+                            for k in _i80_tcgr_reg
+                        )
+                    _i80_tcgr_test_count = sum(1 for s in _i80_tcgr_test if _is_techcrunch(s) or _f6_is_google_research_blog(s))
+                    if _i80_tcgr_test_count < _i80_tcgr and _i80_tcgr_ok:
+                        _log.info("iter93 final cap: replaced TC+GR[%d] '%s' with '%s' (combined %d→%d)",
+                                  _i80_tcgr_idx, str(getattr(_i80_tcgr_item, "title", ""))[:60],
+                                  str(getattr(_i80_tcgr_cand, "title", ""))[:60],
+                                  _i80_tcgr, _i80_tcgr_test_count)
+                        _selected[_i80_tcgr_idx] = _i80_tcgr_cand
+                        _i80_final_pool.pop(_i80_tcgr_ci)
+                        _i80_changed = True
+                        _i80_tcgr_swapped = True
+                        break
+            if not _i80_tcgr_swapped:
+                _log.warning("iter93 final cap: stuck at tc+gr combined=%d, no valid replacement", _i80_tcgr)
                 break
         # iter83: enforce non-strategic Google Research cap
         for _i80_nsgr_round in range(10):
