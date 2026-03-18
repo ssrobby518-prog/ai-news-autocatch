@@ -10716,7 +10716,11 @@ def _f600_run_fast_path(
             for _fr_candidate_pool in [_fr_pool, _fr_pool_wide]:
                 if _fr_swapped:
                     break
-                for _fr_ri in range(len(_selected)):
+                # iter93: sort positions so TC items come first — enables net-zero TC
+                # swaps (TC-for-TC) when the only available TP candidates are TC
+                _fr_positions = sorted(range(len(_selected)),
+                                       key=lambda i: (0 if _is_techcrunch(_selected[i]) else 1))
+                for _fr_ri in _fr_positions:
                     _fr_rv = _f6_vendor_key(_selected[_fr_ri])
                     if _fr_rv in _TARGET_PLAYER_VENDORS:
                         # iter78b: only skip if this vendor has only 1 item (removing would lose the vendor)
@@ -10735,10 +10739,10 @@ def _f600_run_fast_path(
                         _fr_inv_ok, _fr_inv_reg = _i80_no_regression(_fr_inv_before, _fr_inv_after)
                         if not _fr_inv_ok:
                             _fr_inv_ok = all(not _fr_inv_before[k] for k in _fr_inv_reg)
-                        # iter81: allow tc_cap/gr_cap/tc_gr_combined regression in FR-1
-                        # — final cap enforcement phase (iter80) will fix these after rescue
+                        # iter93: tc_cap NOT deferrable — rely on TC-first position sort for
+                        # net-zero TC swaps instead of deferring to final cap enforcement
                         if not _fr_inv_ok:
-                            _fr_cap_deferrable = {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain"}
+                            _fr_cap_deferrable = {"gr_cap", "max_domain"}
                             _fr_inv_ok = all(
                                 (not _fr_inv_before[k]) or (k in _fr_cap_deferrable)
                                 for k in _fr_inv_reg
@@ -10900,9 +10904,9 @@ def _f600_run_fast_path(
         _i80_ok_fr, _i80_reg_fr = _i80_no_regression(_i80_inv_fr, _i80_post_fr)
         if not _i80_ok_fr:
             _i80_ok_fr = all(not _i80_inv_fr[k] for k in _i80_reg_fr)
-        # iter81: allow cap-deferrable regressions — final cap enforcement will fix them
+        # iter93: tc_cap NOT deferrable (was deferrable in iter81); only gr_cap + max_domain
         if not _i80_ok_fr:
-            _i80_cap_deferrable = {"tc_cap", "gr_cap", "tc_gr_combined", "max_domain"}
+            _i80_cap_deferrable = {"gr_cap", "max_domain"}
             _i80_ok_fr = all(
                 (not _i80_inv_fr[k]) or (k in _i80_cap_deferrable)
                 for k in _i80_reg_fr
