@@ -12080,6 +12080,8 @@ def _f600_run_fast_path(
     _co_fresh_pass = (_co_fresh_check >= 8)  # iter92
     _co_not_top2_pass = (_co_not_top2_check == 0)  # iter93: hard gate, no exemption
     _co_gates_apply = (_oa_entrypoint == "scheduled_task" and len(_co_prev_all_hashes) > 0)  # iter92: only for scheduled with previous snapshot
+    if _co_not_top2_is_injected or _co_carryover_is_injected or _co_fresh_is_injected:  # iter94: force gate active so injection tests fire from any entrypoint
+        _co_gates_apply = True
 
     try:
         _cm71_path = _outputs / "content_mix.meta.json"
@@ -12676,20 +12678,20 @@ def _f600_run_fast_path(
         _f6_fail("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY", _cm72_bucket_fail)
 
     # iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY gate (B7) — each item >= 15
-    # iter90: defer if density drop was caused by aws_devdoc clearing
+    # iter90→94: defer pipeline FAIL if density drop was caused by aws_devdoc clearing, but keep pass truthful
+    _cm73_per_item_sd_deferred = False
     if _is_daily and not _cm73_per_item_sd_pass and _i88_aws_devdoc_swaps > 0:
-        _log.info("iter90: PER_ITEM_STRATEGIC_DENSITY gate deferred (aws_devdoc swap trade-off, %d items below floor)", len(_cm73_per_item_sd_failures))
-        _cm73_per_item_sd_pass = True
+        _log.info("iter94: PER_ITEM_STRATEGIC_DENSITY gate deferred (aws_devdoc swap trade-off, %d items below floor); pass stays %s", len(_cm73_per_item_sd_failures), _cm73_per_item_sd_pass)
+        _cm73_per_item_sd_deferred = True
         try:
             _i90_cm_path = _outputs / "content_mix.meta.json"
             if _i90_cm_path.exists():
                 _i90_cm_d = _f6_j.loads(_i90_cm_path.read_text(encoding="utf-8"))
-                _i90_cm_d["per_item_strategic_density_pass"] = True
                 _i90_cm_d["per_item_sd_deferred_by_aws_devdoc_swap"] = True
                 _i90_cm_path.write_text(_f6_j.dumps(_i90_cm_d, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
-    if _is_daily and not _cm73_per_item_sd_pass:
+    if _is_daily and not _cm73_per_item_sd_pass and not _cm73_per_item_sd_deferred:
         _cm73_sd_fail = f"PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY_FAIL: {len(_cm73_per_item_sd_failures)} items below floor={_cm73_sd_floor}"
         _write_not_ready_report_md(
             "PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY",
@@ -12794,13 +12796,13 @@ def _f600_run_fast_path(
             if _sdg_mp.exists():
                 _sdg_d = _f6_j.loads(_sdg_mp.read_text(encoding="utf-8"))
                 _sdg_pass = _sdg_d.get("strategic_density_gate_pass", True)
+                _sdg_deferred = False
                 if not _sdg_pass and _i88_aws_devdoc_swaps > 0:
-                    _log.info("iter90: STRATEGIC_DENSITY gate deferred (aws_devdoc swap trade-off)")
-                    _sdg_pass = True
-                    _sdg_d["strategic_density_gate_pass"] = True
+                    _log.info("iter94: STRATEGIC_DENSITY gate deferred (aws_devdoc swap trade-off); pass stays %s", _sdg_pass)
+                    _sdg_deferred = True
                     _sdg_d["strategic_density_deferred_by_aws_devdoc_swap"] = True
                     _sdg_mp.write_text(_f6_j.dumps(_sdg_d, ensure_ascii=False, indent=2), encoding="utf-8")
-                if not _sdg_pass:
+                if not _sdg_pass and not _sdg_deferred:
                     _sdg_avg = _sdg_d.get("selected_avg_strategic_density_score", 0)
                     _sdg_target = _sdg_d.get("target_avg_density_1p5", 0)
                     _sdg_min = _sdg_d.get("selected_min_strategic_density_score", 0)
