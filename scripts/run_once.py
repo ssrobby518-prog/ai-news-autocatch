@@ -9579,12 +9579,28 @@ def _f600_run_fast_path(
                           _bt_ri, _f6_is_bigtech(_bt_it), _i90_is_bigtech_audit(_bt_it),
                           _f6_src_type(_bt_it), _f6_vendor_key(_bt_it),
                           str(getattr(_bt_it, "title", ""))[:60])
-                for _bt_cand in _bt_rescue_pool:
-                    if _bt_cand not in _selected:
-                        _log.info("iter90: bigtech rescue — replacing non-bigtech idx=%d vendor=%s with %s",
-                                  _bt_ri, _f6_vendor_key(_bt_it), str(getattr(_bt_cand, "title", ""))[:60])
-                        _selected[_bt_ri] = _bt_cand
-                        _i90_bt_rescue_count += 1
+                _bt_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))
+                _bt_cur_gr = sum(1 for s in _selected if _f6_is_google_research_blog(s))
+                _bt_old_tc = _is_techcrunch(_bt_it)
+                _bt_old_gr = _f6_is_google_research_blog(_bt_it)
+                _bt_found = False
+                # iter93: two passes — prefer non-TC/GR, fallback to any (final_cap will fix)
+                for _bt_pass in range(2):
+                    for _bt_cand in _bt_rescue_pool:
+                        if _bt_cand not in _selected:
+                            if _bt_pass == 0:
+                                # iter93: first pass skips TC/GR when at cap
+                                if _is_techcrunch(_bt_cand) and not _bt_old_tc and _bt_cur_tc >= _TECHCRUNCH_CAP:
+                                    continue
+                                if _f6_is_google_research_blog(_bt_cand) and not _bt_old_gr and _bt_cur_gr >= _GOOGLE_RESEARCH_CAP:
+                                    continue
+                            _log.info("iter90: bigtech rescue — replacing non-bigtech idx=%d vendor=%s with %s (pass=%d)",
+                                      _bt_ri, _f6_vendor_key(_bt_it), str(getattr(_bt_cand, "title", ""))[:60], _bt_pass)
+                            _selected[_bt_ri] = _bt_cand
+                            _i90_bt_rescue_count += 1
+                            _bt_found = True
+                            break
+                    if _bt_found:
                         break
         if _i90_bt_rescue_count > 0:
             _log.info("iter90: bigtech rescue replaced %d non-bigtech items", _i90_bt_rescue_count)
