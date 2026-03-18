@@ -8240,7 +8240,9 @@ def _f600_run_fast_path(
             return _sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0) >= _SD73_FLOOR
 
         def _sd73_key(it):
-            return -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0)
+            # iter93: non-TC tiebreaker — push TC items after non-TC at same density
+            return (1 if _is_techcrunch(it) else 0,
+                    -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0))
 
         # iter75→77: exclusion helper — all CEO-prohibited item types
         def _is_devrel_or_indie(it) -> bool:
@@ -8330,6 +8332,23 @@ def _f600_run_fast_path(
                   len(_p72_pool_boma), len(_p72_pool_bta), len(_p72_pool_c),
                   len(_p72_pool_plat), len(_p72_pool_rt),
                   len(_p73_pool_leader), len(_p73_pool_china))
+
+        # iter93: candidate supply sufficiency diagnostic — log per-TP-vendor non-TC/non-GR
+        # candidates in the combined pool. This is the supply-layer health check.
+        _p93_all_supply = _p72_pool_boma + _p72_pool_bta + _p72_pool_c + _p73_pool_leader + _p73_pool_china
+        _p93_tp_supply: dict = {}
+        for _p93_it in _p93_all_supply:
+            _p93_vk = _f6_vendor_key(_p93_it)
+            if _p93_vk in _TARGET_PLAYER_VENDORS:
+                _p93_is_tc = _is_techcrunch(_p93_it)
+                _p93_is_gr = _f6_is_google_research_blog(_p93_it)
+                _p93_tp_supply.setdefault(_p93_vk, {"total": 0, "non_tc_gr": 0})
+                _p93_tp_supply[_p93_vk]["total"] += 1
+                if not _p93_is_tc and not _p93_is_gr:
+                    _p93_tp_supply[_p93_vk]["non_tc_gr"] += 1
+        _p93_deficient = [v for v, c in _p93_tp_supply.items() if c["non_tc_gr"] == 0]
+        _p93_supply_str = " ".join(f"{v}={c['non_tc_gr']}/{c['total']}" for v, c in sorted(_p93_tp_supply.items()))
+        _log.info("iter93 TP supply (non-TC-GR/total): %s deficient=%s", _p93_supply_str, _p93_deficient or "none")
 
         # Phase-1: fill 5 BOMA with bucket diversity skeleton
         _p73_used_buckets = set()
@@ -9343,7 +9362,10 @@ def _f600_run_fast_path(
                     if _pt_vc.get(_pt_rv, 0) <= 1:
                         continue
                 _pt_test = [s for j, s in enumerate(_selected) if j != _pt_ri]
-                for _pt_cand in _pool_700:
+                # iter93: sort pool non-TC first to avoid TC oversaturation in TP rescue
+                _pt_pool_sorted = sorted(_pool_700, key=lambda it: (1 if _is_techcrunch(it) else 0,
+                                                                     1 if _f6_is_google_research_blog(it) else 0))
+                for _pt_cand in _pt_pool_sorted:
                     if (_pt_cand in _pt_test or _is_ceo_prohibited(_pt_cand)
                             or _f6_is_dev_noise(_pt_cand)
                             or _hdf_all_scores.get(id(_pt_cand), {}).get("density_score", 0) < _HDF_NEW_DENSITY_MIN):
@@ -10099,8 +10121,9 @@ def _f600_run_fast_path(
                 if _co_ft < 300:
                     continue
                 _co_swap_pool.append(_co_ri)
-            # Sort pool: prefer bigtech+actionable+official/media, then fulltext length
+            # Sort pool: iter93 non-TC first, then bigtech+actionable+official/media, then fulltext length
             _co_swap_pool.sort(key=lambda x: (
+                1 if _is_techcrunch(x) else 0,  # iter93: prefer non-TC candidates
                 -int(_ct72b_is_bigtech_official_media_actionable(x)),
                 -int(_ct71_is_bigtech_actionable(x)),
                 -int(getattr(x, "fulltext_len", 0) or 0),
@@ -17486,15 +17509,37 @@ def run_pipeline() -> None:
                         "36kr.com", "deepseek.com", "baidu.com", "alibaba.com", "aliyun.com",
                         "tencent.com", "huawei.com",
                     })
+                    # iter93: expand frontload to ensure non-TC mainstream media + official vendor
+                    # domains get hydrated — this is the supply-layer fix for TC oversaturation
                     _HY_FRONTLOAD_MIN = {
                         "ithome.com.tw": 4,
-                        "bloomberg.com": 2,
-                        "openai.com": 2,
+                        "bloomberg.com": 4,   # iter93: raised from 2 — key non-TC business source
+                        "openai.com": 4,      # iter93: raised from 2 — official vendor blog
+                        "theverge.com": 3,    # iter93: NEW — mainstream media covering all vendors
+                        "ai.meta.com": 3,     # iter93: NEW — Meta official AI blog
+                        "anthropic.com": 3,   # iter93: NEW — Anthropic official blog
+                        "nvidianews.nvidia.com": 3,  # iter93: NEW — NVIDIA newsroom
+                        "blogs.nvidia.com": 2,       # iter93: NEW — NVIDIA tech blog
+                        "wired.com": 2,       # iter93: NEW — mainstream tech media
+                        "venturebeat.com": 2, # iter93: NEW — AI-focused media
+                        "cnbc.com": 2,        # iter93: NEW — business/finance media
+                        "reuters.com": 2,     # iter93: NEW — wire service
+                        "inside.com.tw": 2,   # iter93: NEW — TW tech media
                     }
                     _HY_FRONTLOAD_HINTS = {
                         "ithome.com.tw": ("ai", "openai", "nvidia", "microsoft", "google", "amazon"),
-                        "bloomberg.com": ("ai", "openai", "microsoft", "google", "amazon", "anthropic"),
-                        "openai.com": ("openai", "api", "model", "release", "safety"),
+                        "bloomberg.com": ("ai", "openai", "microsoft", "google", "amazon", "anthropic", "meta", "nvidia"),
+                        "openai.com": ("openai", "api", "model", "release", "safety", "gpt", "codex", "sora"),
+                        "theverge.com": ("ai", "openai", "meta", "google", "nvidia", "anthropic", "microsoft", "amazon"),
+                        "ai.meta.com": ("meta", "llama", "ai", "model", "release", "research"),
+                        "anthropic.com": ("anthropic", "claude", "ai", "model", "safety", "release"),
+                        "nvidianews.nvidia.com": ("nvidia", "gpu", "ai", "model", "inference", "release"),
+                        "blogs.nvidia.com": ("nvidia", "ai", "gpu", "model", "inference"),
+                        "wired.com": ("ai", "openai", "meta", "google", "nvidia", "anthropic"),
+                        "venturebeat.com": ("ai", "openai", "meta", "google", "nvidia", "anthropic"),
+                        "cnbc.com": ("ai", "openai", "meta", "google", "nvidia", "anthropic", "microsoft"),
+                        "reuters.com": ("ai", "openai", "meta", "google", "nvidia", "anthropic", "microsoft"),
+                        "inside.com.tw": ("ai", "openai", "meta", "google", "nvidia", "microsoft"),
                     }
                     _hy_injected = 0
                     _hy_frontload = 0
@@ -17587,7 +17632,14 @@ def run_pipeline() -> None:
                                             "Anthropic", "xAI", "Apple", "Alibaba", "Tencent", "ByteDance",
                                             "Baidu", "DeepSeek"})
                     _hy_tp_injected = 0
-                    for _hy_it in raw_items[_hydrate_n:]:
+                    # iter93: sort remaining items non-TC first for vendor diversity injection
+                    # This ensures official/mainstream media items are picked before TC items
+                    def _hy_is_tc(it):
+                        _u = str(getattr(it, "url", "") or getattr(it, "link", "") or "").lower()
+                        return "techcrunch.com" in _u
+                    _hy_remaining_sorted = sorted(raw_items[_hydrate_n:],
+                                                   key=lambda it: (1 if _hy_is_tc(it) else 0))
+                    for _hy_it in _hy_remaining_sorted:
                         if _hy_tp_injected >= 30:
                             break
                         if id(_hy_it) in _hy_pool_ids:
@@ -17601,9 +17653,40 @@ def run_pipeline() -> None:
                             _hy_injected += 1
                     if _hy_tp_injected:
                         log.info("DAILY hydration vendor diversity: injected %d items for target player coverage", _hy_tp_injected)
+                    # iter93 Pass 4: non-TC target player boost — for each TP vendor with ZERO
+                    # non-TC candidates in the pool, inject non-TC items from remaining raw_items.
+                    # This is the critical supply-layer fix: ensures selection/rescue has non-TC
+                    # alternatives for every target player vendor.
+                    _hy_nontc_boost = 0
+                    _HY_CORE_TP = frozenset({"OpenAI", "Meta", "NVIDIA", "Anthropic", "Amazon", "Google"})
+                    # Count non-TC items per vendor currently in pool
+                    _hy_nontc_vendor: dict = {}
+                    for _hy_it in _targeted_pool:
+                        _hv = _hy_title_vendor(_hy_it)
+                        if _hv in _HY_CORE_TP and not _hy_is_tc(_hy_it):
+                            _hy_nontc_vendor[_hv] = _hy_nontc_vendor.get(_hv, 0) + 1
+                    _hy_deficient_vendors = [v for v in _HY_CORE_TP if _hy_nontc_vendor.get(v, 0) < 2]
+                    if _hy_deficient_vendors:
+                        for _hy_it in _hy_remaining_sorted:  # already sorted non-TC first
+                            if _hy_nontc_boost >= 15:
+                                break
+                            if id(_hy_it) in _hy_pool_ids:
+                                continue
+                            if _hy_is_tc(_hy_it):
+                                break  # sorted non-TC first; if we hit TC, all remaining are TC
+                            _hv = _hy_title_vendor(_hy_it)
+                            if _hv in _hy_deficient_vendors and _hy_nontc_vendor.get(_hv, 0) < 3:
+                                _targeted_pool.append(_hy_it)
+                                _hy_pool_ids.add(id(_hy_it))
+                                _hy_nontc_vendor[_hv] = _hy_nontc_vendor.get(_hv, 0) + 1
+                                _hy_nontc_boost += 1
+                                _hy_injected += 1
+                        if _hy_nontc_boost:
+                            log.info("iter93 DAILY hydration non-TC TP boost: injected %d items for vendors %s",
+                                     _hy_nontc_boost, _hy_deficient_vendors)
                     if _hy_injected:
-                        log.info("DAILY hydration diversity: injected %d items from %d under-represented domains (priority=%d vendor=%d)",
-                                 _hy_injected, len([d for d, c in _hy_dom_counts.items() if c <= 2 and d]), _hy_pri_injected, _hy_tp_injected)
+                        log.info("DAILY hydration diversity: injected %d items from %d under-represented domains (priority=%d vendor=%d nontc_boost=%d)",
+                                 _hy_injected, len([d for d, c in _hy_dom_counts.items() if c <= 2 and d]), _hy_pri_injected, _hy_tp_injected, _hy_nontc_boost)
                 # iter42→89: DAILY uses per-url=4s, batch_timeout=53s (2s headroom for HYDRATE_HARD_DEADLINE=55s gate)
                 _hy_timeout = 4 if _is_daily else 8
                 _hy_batch   = 53 if _is_daily else 180

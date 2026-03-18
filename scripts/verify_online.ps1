@@ -5699,6 +5699,108 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
+# iter93: SCHEDULED_CARRYOVER_MAX_HARD_DAILY — carryover_total <= 2
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_coMaxMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "SCHEDULED_CARRYOVER_MAX_HARD_DAILY:"
+    if (Test-Path $_coMaxMetaPath) {
+        try {
+            $_coMaxMeta = Get-Content $_coMaxMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_coGatesApply = if ($_coMaxMeta.PSObject.Properties['carryover_gates_apply']) { [bool]$_coMaxMeta.carryover_gates_apply } else { $false }
+            $_coTotal = if ($_coMaxMeta.PSObject.Properties['carryover_total']) { [int]$_coMaxMeta.carryover_total } else { 0 }
+            $_coMaxPass = if ($_coMaxMeta.PSObject.Properties['carryover_max_pass']) { [bool]$_coMaxMeta.carryover_max_pass } else { $true }
+            $_coMaxInjected = if ($_coMaxMeta.PSObject.Properties['scheduled_carryover_test_injected']) { $_coMaxMeta.scheduled_carryover_test_injected } else { $false }
+            Write-Output ("  carryover_gates_apply : {0}" -f $_coGatesApply)
+            Write-Output ("  carryover_total       : {0}" -f $_coTotal)
+            Write-Output ("  carryover_max_pass    : {0}" -f $_coMaxPass)
+            if ($_coMaxInjected) {
+                Write-Output "  test_injected         : True"
+            }
+            if ($_coGatesApply -and -not $_coMaxPass) {
+                $_coMaxFail = ("SCHEDULED_CARRYOVER_MAX_HARD_DAILY_FAIL: carryover_total={0} > 2" -f $_coTotal)
+                Write-Output ("  => FAIL: {0}" -f $_coMaxFail)
+                Invoke-VerifyOnlineFailFast -Gate "SCHEDULED_CARRYOVER_MAX_HARD_DAILY" -Reason $_coMaxFail
+            }
+            Write-Output "  => SCHEDULED_CARRYOVER_MAX_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  SCHEDULED_CARRYOVER_MAX_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  SCHEDULED_CARRYOVER_MAX_HARD_DAILY: SKIP (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter93: SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY — fresh_items_total >= 8
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_coFreshMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY:"
+    if (Test-Path $_coFreshMetaPath) {
+        try {
+            $_coFreshMeta = Get-Content $_coFreshMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_coFreshGatesApply = if ($_coFreshMeta.PSObject.Properties['carryover_gates_apply']) { [bool]$_coFreshMeta.carryover_gates_apply } else { $false }
+            $_coFreshTotal = if ($_coFreshMeta.PSObject.Properties['fresh_items_total']) { [int]$_coFreshMeta.fresh_items_total } else { 10 }
+            $_coFreshPass = if ($_coFreshMeta.PSObject.Properties['fresh_items_min_pass']) { [bool]$_coFreshMeta.fresh_items_min_pass } else { $true }
+            $_coFreshInjected = if ($_coFreshMeta.PSObject.Properties['scheduled_fresh_items_test_injected']) { $_coFreshMeta.scheduled_fresh_items_test_injected } else { $false }
+            Write-Output ("  carryover_gates_apply : {0}" -f $_coFreshGatesApply)
+            Write-Output ("  fresh_items_total     : {0}" -f $_coFreshTotal)
+            Write-Output ("  fresh_items_min_pass  : {0}" -f $_coFreshPass)
+            if ($_coFreshInjected) {
+                Write-Output "  test_injected         : True"
+            }
+            if ($_coFreshGatesApply -and -not $_coFreshPass) {
+                $_coFreshFail = ("SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY_FAIL: fresh_items_total={0} < 8" -f $_coFreshTotal)
+                Write-Output ("  => FAIL: {0}" -f $_coFreshFail)
+                Invoke-VerifyOnlineFailFast -Gate "SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY" -Reason $_coFreshFail
+            }
+            Write-Output "  => SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  SCHEDULED_FRESH_ITEMS_MIN_HARD_DAILY: SKIP (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter93: SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY — carryover_not_in_prev_top2 = 0
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_coTop2MetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY:"
+    if (Test-Path $_coTop2MetaPath) {
+        try {
+            $_coTop2Meta = Get-Content $_coTop2MetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_coTop2GatesApply = if ($_coTop2Meta.PSObject.Properties['carryover_gates_apply']) { [bool]$_coTop2Meta.carryover_gates_apply } else { $false }
+            $_coNotTop2 = if ($_coTop2Meta.PSObject.Properties['carryover_not_in_prev_top2']) { [int]$_coTop2Meta.carryover_not_in_prev_top2 } else { 0 }
+            $_coTop2Pass = if ($_coTop2Meta.PSObject.Properties['carryover_top2_only_pass']) { [bool]$_coTop2Meta.carryover_top2_only_pass } else { $true }
+            $_coTop2Injected = if ($_coTop2Meta.PSObject.Properties['carryover_not_in_prev_top2_test_injected']) { $_coTop2Meta.carryover_not_in_prev_top2_test_injected } else { $false }
+            Write-Output ("  carryover_gates_apply       : {0}" -f $_coTop2GatesApply)
+            Write-Output ("  carryover_not_in_prev_top2  : {0}" -f $_coNotTop2)
+            Write-Output ("  carryover_top2_only_pass    : {0}" -f $_coTop2Pass)
+            if ($_coTop2Injected) {
+                Write-Output "  test_injected               : True"
+            }
+            if ($_coTop2GatesApply -and -not $_coTop2Pass) {
+                $_coTop2Fail = ("SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY_FAIL: carryover_not_in_prev_top2={0} > 0" -f $_coNotTop2)
+                Write-Output ("  => FAIL: {0}" -f $_coTop2Fail)
+                Invoke-VerifyOnlineFailFast -Gate "SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY" -Reason $_coTop2Fail
+            }
+            Write-Output "  => SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  SCHEDULED_CARRYOVER_TOP2_ONLY_HARD_DAILY: SKIP (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # iter82: TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY — tc_rumor <= 1
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
@@ -6329,6 +6431,16 @@ if (Test-Path $_fpSaPath) {
         Write-Output ("daily_last_ids_read              = {0}" -f $(if ($_fpSa.PSObject.Properties['daily_last_ids_read']) { $_fpSa.daily_last_ids_read } else { "N/A" }))
         $_fpDupEnabled = if ($_fpSa.PSObject.Properties['daily_dup_gate_enabled']) { $_fpSa.daily_dup_gate_enabled } else { $false }
         Write-Output ("daily_last_ids_written            = {0}" -f $(if ($_fpDupEnabled -eq $true) { "true (deferred to success)" } else { "false" }))
+    } catch {}
+}
+# iter93: carryover fingerprint fields
+if (Test-Path $_fpCmPath) {
+    try {
+        $_fpCo = Get-Content $_fpCmPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-Output ("carryover_gates_apply            = {0}" -f $(if ($_fpCo.PSObject.Properties['carryover_gates_apply']) { $_fpCo.carryover_gates_apply } else { "N/A" }))
+        Write-Output ("carryover_total                  = {0}" -f $(if ($_fpCo.PSObject.Properties['carryover_total']) { $_fpCo.carryover_total } else { "N/A" }))
+        Write-Output ("fresh_items_total                = {0}" -f $(if ($_fpCo.PSObject.Properties['fresh_items_total']) { $_fpCo.fresh_items_total } else { "N/A" }))
+        Write-Output ("carryover_not_in_prev_top2       = {0}" -f $(if ($_fpCo.PSObject.Properties['carryover_not_in_prev_top2']) { $_fpCo.carryover_not_in_prev_top2 } else { "N/A" }))
     } catch {}
 }
 Write-Output "=== END P0 STRATEGIC FINGERPRINT ==="
