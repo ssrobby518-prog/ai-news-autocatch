@@ -14004,13 +14004,15 @@ def _f600_run_fast_path(
             _i83_sd_min = min(_i83_sd_scores) if _i83_sd_scores else 0
             _i83_sd_target = int(locals().get("_sd72_target_avg", _cm73_sd_floor))
             _i83_sd_gate_pass = (len(_i83_sd_scores) > 0 and _i83_sd_avg >= _i83_sd_target)
-            # iter90: preserve strategic density deferral from aws_devdoc swap
+            # iter90→94: defer pipeline FAIL but keep pass truthful
+            _i83_sd_gate_deferred = False
             if not _i83_sd_gate_pass and _i88_aws_devdoc_swaps > 0:
-                _log.info("iter90: canonical snapshot sd_gate_pass deferred (aws_devdoc swap)")
-                _i83_sd_gate_pass = True
+                _log.info("iter94: canonical snapshot sd_gate_pass deferred (aws_devdoc swap); pass stays %s", _i83_sd_gate_pass)
+                _i83_sd_gate_deferred = True
+            _i83_per_item_sd_deferred = False
             if not _i83_per_item_sd_pass and _i88_aws_devdoc_swaps > 0:
-                _log.info("iter90: canonical snapshot per_item_sd_pass deferred (aws_devdoc swap)")
-                _i83_per_item_sd_pass = True
+                _log.info("iter94: canonical snapshot per_item_sd_pass deferred (aws_devdoc swap); pass stays %s", _i83_per_item_sd_pass)
+                _i83_per_item_sd_deferred = True
 
             # Apply INJECT_ overrides for gate-check values (same as pre-swap section)
             _i83_plat_check = int(os.environ["INJECT_PLATFORM_DOMAIN_TOTAL"]) if os.environ.get("INJECT_PLATFORM_DOMAIN_TOTAL") else _i83_plat_total
@@ -14189,10 +14191,12 @@ def _f600_run_fast_path(
                 "strategic_bucket_coverage_pass": _i83_buckets_distinct >= 5,
                 "per_item_strategic_density_floor": _cm73_sd_floor,
                 "per_item_strategic_density_pass": _i83_per_item_sd_pass,
+                "per_item_sd_deferred_by_aws_devdoc_swap": _i83_per_item_sd_deferred,
                 "per_item_strategic_density_failures": _i83_per_item_sd_failures,
                 "strategic_density_gate_target_avg": _i83_sd_target,
                 "strategic_density_gate_avg": _i83_sd_avg,
                 "strategic_density_gate_pass": _i83_sd_gate_pass,
+                "strategic_density_deferred_by_aws_devdoc_swap": _i83_sd_gate_deferred,
                 "source_density_floor": _HDF_NEW_DENSITY_MIN,
                 "source_density_min": _i83_density_min,
                 "source_density_avg": _i83_density_avg,
@@ -14532,7 +14536,9 @@ def _f600_run_fast_path(
                 _i83_sd_meta["target_avg_density_1p5"] = _i83_sd_target
                 _i83_sd_meta["target_min_density_1p5"] = _cm73_sd_floor
                 _i83_sd_meta["strategic_density_gate_pass"] = _i83_sd_gate_pass
+                _i83_sd_meta["strategic_density_deferred_by_aws_devdoc_swap"] = _i83_sd_gate_deferred
                 _i83_sd_meta["per_item_strategic_density_gate_pass"] = _i83_per_item_sd_pass
+                _i83_sd_meta["per_item_sd_deferred_by_aws_devdoc_swap"] = _i83_per_item_sd_deferred
                 _i83_sd_meta["per_item_strategic_density_failures"] = _i83_per_item_sd_failures
                 _i83_sd_path.write_text(_f6_j.dumps(_i83_sd_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
