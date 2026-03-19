@@ -5246,12 +5246,8 @@ if ($_fast300Daily) {
             if ($_sdmInjected) {
                 Write-Output "  test_injected                 : True"
             }
-            # iter90: honor deferral when aws_devdoc swap caused density drop
-            $_sdmDeferred = if ($_sdmMeta.PSObject.Properties['density_deferred_by_aws_devdoc_swap']) { $_sdmMeta.density_deferred_by_aws_devdoc_swap } else { $false }
-            if (-not $_sdmGatePass -and $_sdmDeferred) {
-                Write-Output "  density_deferred_by_aws_devdoc_swap : True"
-                Write-Output "  => SOURCE_DENSITY_MULTIPLIER_HARD_DAILY: PASS (deferred by aws_devdoc swap)"
-            } elseif (-not $_sdmGatePass) {
+            # iter95: NO deferral — density_deferred_by_aws_devdoc_swap removed
+            if (-not $_sdmGatePass) {
                 $_sdmFail = ("SOURCE_DENSITY_MULTIPLIER_HARD_DAILY_FAIL: selected_min={0} < new_density_min={1} avg={2} multiplier={3}" -f $_sdmSelMin, $_sdmNew, $_sdmSelAvg, $_sdmMult)
                 Write-Output ("  => FAIL: {0}" -f $_sdmFail)
                 Invoke-VerifyOnlineFailFast -Gate "SOURCE_DENSITY_MULTIPLIER_HARD_DAILY" -Reason $_sdmFail
@@ -6240,12 +6236,11 @@ if ($_fast300Daily) {
             $_piFloor = if ($_piMeta.PSObject.Properties['per_item_strategic_density_floor']) { [int]$_piMeta.per_item_strategic_density_floor } else { 15 }
             $_piPass  = if ($_piMeta.PSObject.Properties['per_item_strategic_density_pass']) { $_piMeta.per_item_strategic_density_pass } else { $false }
             $_piFails = if ($_piMeta.PSObject.Properties['per_item_strategic_density_failures']) { $_piMeta.per_item_strategic_density_failures } else { @() }
-            $_piDeferred = if ($_piMeta.PSObject.Properties['per_item_sd_deferred_by_aws_devdoc_swap']) { $_piMeta.per_item_sd_deferred_by_aws_devdoc_swap } else { $false }
+            # iter95: NO deferral — per_item_sd_deferred removed
             Write-Output ("  per_item_floor               : {0}" -f $_piFloor)
             Write-Output ("  per_item_pass                : {0}" -f $_piPass)
-            Write-Output ("  per_item_deferred            : {0}" -f $_piDeferred)
             Write-Output ("  failures_count               : {0}" -f @($_piFails).Count)
-            if (-not $_piPass -and -not $_piDeferred) {
+            if (-not $_piPass) {
                 $_piFail = ("PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY_FAIL: {0} items below floor={1}" -f @($_piFails).Count, $_piFloor)
                 Write-Output ("  => FAIL: {0}" -f $_piFail)
                 Invoke-VerifyOnlineFailFast -Gate "PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY" -Reason $_piFail
@@ -6275,14 +6270,13 @@ if ($_fast300Daily) {
             $_sdgTarget = if ($_sdgMeta.PSObject.Properties['target_avg_density_1p5']) { [int]$_sdgMeta.target_avg_density_1p5 } else { 0 }
             $_sdgBase   = if ($_sdgMeta.PSObject.Properties['base_avg_density']) { $_sdgMeta.base_avg_density } else { 0 }
             $_sdgPass   = if ($_sdgMeta.PSObject.Properties['strategic_density_gate_pass']) { $_sdgMeta.strategic_density_gate_pass } else { $false }
-            $_sdgDeferred = if ($_sdgMeta.PSObject.Properties['strategic_density_deferred_by_aws_devdoc_swap']) { $_sdgMeta.strategic_density_deferred_by_aws_devdoc_swap } else { $false }
+            # iter95: NO deferral — strategic_density_deferred removed
             Write-Output ("  base_avg_density             : {0}" -f $_sdgBase)
             Write-Output ("  target_avg_density_1p5       : {0}" -f $_sdgTarget)
             Write-Output ("  selected_avg_strategic_density : {0:F1}" -f $_sdgAvg)
             Write-Output ("  selected_min_strategic_density : {0}" -f $_sdgMin)
             Write-Output ("  strategic_density_gate_pass  : {0}" -f $_sdgPass)
-            Write-Output ("  strategic_density_deferred   : {0}" -f $_sdgDeferred)
-            if (-not $_sdgPass -and -not $_sdgDeferred) {
+            if (-not $_sdgPass) {
                 $_sdgFail = ("STRATEGIC_DENSITY_1P5_HARD_DAILY_FAIL: avg={0} target={1} min={2} floor=10" -f $_sdgAvg, $_sdgTarget, $_sdgMin)
                 Write-Output ("  => FAIL: {0}" -f $_sdgFail)
                 Invoke-VerifyOnlineFailFast -Gate "STRATEGIC_DENSITY_1P5_HARD_DAILY" -Reason $_sdgFail

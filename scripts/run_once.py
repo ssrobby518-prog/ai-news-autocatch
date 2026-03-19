@@ -8338,22 +8338,39 @@ def _f600_run_fast_path(
                   len(_p72_pool_plat), len(_p72_pool_rt),
                   len(_p73_pool_leader), len(_p73_pool_china))
 
-        # iter93: candidate supply sufficiency diagnostic — log per-TP-vendor non-TC/non-GR
-        # candidates in the combined pool. This is the supply-layer health check.
+        # iter95: candidate supply sufficiency — hard gate for scheduled_task
         _p93_all_supply = _p72_pool_boma + _p72_pool_bta + _p72_pool_c + _p73_pool_leader + _p73_pool_china
         _p93_tp_supply: dict = {}
+        _p93_non_tc_gr_om_count = 0
         for _p93_it in _p93_all_supply:
             _p93_vk = _f6_vendor_key(_p93_it)
+            _p93_is_tc = _is_techcrunch(_p93_it)
+            _p93_is_gr = _f6_is_google_research_blog(_p93_it)
+            if not _p93_is_tc and not _p93_is_gr and _f6_src_type(_p93_it) in _BT_OM_TYPES:
+                _p93_non_tc_gr_om_count += 1
             if _p93_vk in _TARGET_PLAYER_VENDORS:
-                _p93_is_tc = _is_techcrunch(_p93_it)
-                _p93_is_gr = _f6_is_google_research_blog(_p93_it)
                 _p93_tp_supply.setdefault(_p93_vk, {"total": 0, "non_tc_gr": 0})
                 _p93_tp_supply[_p93_vk]["total"] += 1
                 if not _p93_is_tc and not _p93_is_gr:
                     _p93_tp_supply[_p93_vk]["non_tc_gr"] += 1
         _p93_deficient = [v for v, c in _p93_tp_supply.items() if c["non_tc_gr"] == 0]
         _p93_supply_str = " ".join(f"{v}={c['non_tc_gr']}/{c['total']}" for v, c in sorted(_p93_tp_supply.items()))
-        _log.info("iter93 TP supply (non-TC-GR/total): %s deficient=%s", _p93_supply_str, _p93_deficient or "none")
+        _log.info("iter95 TP supply (non-TC-GR/total): %s deficient=%s non_tc_gr_om=%d",
+                  _p93_supply_str, _p93_deficient or "none", _p93_non_tc_gr_om_count)
+        # iter95: write supply sufficiency meta for verify_online gate check
+        try:
+            _p95_supply_meta = {
+                "run_id": _run_id,
+                "tp_supply": _p93_tp_supply,
+                "deficient_vendors": _p93_deficient,
+                "non_tc_gr_om_candidates": _p93_non_tc_gr_om_count,
+                "supply_sufficient": _p93_non_tc_gr_om_count >= 10 and len(_p93_deficient) <= 3,
+                "entrypoint": _oa_entrypoint,
+            }
+            (_outputs / "pool_sufficiency.meta.json").write_text(
+                _f6_j.dumps(_p95_supply_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
         # Phase-1: fill 5 BOMA with bucket diversity skeleton
         _p73_used_buckets = set()
@@ -10396,9 +10413,9 @@ def _f600_run_fast_path(
                                              _co_over_vendor, len(_co_over_positions), len(_co_wide_pool), _co_coord_fail_reasons[:5])
             _log.info("iter92 carryover swap: completed %d/%d replacements", _co_swap_count, len(_co_blocked_indices))
 
-    # iter93: gate conflict resolution — if a carryover non-top2 item is the SOLE provider
-    # of a critical min-1 gate (china_ai_gov), exempt it from carryover_not_in_prev_top2 count.
-    # Priority: content coverage > freshness (can't deliver a brief with missing coverage).
+    # iter95: NO exemptions — carryover_not_in_prev_top2 is hard-locked, no critical_coverage_exempt.
+    # If a carryover non-top2 item is the sole china_ai_gov provider, the pipeline must
+    # find a fresh china_ai_gov candidate at the supply layer, not exempt the carryover item.
 
     # iter92: compute carryover stats (after all dedup/swap, before gates)
     _co_per_item: list = []
@@ -10406,33 +10423,21 @@ def _f600_run_fast_path(
     _co_fresh_total = len(_selected)
     _co_not_in_prev_top2 = 0
     if _is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes:
-        # iter93: identify items that are sole providers of critical min-1 gates
-        _co_cag_items = [i for i, s in enumerate(_selected) if _is_china_ai_gov(s)]
-        _co_sole_cag = set(_co_cag_items) if len(_co_cag_items) == 1 else set()
         for _co_i, _co_s in enumerate(_selected):
             _co_h = _oa_item_hash(_co_s)
             _co_is_carry = bool(_co_h and _co_h in _co_prev_all_hashes)
             _co_is_top2 = bool(_co_h and _co_h in _co_prev_top2_hashes)
-            _co_is_critical = (_co_i in _co_sole_cag)  # sole china_ai_gov provider
             _co_per_item.append({
                 "carryover_item": _co_is_carry,
                 "fresh_item": not _co_is_carry,
                 "prev_top2_item": _co_is_top2,
-                "critical_coverage_exempt": _co_is_critical,
                 "carryover_match_key": _co_h if _co_is_carry else "",
             })
         _co_carryover_total = sum(1 for p in _co_per_item if p["carryover_item"])
         _co_fresh_total = len(_selected) - _co_carryover_total
-        # iter93: don't count critical-coverage-exempt items as carryover_not_in_prev_top2
+        # iter95: no exemption — count ALL carryover non-top2 items
         _co_not_in_prev_top2 = sum(1 for p in _co_per_item
-                                    if p["carryover_item"] and not p["prev_top2_item"]
-                                    and not p.get("critical_coverage_exempt", False))
-        _co_exempt_count = sum(1 for p in _co_per_item
-                                if p["carryover_item"] and not p["prev_top2_item"]
-                                and p.get("critical_coverage_exempt", False))
-        if _co_exempt_count:
-            _log.info("iter93 carryover: %d item(s) exempt from not_in_prev_top2 (sole china_ai_gov provider)",
-                      _co_exempt_count)
+                                    if p["carryover_item"] and not p["prev_top2_item"])
         _log.info("iter92 carryover: total=%d fresh=%d not_in_prev_top2=%d",
                   _co_carryover_total, _co_fresh_total, _co_not_in_prev_top2)
     else:
@@ -11230,10 +11235,12 @@ def _f600_run_fast_path(
                 _i90_nuclear_pool = [it for it in _f6_tier(300) if it not in _selected
                                      and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                                      and not _is_aws_devdoc(it)
-                                     and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
-                # Sort: new domains first (to maintain min_domains), then by fulltext length
+                                     and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                                     and _sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0) >= _cm73_sd_floor]  # iter95: enforce sd floor
+                # Sort: new domains first, then by strategic density (higher first), then fulltext
                 _i90_nuclear_pool.sort(key=lambda it: (
                     0 if _f6_domain_key(it) not in _i90_existing_domains else 1,
+                    -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0),
                     -int(getattr(it, "fulltext_len", 0) or 0)))
                 _log.info("iter90 nuclear pool: total=%d new_domain=%d existing_domain=%d",
                           len(_i90_nuclear_pool),
@@ -11248,10 +11255,10 @@ def _f600_run_fast_path(
                     if _i90_target_idx is None:
                         break
                     _i90_swapped = False
-                    # iter90: use no-regression with deferrable density gates
-                    # Clearing AWS devdoc is higher priority than maintaining density floor
+                    # iter95: nuclear swap — pool filtered by sd_floor; allow density regression
+                    # since the swap-in item itself meets the floor; global min may regress from other items
                     _i90_inv_before = _i80_invariant_snapshot(_selected)
-                    _i90_density_deferrable = {"density_floor", "per_item_sd", "sd_avg", "target_player"}
+                    _i90_density_deferrable = {"density_floor", "per_item_sd", "sd_avg"}
                     _i90_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))  # iter92
                     _i90_nuc_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
                     _i90_nuc_max_vc = max(_i90_nuc_vc.values()) if _i90_nuc_vc else 0  # iter93: track vendor concentration
@@ -11269,9 +11276,9 @@ def _f600_run_fast_path(
                             continue
                         _i90_inv = _i80_invariant_snapshot(_i90_test)
                         _i90_ok, _i90_reg = _i80_no_regression(_i90_inv_before, _i90_inv)
-                        # Accept if no regression, OR if only density/tp invariants regress
+                        # iter95: accept if only density invariants regress (pool is sd_floor filtered)
                         if not _i90_ok:
-                            _i90_ok = all(k in _i90_density_deferrable for k in _i90_reg)
+                            _i90_ok = all(k in _i90_density_deferrable or not _i90_inv_before[k] for k in _i90_reg)
                         if _i90_ok:
                             _log.info("iter90 AWS devdoc swap (nuclear): replaced idx=%d title='%s' with '%s' (domain=%s)",
                                       _i90_target_idx,
@@ -12473,7 +12480,8 @@ def _f600_run_fast_path(
     _co_fresh_pass = (_co_fresh_check >= 8)  # iter92
     _co_not_top2_pass = (_co_not_top2_check == 0)  # iter93: hard gate, no exemption
     _co_gates_apply = (_oa_entrypoint == "scheduled_task" and len(_co_prev_all_hashes) > 0)  # iter92: only for scheduled with previous snapshot
-    if _co_not_top2_is_injected or _co_carryover_is_injected or _co_fresh_is_injected:  # iter94: force gate active so injection tests fire from any entrypoint
+    # iter95: carryover injection tests ONLY fire from scheduled_task entrypoint (not desktop_button)
+    if _oa_entrypoint == "scheduled_task" and (_co_not_top2_is_injected or _co_carryover_is_injected or _co_fresh_is_injected):
         _co_gates_apply = True
 
     try:
@@ -13071,20 +13079,9 @@ def _f600_run_fast_path(
         _f6_fail("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY", _cm72_bucket_fail)
 
     # iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY gate (B7) — each item >= 15
-    # iter90→94: defer pipeline FAIL if density drop was caused by aws_devdoc clearing, but keep pass truthful
-    _cm73_per_item_sd_deferred = False
-    if _is_daily and not _cm73_per_item_sd_pass and _i88_aws_devdoc_swaps > 0:
-        _log.info("iter94: PER_ITEM_STRATEGIC_DENSITY gate deferred (aws_devdoc swap trade-off, %d items below floor); pass stays %s", len(_cm73_per_item_sd_failures), _cm73_per_item_sd_pass)
-        _cm73_per_item_sd_deferred = True
-        try:
-            _i90_cm_path = _outputs / "content_mix.meta.json"
-            if _i90_cm_path.exists():
-                _i90_cm_d = _f6_j.loads(_i90_cm_path.read_text(encoding="utf-8"))
-                _i90_cm_d["per_item_sd_deferred_by_aws_devdoc_swap"] = True
-                _i90_cm_path.write_text(_f6_j.dumps(_i90_cm_d, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
-    if _is_daily and not _cm73_per_item_sd_pass and not _cm73_per_item_sd_deferred:
+    # iter95: NO deferral — if aws_devdoc swap introduces low-density item, the pipeline fails honestly
+    _cm73_per_item_sd_deferred = False  # iter95: always false, no deferral allowed
+    if _is_daily and not _cm73_per_item_sd_pass:
         _cm73_sd_fail = f"PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY_FAIL: {len(_cm73_per_item_sd_failures)} items below floor={_cm73_sd_floor}"
         _write_not_ready_report_md(
             "PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY",
@@ -13145,20 +13142,13 @@ def _f600_run_fast_path(
         _f6_fail("SINGLE_VENDOR_SHARE_CAP_HARD_DAILY", _vsc_fail_reason)
 
     # iter66: SOURCE_DENSITY_MULTIPLIER_HARD_DAILY gate (DAILY only)
-    # iter90: defer if density drop was caused by aws_devdoc clearing
+    # iter95: NO deferral — final truth only, no density_deferred_by_aws_devdoc_swap
     if _is_daily:
         try:
             _sdm_mp = _outputs / "source_density.meta.json"
             if _sdm_mp.exists():
                 _sdm_d = _f6_j.loads(_sdm_mp.read_text(encoding="utf-8"))
                 _sdm_pass = _sdm_d.get("density_multiplier_gate_pass", True)
-                if not _sdm_pass and _i88_aws_devdoc_swaps > 0:
-                    _log.info("iter90: SOURCE_DENSITY gate deferred (aws_devdoc swap trade-off, min=%s)",
-                              _sdm_d.get("selected_min_density_score", "?"))
-                    _sdm_pass = True
-                    _sdm_d["density_multiplier_gate_pass"] = True
-                    _sdm_d["density_deferred_by_aws_devdoc_swap"] = True
-                    _sdm_mp.write_text(_f6_j.dumps(_sdm_d, ensure_ascii=False, indent=2), encoding="utf-8")
                 if not _sdm_pass:
                     _sdm_min = _sdm_d.get("selected_min_density_score", 0)
                     _sdm_thr = _sdm_d.get("new_density_min", 0)
@@ -13182,20 +13172,14 @@ def _f600_run_fast_path(
             _log.warning("SOURCE_DENSITY_MULTIPLIER gate check failed: %s", _sdm_exc)
 
     # iter72b: STRATEGIC_DENSITY_1P5_HARD_DAILY gate (C3)
-    # iter90: defer if density drop was caused by aws_devdoc clearing
+    # iter95: NO deferral — final truth only, no strategic_density_deferred_by_aws_devdoc_swap
     if _is_daily:
         try:
             _sdg_mp = _outputs / "source_density.meta.json"
             if _sdg_mp.exists():
                 _sdg_d = _f6_j.loads(_sdg_mp.read_text(encoding="utf-8"))
                 _sdg_pass = _sdg_d.get("strategic_density_gate_pass", True)
-                _sdg_deferred = False
-                if not _sdg_pass and _i88_aws_devdoc_swaps > 0:
-                    _log.info("iter94: STRATEGIC_DENSITY gate deferred (aws_devdoc swap trade-off); pass stays %s", _sdg_pass)
-                    _sdg_deferred = True
-                    _sdg_d["strategic_density_deferred_by_aws_devdoc_swap"] = True
-                    _sdg_mp.write_text(_f6_j.dumps(_sdg_d, ensure_ascii=False, indent=2), encoding="utf-8")
-                if not _sdg_pass and not _sdg_deferred:
+                if not _sdg_pass:
                     _sdg_avg = _sdg_d.get("selected_avg_strategic_density_score", 0)
                     _sdg_target = _sdg_d.get("target_avg_density_1p5", 0)
                     _sdg_min = _sdg_d.get("selected_min_strategic_density_score", 0)
@@ -14397,15 +14381,9 @@ def _f600_run_fast_path(
             _i83_sd_min = min(_i83_sd_scores) if _i83_sd_scores else 0
             _i83_sd_target = int(locals().get("_sd72_target_avg", _cm73_sd_floor))
             _i83_sd_gate_pass = (len(_i83_sd_scores) > 0 and _i83_sd_avg >= _i83_sd_target)
-            # iter90→94: defer pipeline FAIL but keep pass truthful
+            # iter95: NO deferral — final truth only, all deferred flags = false
             _i83_sd_gate_deferred = False
-            if not _i83_sd_gate_pass and _i88_aws_devdoc_swaps > 0:
-                _log.info("iter94: canonical snapshot sd_gate_pass deferred (aws_devdoc swap); pass stays %s", _i83_sd_gate_pass)
-                _i83_sd_gate_deferred = True
             _i83_per_item_sd_deferred = False
-            if not _i83_per_item_sd_pass and _i88_aws_devdoc_swaps > 0:
-                _log.info("iter94: canonical snapshot per_item_sd_pass deferred (aws_devdoc swap); pass stays %s", _i83_per_item_sd_pass)
-                _i83_per_item_sd_deferred = True
 
             # Apply INJECT_ overrides for gate-check values (same as pre-swap section)
             _i83_plat_check = int(os.environ["INJECT_PLATFORM_DOMAIN_TOTAL"]) if os.environ.get("INJECT_PLATFORM_DOMAIN_TOTAL") else _i83_plat_total
@@ -14687,10 +14665,15 @@ def _f600_run_fast_path(
 
             _i83_cm_path.write_text(_f6_j.dumps(_i83_cm, ensure_ascii=False, indent=2), encoding="utf-8")
 
-            # Also patch selection_audit.meta.json with canonical content totals
+            # iter95: canonical snapshot CREATES selection_audit.meta.json (not just patch)
             _i83_sa_path = _outputs / "selection_audit.meta.json"
+            _i83_sa = {"run_id": _run_id, "selected_items_count": len(_selected), "items": []}
             if _i83_sa_path.exists():
-                _i83_sa = _f6_j.loads(_i83_sa_path.read_text(encoding="utf-8"))
+                try:
+                    _i83_sa = _f6_j.loads(_i83_sa_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            if True:
                 _i83_sa["canonical_snapshot"] = True
                 _i83_sa["selected_domains_distinct"] = len(_i83_domain_counts)
                 _i83_sa["selected_vendors_distinct"] = len(_i83_vendor_set)
@@ -14770,8 +14753,12 @@ def _f600_run_fast_path(
                 _i83_sa["scheduled_previous_run_id"] = _co_prev_run_id
                 _i83_sa["scheduled_previous_head"] = _co_prev_head
                 _i83_sa["previous_top2_ids"] = sorted(_co_prev_top2_hashes)
-                # iter91: enrich per-item rows with aws_devdoc + iter92 carryover fields
-                for _i91_idx2, _i91_row2 in enumerate(_i83_sa.get("items", [])):
+                # iter95: build per-item rows from scratch if items list is empty (file was just created)
+                _i83_sa_items = _i83_sa.get("items", [])
+                if not _i83_sa_items:
+                    _i83_sa_items = [{"title": str(getattr(s, "title", "") or "")[:120], "domain": _f6_domain_key(s)} for s in _selected]
+                    _i83_sa["items"] = _i83_sa_items
+                for _i91_idx2, _i91_row2 in enumerate(_i83_sa_items):
                     if _i91_idx2 < len(_selected):
                         _i91_s2 = _selected[_i91_idx2]
                         _i91_row2["aws_devdoc_item"] = _is_aws_devdoc(_i91_s2)
@@ -14921,9 +14908,8 @@ def _f600_run_fast_path(
                 _i83_sd_meta["new_density_min"] = _HDF_NEW_DENSITY_MIN
                 _i83_sd_meta["density_multiplier_gate_pass"] = _i83_density_floor_pass
                 _i83_sd_meta["selected_all_pass_hard_floor"] = _i83_density_floor_pass
-                # iter90: preserve deferral flag
-                if _i88_aws_devdoc_swaps > 0 and _i83_density_min < _HDF_NEW_DENSITY_MIN:
-                    _i83_sd_meta["density_deferred_by_aws_devdoc_swap"] = True
+                # iter95: NO deferral — density_deferred_by_aws_devdoc_swap always false
+                _i83_sd_meta["density_deferred_by_aws_devdoc_swap"] = False
                 _i83_sd_meta["selected_avg_strategic_density_score"] = _i83_sd_avg
                 _i83_sd_meta["selected_min_strategic_density_score"] = _i83_sd_min
                 _i83_sd_meta["target_avg_density_1p5"] = _i83_sd_target
