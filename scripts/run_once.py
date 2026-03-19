@@ -11192,6 +11192,8 @@ def _f600_run_fast_path(
                     _i88_swapped = False
                     _i88_inv_b = _i80_invariant_snapshot(_selected)
                     _i88_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))  # iter92: absolute tc check
+                    _i88_vc_cur = _DivCounter(_f6_vendor_key(s) for s in _selected)
+                    _i88_max_vc_cur = max(_i88_vc_cur.values()) if _i88_vc_cur else 0  # iter93
                     for _i88_cand in _i88_pool:
                         if _i88_cand in _selected:
                             continue
@@ -11199,6 +11201,11 @@ def _f600_run_fast_path(
                         if _is_techcrunch(_i88_cand) and _i88_cur_tc >= 3 and not _is_techcrunch(_selected[_i88_target_idx]):
                             continue
                         _i88_test = [s if j != _i88_target_idx else _i88_cand for j, s in enumerate(_selected)]
+                        # iter93: prevent vendor concentration from worsening
+                        _i88_test_vc = _DivCounter(_f6_vendor_key(s) for s in _i88_test)
+                        _i88_test_max_vc = max(_i88_test_vc.values()) if _i88_test_vc else 0
+                        if _i88_test_max_vc > _i88_max_vc_cur:
+                            continue
                         _i88_inv_a = _i80_invariant_snapshot(_i88_test)
                         _i88_ok, _i88_reg = _i80_no_regression(_i88_inv_b, _i88_inv_a)
                         if not _i88_ok:
@@ -11246,6 +11253,8 @@ def _f600_run_fast_path(
                     _i90_inv_before = _i80_invariant_snapshot(_selected)
                     _i90_density_deferrable = {"density_floor", "per_item_sd", "sd_avg", "target_player"}
                     _i90_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))  # iter92
+                    _i90_nuc_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
+                    _i90_nuc_max_vc = max(_i90_nuc_vc.values()) if _i90_nuc_vc else 0  # iter93: track vendor concentration
                     for _i90_cand in _i90_nuclear_pool:
                         if _i90_cand in _selected:
                             continue
@@ -11253,6 +11262,11 @@ def _f600_run_fast_path(
                         if _is_techcrunch(_i90_cand) and _i90_cur_tc >= 3 and not _is_techcrunch(_selected[_i90_target_idx]):
                             continue
                         _i90_test = [s if j != _i90_target_idx else _i90_cand for j, s in enumerate(_selected)]
+                        # iter93: prevent vendor concentration from worsening (even if already failing)
+                        _i90_test_vc = _DivCounter(_f6_vendor_key(s) for s in _i90_test)
+                        _i90_test_max_vc = max(_i90_test_vc.values()) if _i90_test_vc else 0
+                        if _i90_test_max_vc > _i90_nuc_max_vc:
+                            continue
                         _i90_inv = _i80_invariant_snapshot(_i90_test)
                         _i90_ok, _i90_reg = _i80_no_regression(_i90_inv_before, _i90_inv)
                         # Accept if no regression, OR if only density/tp invariants regress
