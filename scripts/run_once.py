@@ -14673,8 +14673,19 @@ def _f600_run_fast_path(
                     _i83_sa = _f6_j.loads(_i83_sa_path.read_text(encoding="utf-8"))
                 except Exception:
                     pass
+            # iter95: compute bigtech_hit_count + official_or_media_count for verify_online BIGTECH_DOMINANCE_HARD
+            _i83_bigtech_hit_count = sum(1 for s in _selected if _f6_is_bigtech(s))
+            _i83_official_or_media_count = _i83_om_count
+            _i83_dev_forum_count = sum(1 for s in _selected if _f6_src_type(s) in ("dev_forum", "code_release", "social", "code"))
+            _i83_non_bigtech_dev_noise = sum(1 for s in _selected if _f6_src_type(s) in ("dev_forum", "code_release", "social", "code") and not _f6_is_bigtech(s))
             if True:
                 _i83_sa["canonical_snapshot"] = True
+                _i83_sa["selected_items_count"] = len(_selected)
+                _i83_sa["selected_sources_distinct"] = len(_i83_domain_counts)
+                _i83_sa["bigtech_hit_count"] = _i83_bigtech_hit_count
+                _i83_sa["official_or_media_count"] = _i83_official_or_media_count
+                _i83_sa["dev_forum_count"] = _i83_dev_forum_count
+                _i83_sa["non_bigtech_dev_noise_count"] = _i83_non_bigtech_dev_noise
                 _i83_sa["selected_domains_distinct"] = len(_i83_domain_counts)
                 _i83_sa["selected_vendors_distinct"] = len(_i83_vendor_set)
                 _i83_sa["domain_counts"] = _i83_domain_counts
