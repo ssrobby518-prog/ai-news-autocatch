@@ -7957,21 +7957,31 @@ def _f600_run_fast_path(
     # iter90: only truly CEO-level business signals exempt AWS items from devdoc classification
     _AWS_DEVDOC_EXEC_RE = _ct71_re.compile(
         r'\b(?:acqui|partner|earnings|pricing|marketplace|regulation|compliance|CVE|security\s+(?:breach|incident)|組織調整|財報|高層)\b', _ct71_re.I)
+    # iter96: URL path detection — AWS blog categories that are inherently developer/tutorial content
+    _AWS_DEVDOC_URL_RE = _ct71_re.compile(
+        r'/blogs/(?:machine-learning|compute|containers|developer-tools|devops|big-data|infrastructure|networking)',
+        _ct71_re.I)
 
     def _is_aws_devdoc(it) -> bool:
-        """iter89: True if item is AWS developer/documentation/tutorial content.
-        Only checks aws.amazon.com domain. Exempt if title has executive signals."""
+        """iter96: True if item is AWS developer/documentation/tutorial content.
+        Checks: (1) URL path for dev/ML blog categories, (2) title/snippet patterns.
+        Both paths exempt if title has CEO-grade executive signals."""
         _dom = _f6_domain_key(it)
         if _dom != "aws.amazon.com":
             return False
         _title = str(getattr(it, "title", "") or "")
-        _snippet = _f6_snippet(it)
-        _blob = _title + " " + _snippet
-        if not _AWS_DEVDOC_TITLE_RE.search(_blob):
-            return False
         if _AWS_DEVDOC_EXEC_RE.search(_title):
             return False
-        return True
+        # Path 1: URL path — ML/compute/devtools blogs are inherently developer content
+        _url = str(getattr(it, "url", "") or getattr(it, "link", "") or "")
+        if _AWS_DEVDOC_URL_RE.search(_url):
+            return True
+        # Path 2: title/snippet pattern
+        _snippet = _f6_snippet(it)
+        _blob = _title + " " + _snippet
+        if _AWS_DEVDOC_TITLE_RE.search(_blob):
+            return True
+        return False
 
     def _f6_sort_key(it) -> tuple:
         """iter40→72b: bigtech-first, official/media first, strategic density, then fulltext.
@@ -8371,6 +8381,20 @@ def _f600_run_fast_path(
                 _f6_j.dumps(_p95_supply_meta, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
+        # iter96: supply sufficiency fail-fast — abort before selection if pool cannot satisfy constraints
+        _p96_supply_ok = _p93_non_tc_gr_om_count >= 8 and len(_p93_deficient) <= 4
+        if not _p96_supply_ok:
+            _log.error("iter96 CANDIDATE_SUPPLY_SUFFICIENCY_HARD_FAIL: non_tc_gr_om=%d deficient=%s",
+                       _p93_non_tc_gr_om_count, _p93_deficient)
+            _write_not_ready_report_md(
+                "CANDIDATE_SUPPLY_SUFFICIENCY_HARD",
+                f"non_tc_gr_om_candidates={_p93_non_tc_gr_om_count}<8 or deficient_vendors={len(_p93_deficient)}>4 ({_p93_deficient})",
+                run_id=_run_id,
+            )
+            _f6_fail(
+                "CANDIDATE_SUPPLY_SUFFICIENCY_HARD",
+                f"non_tc_gr_om={_p93_non_tc_gr_om_count} deficient={_p93_deficient}",
+            )
 
         # Phase-1: fill 5 BOMA with bucket diversity skeleton
         _p73_used_buckets = set()
@@ -11255,10 +11279,10 @@ def _f600_run_fast_path(
                     if _i90_target_idx is None:
                         break
                     _i90_swapped = False
-                    # iter95: nuclear swap — pool filtered by sd_floor; allow density regression
-                    # since the swap-in item itself meets the floor; global min may regress from other items
+                    # iter96: nuclear swap — removing bad content > maintaining domain/density/vendor invariants
+                    # Deferrable: density + min_domains + max_vendor (losing aws domain / vendor shift acceptable)
                     _i90_inv_before = _i80_invariant_snapshot(_selected)
-                    _i90_density_deferrable = {"density_floor", "per_item_sd", "sd_avg"}
+                    _i90_density_deferrable = {"density_floor", "per_item_sd", "sd_avg", "min_domains", "max_vendor"}
                     _i90_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))  # iter92
                     _i90_nuc_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
                     _i90_nuc_max_vc = max(_i90_nuc_vc.values()) if _i90_nuc_vc else 0  # iter93: track vendor concentration
@@ -11269,14 +11293,14 @@ def _f600_run_fast_path(
                         if _is_techcrunch(_i90_cand) and _i90_cur_tc >= 3 and not _is_techcrunch(_selected[_i90_target_idx]):
                             continue
                         _i90_test = [s if j != _i90_target_idx else _i90_cand for j, s in enumerate(_selected)]
-                        # iter93: prevent vendor concentration from worsening (even if already failing)
+                        # iter96: allow vendor concentration +1 in nuclear swap (removing bad content > perfect diversity)
                         _i90_test_vc = _DivCounter(_f6_vendor_key(s) for s in _i90_test)
                         _i90_test_max_vc = max(_i90_test_vc.values()) if _i90_test_vc else 0
-                        if _i90_test_max_vc > _i90_nuc_max_vc:
+                        if _i90_test_max_vc > _i90_nuc_max_vc + 1:
                             continue
                         _i90_inv = _i80_invariant_snapshot(_i90_test)
                         _i90_ok, _i90_reg = _i80_no_regression(_i90_inv_before, _i90_inv)
-                        # iter95: accept if only density invariants regress (pool is sd_floor filtered)
+                        # iter96: accept if only density/domain invariants regress (removing bad content priority)
                         if not _i90_ok:
                             _i90_ok = all(k in _i90_density_deferrable or not _i90_inv_before[k] for k in _i90_reg)
                         if _i90_ok:
