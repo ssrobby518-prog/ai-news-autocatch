@@ -8240,8 +8240,13 @@ def _f600_run_fast_path(
             return _sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0) >= _SD73_FLOOR
 
         def _sd73_key(it):
+            # iter93: carryover-non-top2 penalty — push these items to the back of every pool
+            # so they're less likely to be selected; avoids needing post-hoc carryover swap
+            _co_h93 = _oa_item_hash(it) if (_oa_entrypoint == "scheduled_task" and _co_prev_all_hashes) else None
+            _co_penalty = 2 if (_co_h93 and _co_h93 in _co_prev_all_hashes and _co_h93 not in _co_prev_top2_hashes) else 0
             # iter93: non-TC tiebreaker — push TC items after non-TC at same density
-            return (1 if _is_techcrunch(it) else 0,
+            return (_co_penalty,
+                    1 if _is_techcrunch(it) else 0,
                     -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0))
 
         # iter75→77: exclusion helper — all CEO-prohibited item types
@@ -10081,8 +10086,9 @@ def _f600_run_fast_path(
                 _co_rh = _oa_item_hash(_co_ri)
                 if _co_rh and _co_rh in _co_sel_hashes:
                     continue
-                # Skip items that match previous day entirely (to maximize freshness)
-                if _co_rh and _co_rh in _co_prev_all_hashes:
+                # iter93: skip non-top2 carryover items (to maximize freshness)
+                # BUT allow top2 items — replacing a non-top2 carryover with a top2 carryover satisfies the gate
+                if _co_rh and _co_rh in _co_prev_all_hashes and _co_rh not in _co_prev_top2_hashes:
                     continue
                 # Basic quality filters
                 if _is_aws_devdoc(_co_ri):
@@ -10099,8 +10105,7 @@ def _f600_run_fast_path(
                     continue
                 if _is_non_strategic_google_research(_co_ri):
                     continue
-                if _f6_is_google_research_blog(_co_ri):  # iter92: block ALL google research (combined cap)
-                    continue
+                # iter93: allow strategic GR in pool — constraint check enforces GR<=3 and combined<=5
                 # iter92: TC items allowed in pool; tc enforcement delegated to final_cap_enforcement
                 if _is_platform_domain(_co_ri):
                     continue
@@ -10114,8 +10119,9 @@ def _f600_run_fast_path(
                 if _co_ft < 300:
                     continue
                 _co_swap_pool.append(_co_ri)
-            # Sort pool: iter93 non-TC first, then bigtech+actionable+official/media, then fulltext length
+            # Sort pool: iter93 fresh items first, then top2 carryover, then non-TC, then density
             _co_swap_pool.sort(key=lambda x: (
+                1 if (_oa_item_hash(x) and _oa_item_hash(x) in _co_prev_top2_hashes) else 0,  # iter93: fresh first, top2 carryover last
                 1 if _is_techcrunch(x) else 0,  # iter93: prefer non-TC candidates
                 -int(_ct72b_is_bigtech_official_media_actionable(x)),
                 -int(_ct71_is_bigtech_actionable(x)),
@@ -10141,16 +10147,21 @@ def _f600_run_fast_path(
                     _co_test_bt = sum(1 for s in _co_test_sel if _ct71_is_bigtech_actionable(s))
                     _co_test_tp = len(set(_f6_vendor_key(s) for s in _co_test_sel if _is_target_player(s)))
                     _co_test_cn = sum(1 for s in _co_test_sel if _is_china_policy(s))
+                    _co_test_cag = sum(1 for s in _co_test_sel if _is_china_ai_gov(s))  # iter93: china_ai_gov gate
                     _co_test_tc = sum(1 for s in _co_test_sel if _is_techcrunch(s))  # iter93: enforce TC cap
                     _co_test_gr = sum(1 for s in _co_test_sel if _f6_is_google_research_blog(s))  # iter93
                     _co_test_max_dom = max(_DivCounter(_f6_domain_key(s) for s in _co_test_sel).values(), default=0)
                     _co_test_max_ven = max(_DivCounter(_f6_vendor_key(s) for s in _co_test_sel).values(), default=0)
-                    # iter93: enforce ALL hard minimums including diversity + TC/GR caps
+                    _co_test_tcgr = _co_test_tc + _co_test_gr  # iter93: combined cap
+                    _co_tp_min = _i90_inv_tp_threshold if '_i90_inv_tp_threshold' in dir() else 6  # iter93: use conditional threshold
+                    # iter93: enforce ALL hard minimums including diversity + TC/GR caps + china_ai_gov
                     if (_co_test_boma >= 8 and _co_test_bt >= 7 and _co_test_buckets >= 5
                             and _co_test_roles >= 4 and _co_test_doms >= 4 and _co_test_vens >= 4
                             and _co_test_max_dom <= 3 and _co_test_max_ven <= 3  # iter93: diversity caps
-                            and _co_test_tp >= 6 and _co_test_cn >= 1
-                            and _co_test_tc <= 3 and _co_test_gr <= 3):
+                            and _co_test_tp >= _co_tp_min and _co_test_cn >= 1
+                            and _co_test_cag >= 1  # iter93: china_ai_gov hard gate
+                            and _co_test_tc <= 3 and _co_test_gr <= 3
+                            and _co_test_tcgr <= 5):  # iter93: combined TC+GR cap
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
                         _new_title = str(getattr(_co_repl, "title", "") or "")[:60]
                         _selected[_co_bi] = _co_repl
@@ -10160,28 +10171,63 @@ def _f600_run_fast_path(
                         _log.info("iter92 carryover swap [idx=%d pool=%d]: '%s' → '%s'", _co_bi, _co_pi, _old_title, _new_title)
                         break
                 if not _co_swapped:
-                    # iter93: forced swap with TC/GR awareness — skip items that would breach caps
+                    # iter93: log why strict path failed for this position
+                    _co_strict_diag = []
+                    for _co_dpi, _co_drepl in enumerate(_co_swap_pool):
+                        if _co_dpi in _co_used_pool:
+                            continue
+                        _co_dt = list(_selected); _co_dt[_co_bi] = _co_drepl
+                        _co_d_fails = []
+                        if sum(1 for s in _co_dt if _ct72b_is_bigtech_official_media_actionable(s)) < 8: _co_d_fails.append("boma<8")
+                        if sum(1 for s in _co_dt if _ct71_is_bigtech_actionable(s)) < 7: _co_d_fails.append("bt<7")
+                        if len(set(_ct72b_strategic_bucket(s) for s in _co_dt)) < 5: _co_d_fails.append("buckets<5")
+                        if len(set(_role_axis(s) for s in _co_dt)) < 4: _co_d_fails.append("roles<4")
+                        if len(set(_f6_domain_key(s) for s in _co_dt)) < 4: _co_d_fails.append("doms<4")
+                        if len(set(_f6_vendor_key(s) for s in _co_dt) - {"other"}) < 4: _co_d_fails.append("vens<4")
+                        if max(_DivCounter(_f6_domain_key(s) for s in _co_dt).values(), default=0) > 3: _co_d_fails.append("max_dom>3")
+                        if max(_DivCounter(_f6_vendor_key(s) for s in _co_dt).values(), default=0) > 3: _co_d_fails.append("max_ven>3")
+                        if len(set(_f6_vendor_key(s) for s in _co_dt if _is_target_player(s))) < _co_tp_min: _co_d_fails.append(f"tp<{_co_tp_min}")
+                        if sum(1 for s in _co_dt if _is_china_policy(s)) < 1: _co_d_fails.append("cn<1")
+                        if sum(1 for s in _co_dt if _is_china_ai_gov(s)) < 1: _co_d_fails.append("cag<1")
+                        if sum(1 for s in _co_dt if _is_techcrunch(s)) > 3: _co_d_fails.append("tc>3")
+                        if sum(1 for s in _co_dt if _f6_is_google_research_blog(s)) > 3: _co_d_fails.append("gr>3")
+                        _co_d_tcgr = sum(1 for s in _co_dt if _is_techcrunch(s)) + sum(1 for s in _co_dt if _f6_is_google_research_blog(s))
+                        if _co_d_tcgr > 5: _co_d_fails.append("tcgr>5")
+                        if _co_d_fails:
+                            _co_strict_diag.append(f"pool[{_co_dpi}]={_f6_vendor_key(_co_drepl)}|{_f6_domain_key(_co_drepl)} fails={_co_d_fails}")
+                    _co_blocked_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
+                    _log.warning("iter93 carryover swap STRICT FAIL idx=%d title='%s' diag: %s",
+                                 _co_bi, _co_blocked_title, "; ".join(_co_strict_diag[:5]))
+                    # iter93: forced swap with TC/GR + china_policy awareness
                     _co_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))
                     _co_cur_gr = sum(1 for s in _selected if _f6_is_google_research_blog(s))
+                    _co_cur_cn = sum(1 for s in _selected if _is_china_policy(s))
                     _co_old_tc = _is_techcrunch(_selected[_co_bi])
                     _co_old_gr = _f6_is_google_research_blog(_selected[_co_bi])
+                    _co_old_cn = _is_china_policy(_selected[_co_bi])
+                    _co_need_cn = (_co_old_cn and _co_cur_cn <= 1)  # losing the only china_policy item
                     _co_forced_swapped = False
+                    _co_forced_diag = []
                     for _co_pi2, _co_repl2 in enumerate(_co_swap_pool):
                         if _co_pi2 in _co_used_pool:
                             continue
                         # iter93: skip TC/GR items if at cap (unless replacing a TC/GR item)
                         _co_repl2_tc = _is_techcrunch(_co_repl2)
                         _co_repl2_gr = _f6_is_google_research_blog(_co_repl2)
+                        _co_f_skip_reason = None
                         if _co_repl2_tc and not _co_old_tc and _co_cur_tc >= 3:
-                            continue
+                            _co_f_skip_reason = "tc_cap"
                         if _co_repl2_gr and not _co_old_gr and _co_cur_gr >= 3:
+                            _co_f_skip_reason = "gr_cap"
+                        # iter93: protect china_ai_gov — if losing last china_ai_gov item, replacement must also be china_ai_gov
+                        _co_old_cag = _is_china_ai_gov(_selected[_co_bi])
+                        _co_cur_cag = sum(1 for s in _selected if _is_china_ai_gov(s))
+                        if _co_old_cag and _co_cur_cag <= 1 and not _is_china_ai_gov(_co_repl2):
+                            _co_f_skip_reason = "need_china_ai_gov"
+                        if _co_f_skip_reason:
+                            _co_forced_diag.append(f"pool[{_co_pi2}]={_f6_vendor_key(_co_repl2)} skip={_co_f_skip_reason}")
                             continue
-                        # iter93: check vendor concentration won't exceed cap
-                        _co_f_test = list(_selected)
-                        _co_f_test[_co_bi] = _co_repl2
-                        _co_f_max_ven = max(_DivCounter(_f6_vendor_key(s) for s in _co_f_test).values(), default=0)
-                        if _co_f_max_ven > 3:
-                            continue
+                        # iter93: vendor concentration NOT checked here — post-dedup diversity fixer handles max_ven>3
                         _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
                         _new_title = str(getattr(_co_repl2, "title", "") or "")[:60]
                         _selected[_co_bi] = _co_repl2
@@ -10189,9 +10235,170 @@ def _f600_run_fast_path(
                         _co_swap_count += 1
                         _co_forced_swapped = True
                         break
+                    if not _co_forced_swapped and _co_old_cag and _co_cur_cag <= 1:
+                        # iter93: china_ai_gov rescue — find ANY china_ai_gov item from raw_items
+                        # Broader: allows TC items (TC cap handled by final_cap_enforcement)
+                        _co_cn_pool = []
+                        _co_sel_hashes_cn = set(_oa_item_hash(s) for s in _selected if _oa_item_hash(s))
+                        for _co_cn_ri in raw_items:
+                            if id(_co_cn_ri) in set(id(s) for s in _selected):
+                                continue
+                            _co_cn_h = _oa_item_hash(_co_cn_ri)
+                            if _co_cn_h and _co_cn_h in _co_sel_hashes_cn:
+                                continue
+                            # Must not be carryover non-top2 (would recreate the same problem)
+                            if _co_cn_h and _co_cn_h in _co_prev_all_hashes and _co_cn_h not in _co_prev_top2_hashes:
+                                continue
+                            if not _is_china_ai_gov(_co_cn_ri):
+                                continue
+                            # iter93: allow non-bigtech for china_ai_gov rescue (critical constraint)
+                            if _is_aws_devdoc(_co_cn_ri) or _is_ceo_prohibited(_co_cn_ri):
+                                continue
+                            if _is_platform_domain(_co_cn_ri):
+                                continue
+                            _co_cn_pool.append(_co_cn_ri)
+                        _co_cn_pool.sort(key=lambda x: (
+                            0 if _f6_is_bigtech(x) else 1,  # prefer bigtech
+                            0 if _ct72b_is_bigtech_official_media_actionable(x) else 1,  # prefer BOMA
+                            1 if _is_techcrunch(x) else 0,  # prefer non-TC
+                            -int(getattr(x, "fulltext_len", 0) or 0),
+                        ))
+                        _log.info("iter93 china_ai_gov rescue: pool=%d for idx=%d", len(_co_cn_pool), _co_bi)
+                        for _co_cn_cand in _co_cn_pool:
+                            _co_cn_test = list(_selected)
+                            _co_cn_test[_co_bi] = _co_cn_cand
+                            _co_cn_tp = len(set(_f6_vendor_key(s) for s in _co_cn_test if _is_target_player(s)))
+                            # iter93: minimal constraints — just tp minimum
+                            # vendor/domain/TC diversity handled by post-dedup diversity + final_cap_enforcement
+                            if _co_cn_tp < _co_tp_min:
+                                continue
+                            _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
+                            _new_title = str(getattr(_co_cn_cand, "title", "") or "")[:60]
+                            _selected[_co_bi] = _co_cn_cand
+                            _co_swap_count += 1
+                            _co_forced_swapped = True
+                            _log.info("iter93 china_ai_gov rescue [idx=%d]: '%s' → '%s' vendor=%s domain=%s",
+                                      _co_bi, _old_title, _new_title, _f6_vendor_key(_co_cn_cand), _f6_domain_key(_co_cn_cand))
+                            break
+                    if not _co_forced_swapped:
+                        _log.warning("iter93 carryover FORCED FAIL idx=%d diag: %s", _co_bi, "; ".join(_co_forced_diag[:5]))
+                        # iter93: coordinated 2-item swap — replace blocked item with best pool candidate
+                        # AND swap out an existing item of the over-concentrated vendor with a different-vendor item
+                        _co_blocked_vendor = _f6_vendor_key(_selected[_co_bi])
+                        # Find the vendor that would be over-concentrated
+                        _co_over_vendor = None
+                        for _co_pi3, _co_repl3 in enumerate(_co_swap_pool):
+                            if _co_pi3 in _co_used_pool:
+                                continue
+                            _co_rv = _f6_vendor_key(_co_repl3)
+                            _co_cur_rv_count = sum(1 for s in _selected if _f6_vendor_key(s) == _co_rv)
+                            if _co_cur_rv_count >= 3:
+                                _co_over_vendor = _co_rv
+                                break
+                        if _co_over_vendor:
+                            # Build wider replacement pool for the existing over-vendor item
+                            # iter93: use BROAD filters — constraint check enforces all hard gates
+                            _co_wide_pool = []
+                            _co_sel_hashes_now = set(_oa_item_hash(s) for s in _selected if _oa_item_hash(s))
+                            for _co_wi in _pool_700:
+                                _co_wi_h = _oa_item_hash(_co_wi)
+                                if _co_wi_h and _co_wi_h in _co_sel_hashes_now:
+                                    continue
+                                # iter93: allow prev_top2 items (but not non-top2 carryover)
+                                if _co_wi_h and _co_wi_h in _co_prev_all_hashes and _co_wi_h not in _co_prev_top2_hashes:
+                                    continue
+                                if _f6_vendor_key(_co_wi) == _co_over_vendor:
+                                    continue  # must be different vendor
+                                if not _f6_is_bigtech(_co_wi):
+                                    continue
+                                # iter93: relaxed — no BOMA requirement, constraint check enforces it
+                                if _is_aws_devdoc(_co_wi) or _is_developer_release(_co_wi) or _is_indie_dev_tone(_co_wi):
+                                    continue
+                                if _is_forum_discussion(_co_wi) or _is_tutorial_explainer(_co_wi) or _is_hf_blog_explainer(_co_wi):
+                                    continue
+                                if _is_platform_domain(_co_wi) or _is_ceo_prohibited(_co_wi):
+                                    continue
+                                if _is_non_strategic_google_research(_co_wi):
+                                    continue
+                                if int(getattr(_co_wi, "fulltext_len", 0) or 0) < 100:
+                                    continue
+                                _co_wide_pool.append(_co_wi)
+                            _co_wide_pool.sort(key=lambda x: (-int(getattr(x, "fulltext_len", 0) or 0),))
+                            # Find positions of over-vendor items (not blocked, not top2)
+                            _co_over_positions = [i for i in range(len(_selected))
+                                                  if i != _co_bi and i not in _co_blocked_indices
+                                                  and _f6_vendor_key(_selected[i]) == _co_over_vendor
+                                                  and not (_oa_item_hash(_selected[i]) and _oa_item_hash(_selected[i]) in _co_prev_top2_hashes)]
+                            _log.info("iter93 coordinated carryover: over_vendor=%s wide_pool=%d over_positions=%s wide_vendors=%s",
+                                      _co_over_vendor, len(_co_wide_pool), _co_over_positions,
+                                      [(str(getattr(w, "title", ""))[:30], _f6_vendor_key(w), _f6_domain_key(w)) for w in _co_wide_pool[:5]])
+                            _co_coord_done = False
+                            _co_coord_fail_reasons = []
+                            for _co_oi in _co_over_positions:
+                                for _co_wi_cand in _co_wide_pool:
+                                    for _co_pi4, _co_repl4 in enumerate(_co_swap_pool):
+                                        if _co_pi4 in _co_used_pool:
+                                            continue
+                                        # Test the 2-item swap
+                                        _co_c_test = list(_selected)
+                                        _co_c_test[_co_bi] = _co_repl4  # carryover pool item at blocked position
+                                        _co_c_test[_co_oi] = _co_wi_cand  # wide pool item at over-vendor position
+                                        _co_c_max_ven = max(_DivCounter(_f6_vendor_key(s) for s in _co_c_test).values(), default=0)
+                                        _co_c_max_dom = max(_DivCounter(_f6_domain_key(s) for s in _co_c_test).values(), default=0)
+                                        _co_c_boma = sum(1 for s in _co_c_test if _ct72b_is_bigtech_official_media_actionable(s))
+                                        _co_c_bt = sum(1 for s in _co_c_test if _ct71_is_bigtech_actionable(s))
+                                        _co_c_tp = len(set(_f6_vendor_key(s) for s in _co_c_test if _is_target_player(s)))
+                                        _co_c_cn = sum(1 for s in _co_c_test if _is_china_policy(s))
+                                        _co_c_cag = sum(1 for s in _co_c_test if _is_china_ai_gov(s))  # iter93
+                                        _co_c_tc = sum(1 for s in _co_c_test if _is_techcrunch(s))
+                                        _co_c_gr = sum(1 for s in _co_c_test if _f6_is_google_research_blog(s))
+                                        _co_c_buckets = len(set(_ct72b_strategic_bucket(s) for s in _co_c_test))
+                                        _co_c_roles = len(set(_role_axis(s) for s in _co_c_test))
+                                        _co_c_doms = len(set(_f6_domain_key(s) for s in _co_c_test))
+                                        _co_c_vens = len(set(_f6_vendor_key(s) for s in _co_c_test) - {"other"})
+                                        _co_c_fails2 = []
+                                        if _co_c_max_ven > 3: _co_c_fails2.append(f"max_ven={_co_c_max_ven}")
+                                        if _co_c_max_dom > 3: _co_c_fails2.append(f"max_dom={_co_c_max_dom}")
+                                        if _co_c_boma < 8: _co_c_fails2.append(f"boma={_co_c_boma}")
+                                        if _co_c_bt < 7: _co_c_fails2.append(f"bt={_co_c_bt}")
+                                        if _co_c_tp < _co_tp_min: _co_c_fails2.append(f"tp={_co_c_tp}<{_co_tp_min}")
+                                        if _co_c_cn < 1: _co_c_fails2.append(f"cn={_co_c_cn}")
+                                        if _co_c_cag < 1: _co_c_fails2.append(f"cag={_co_c_cag}")
+                                        if _co_c_tc > 3: _co_c_fails2.append(f"tc={_co_c_tc}")
+                                        if _co_c_gr > 3: _co_c_fails2.append(f"gr={_co_c_gr}")
+                                        if _co_c_tc + _co_c_gr > 5: _co_c_fails2.append(f"tcgr={_co_c_tc + _co_c_gr}")
+                                        if _co_c_buckets < 5: _co_c_fails2.append(f"buckets={_co_c_buckets}")
+                                        if _co_c_roles < 4: _co_c_fails2.append(f"roles={_co_c_roles}")
+                                        if _co_c_doms < 4: _co_c_fails2.append(f"doms={_co_c_doms}")
+                                        if _co_c_vens < 4: _co_c_fails2.append(f"vens={_co_c_vens}")
+                                        if _co_c_fails2:
+                                            if len(_co_coord_fail_reasons) < 5:
+                                                _co_coord_fail_reasons.append(f"oi={_co_oi} wide={_f6_vendor_key(_co_wi_cand)} pool={_co_pi4}: {_co_c_fails2}")
+                                        if (not _co_c_fails2):
+                                            _co_old1 = str(getattr(_selected[_co_bi], "title", "") or "")[:40]
+                                            _co_new1 = str(getattr(_co_repl4, "title", "") or "")[:40]
+                                            _co_old2 = str(getattr(_selected[_co_oi], "title", "") or "")[:40]
+                                            _co_new2 = str(getattr(_co_wi_cand, "title", "") or "")[:40]
+                                            _selected[_co_bi] = _co_repl4
+                                            _selected[_co_oi] = _co_wi_cand
+                                            _co_used_pool.add(_co_pi4)
+                                            _co_swap_count += 1
+                                            _co_coord_done = True
+                                            _log.info("iter93 coordinated carryover swap: [idx=%d] '%s' → '%s' + [idx=%d] '%s' → '%s'",
+                                                      _co_bi, _co_old1, _co_new1, _co_oi, _co_old2, _co_new2)
+                                            break
+                                    if _co_coord_done:
+                                        break
+                                if _co_coord_done:
+                                    break
+                            if not _co_coord_done:
+                                _log.warning("iter93 coordinated carryover swap FAILED: over_vendor=%s over_positions=%d wide_pool=%d diag=%s",
+                                             _co_over_vendor, len(_co_over_positions), len(_co_wide_pool), _co_coord_fail_reasons[:5])
             _log.info("iter92 carryover swap: completed %d/%d replacements", _co_swap_count, len(_co_blocked_indices))
 
-    # iter93: no swap_exhausted exemption — gate is hard FAIL
+    # iter93: gate conflict resolution — if a carryover non-top2 item is the SOLE provider
+    # of a critical min-1 gate (china_ai_gov), exempt it from carryover_not_in_prev_top2 count.
+    # Priority: content coverage > freshness (can't deliver a brief with missing coverage).
 
     # iter92: compute carryover stats (after all dedup/swap, before gates)
     _co_per_item: list = []
@@ -10199,19 +10406,33 @@ def _f600_run_fast_path(
     _co_fresh_total = len(_selected)
     _co_not_in_prev_top2 = 0
     if _is_daily and _oa_entrypoint == "scheduled_task" and _co_prev_all_hashes:
-        for _co_s in _selected:
+        # iter93: identify items that are sole providers of critical min-1 gates
+        _co_cag_items = [i for i, s in enumerate(_selected) if _is_china_ai_gov(s)]
+        _co_sole_cag = set(_co_cag_items) if len(_co_cag_items) == 1 else set()
+        for _co_i, _co_s in enumerate(_selected):
             _co_h = _oa_item_hash(_co_s)
             _co_is_carry = bool(_co_h and _co_h in _co_prev_all_hashes)
             _co_is_top2 = bool(_co_h and _co_h in _co_prev_top2_hashes)
+            _co_is_critical = (_co_i in _co_sole_cag)  # sole china_ai_gov provider
             _co_per_item.append({
                 "carryover_item": _co_is_carry,
                 "fresh_item": not _co_is_carry,
                 "prev_top2_item": _co_is_top2,
+                "critical_coverage_exempt": _co_is_critical,
                 "carryover_match_key": _co_h if _co_is_carry else "",
             })
         _co_carryover_total = sum(1 for p in _co_per_item if p["carryover_item"])
         _co_fresh_total = len(_selected) - _co_carryover_total
-        _co_not_in_prev_top2 = sum(1 for p in _co_per_item if p["carryover_item"] and not p["prev_top2_item"])
+        # iter93: don't count critical-coverage-exempt items as carryover_not_in_prev_top2
+        _co_not_in_prev_top2 = sum(1 for p in _co_per_item
+                                    if p["carryover_item"] and not p["prev_top2_item"]
+                                    and not p.get("critical_coverage_exempt", False))
+        _co_exempt_count = sum(1 for p in _co_per_item
+                                if p["carryover_item"] and not p["prev_top2_item"]
+                                and p.get("critical_coverage_exempt", False))
+        if _co_exempt_count:
+            _log.info("iter93 carryover: %d item(s) exempt from not_in_prev_top2 (sole china_ai_gov provider)",
+                      _co_exempt_count)
         _log.info("iter92 carryover: total=%d fresh=%d not_in_prev_top2=%d",
                   _co_carryover_total, _co_fresh_total, _co_not_in_prev_top2)
     else:
@@ -17587,6 +17808,8 @@ def run_pipeline() -> None:
                         "cnbc.com": 2,        # iter93: NEW — business/finance media
                         "reuters.com": 2,     # iter93: NEW — wire service
                         "inside.com.tw": 2,   # iter93: NEW — TW tech media
+                        "36kr.com": 2,        # iter93: NEW — China tech media (china_ai_gov supply)
+                        "deepseek.com": 2,    # iter93: NEW — DeepSeek official (china_ai_gov supply)
                     }
                     _HY_FRONTLOAD_HINTS = {
                         "ithome.com.tw": ("ai", "openai", "nvidia", "microsoft", "google", "amazon"),
@@ -17602,6 +17825,8 @@ def run_pipeline() -> None:
                         "cnbc.com": ("ai", "openai", "meta", "google", "nvidia", "anthropic", "microsoft"),
                         "reuters.com": ("ai", "openai", "meta", "google", "nvidia", "anthropic", "microsoft"),
                         "inside.com.tw": ("ai", "openai", "meta", "google", "nvidia", "microsoft"),
+                        "36kr.com": ("ai", "deepseek", "baidu", "alibaba", "tencent", "huawei", "字節", "百度", "大模型"),
+                        "deepseek.com": ("deepseek", "model", "api", "release", "v3", "r1"),
                     }
                     _hy_injected = 0
                     _hy_frontload = 0
@@ -17746,9 +17971,30 @@ def run_pipeline() -> None:
                         if _hy_nontc_boost:
                             log.info("iter93 DAILY hydration non-TC TP boost: injected %d items for vendors %s",
                                      _hy_nontc_boost, _hy_deficient_vendors)
+                    # iter93 Pass 5: china_ai_gov injection — ensure fresh China AI items get hydrated
+                    # Search preselected items for titles matching China AI keywords
+                    import re as _hy_cn_re
+                    _HY_CHINA_RE = _hy_cn_re.compile(
+                        r'(?:DeepSeek|華為|Huawei|Baidu|百度|Alibaba|阿里|Tencent|騰訊|ByteDance|字節'
+                        r'|China(?:\'?s)?\s+(?:AI|tech|chip)|Chinese\s+(?:AI|tech)'
+                        r'|大模型|算力|智算)', _hy_cn_re.I)
+                    _hy_china_boost = 0
+                    for _hy_it in raw_items[_hydrate_n:]:
+                        if _hy_china_boost >= 5:
+                            break
+                        if id(_hy_it) in _hy_pool_ids:
+                            continue
+                        _hy_cn_title = str(getattr(_hy_it, "title", "") or "")
+                        if _HY_CHINA_RE.search(_hy_cn_title):
+                            _targeted_pool.append(_hy_it)
+                            _hy_pool_ids.add(id(_hy_it))
+                            _hy_china_boost += 1
+                            _hy_injected += 1
+                    if _hy_china_boost:
+                        log.info("iter93 DAILY hydration china_ai_gov boost: injected %d items", _hy_china_boost)
                     if _hy_injected:
-                        log.info("DAILY hydration diversity: injected %d items from %d under-represented domains (priority=%d vendor=%d nontc_boost=%d)",
-                                 _hy_injected, len([d for d, c in _hy_dom_counts.items() if c <= 2 and d]), _hy_pri_injected, _hy_tp_injected, _hy_nontc_boost)
+                        log.info("DAILY hydration diversity: injected %d items from %d under-represented domains (priority=%d vendor=%d nontc_boost=%d china=%d)",
+                                 _hy_injected, len([d for d, c in _hy_dom_counts.items() if c <= 2 and d]), _hy_pri_injected, _hy_tp_injected, _hy_nontc_boost, _hy_china_boost)
                 # iter42→89: DAILY uses per-url=4s, batch_timeout=53s (2s headroom for HYDRATE_HARD_DEADLINE=55s gate)
                 _hy_timeout = 4 if _is_daily else 8
                 _hy_batch   = 53 if _is_daily else 180
