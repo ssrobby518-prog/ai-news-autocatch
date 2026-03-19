@@ -11563,11 +11563,22 @@ def _f600_run_fast_path(
                 _log.warning("iter93 final cap: stuck at tc+gr combined=%d, no valid replacement", _i80_tcgr)
                 break
         # iter83: enforce non-strategic Google Research cap
+        # iter93: build dedicated NSGR pool (shared pool gets depleted by earlier TC/GR/domain swaps)
+        _i80_nsgr_pool = [it for it in _f6_tier(300) if it not in _selected
+                          and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                          and not _is_non_strategic_google_research(it)
+                          and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                          and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                          and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)
+                          and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                          and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+        _i80_nsgr_pool.sort(key=lambda it: (-int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
+        _log.info("iter93 NSGR pool: %d candidates (shared pool=%d)", len(_i80_nsgr_pool), len(_i80_final_pool))
         for _i80_nsgr_round in range(10):
             _i80_nsgr = sum(1 for s in _selected if _is_non_strategic_google_research(s))
             if _i80_nsgr <= _NON_STRATEGIC_GR_CAP:
                 break
-            if not _i80_final_pool:
+            if not _i80_nsgr_pool:
                 _log.warning("iter83 final cap: no pool for NSGR reduction (nsgr=%d)", _i80_nsgr)
                 break
             _i80_nsgr_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
@@ -11592,7 +11603,7 @@ def _f600_run_fast_path(
             for _i80_nsgr_idx, _i80_nsgr_item in _i80_nsgr_items:
                 if _i80_nsgr_swapped:
                     break
-                for _i80_nsgr_ci, _i80_nsgr_cand in enumerate(_i80_final_pool):
+                for _i80_nsgr_ci, _i80_nsgr_cand in enumerate(_i80_nsgr_pool):
                     _i80_nsgr_test = [s if j != _i80_nsgr_idx else _i80_nsgr_cand for j, s in enumerate(_selected)]
                     _i80_nsgr_cur_inv = _i80_invariant_snapshot(_selected)
                     _i80_nsgr_test_inv = _i80_invariant_snapshot(_i80_nsgr_test)
@@ -11610,13 +11621,75 @@ def _f600_run_fast_path(
                                   _i80_nsgr_idx, str(getattr(_i80_nsgr_item, "title", ""))[:60],
                                   str(getattr(_i80_nsgr_cand, "title", ""))[:60])
                         _selected[_i80_nsgr_idx] = _i80_nsgr_cand
-                        _i80_final_pool.pop(_i80_nsgr_ci)
+                        _i80_nsgr_pool.pop(_i80_nsgr_ci)
                         _i80_changed = True
                         _i80_nsgr_swapped = True
                         break
             if not _i80_nsgr_swapped:
-                _log.warning("iter83 final cap: stuck at nsgr=%d, no valid replacement", _i80_nsgr)
+                # iter93: diagnostic — log why each NSGR item couldn't be replaced
+                _i80_nsgr_diag = []
+                for _i80_nsgr_di, _i80_nsgr_dit in _i80_nsgr_items[:2]:
+                    _i80_nsgr_top_regs = []
+                    for _i80_nsgr_dci, _i80_nsgr_dc in enumerate(_i80_nsgr_pool[:5]):
+                        _i80_nsgr_dt = [s if j != _i80_nsgr_di else _i80_nsgr_dc for j, s in enumerate(_selected)]
+                        _i80_nsgr_dci_inv = _i80_invariant_snapshot(_selected)
+                        _i80_nsgr_dti_inv = _i80_invariant_snapshot(_i80_nsgr_dt)
+                        _, _i80_nsgr_dregs = _i80_no_regression(_i80_nsgr_dci_inv, _i80_nsgr_dti_inv)
+                        if _i80_nsgr_dregs:
+                            _i80_nsgr_top_regs.append(f"cand[{_i80_nsgr_dci}]={_i80_nsgr_dregs}")
+                    _i80_nsgr_diag.append(f"idx={_i80_nsgr_di} title='{str(getattr(_i80_nsgr_dit, 'title', ''))[:40]}' regs={_i80_nsgr_top_regs[:3]}")
+                _log.warning("iter83 final cap: stuck at nsgr=%d, no valid replacement. diag=%s", _i80_nsgr, _i80_nsgr_diag)
                 break
+        # iter93: policy rescue — ensure us+china>=2 and china>=1 after all cap enforcement
+        _i93_usp = sum(1 for s in _selected if _is_us_policy(s))
+        _i93_cnp = sum(1 for s in _selected if _is_china_policy(s))
+        if (_i93_usp + _i93_cnp) < 2 or _i93_cnp < 1:
+            _i93_need_us = _i93_usp < 1 and _i93_cnp >= 1  # need at least 1 US policy
+            _i93_need_cn = _i93_cnp < 1  # need at least 1 China policy
+            _i93_pol_pool = [it for it in _f6_tier(300) if it not in _selected
+                             and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                             and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                             and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                             and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)
+                             and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                             and ((_i93_need_us and _is_us_policy(it)) or (_i93_need_cn and _is_china_policy(it)))]
+            _i93_pol_pool.sort(key=lambda it: (-int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
+            _log.info("iter93 policy rescue: need_us=%s need_cn=%s pool=%d", _i93_need_us, _i93_need_cn, len(_i93_pol_pool))
+            # try to replace a non-policy non-critical item
+            _i93_pol_swapped = False
+            _i93_pol_victims = sorted(
+                [(i, s) for i, s in enumerate(_selected)
+                 if not _is_us_policy(s) and not _is_china_policy(s)
+                 and not _is_china_ai_gov(s)],  # don't remove sole china_ai_gov
+                key=lambda x: _f6_bfp(x[1])  # worst-score first
+            )
+            for _i93_vi, _i93_vs in _i93_pol_victims:
+                if _i93_pol_swapped:
+                    break
+                for _i93_pci, _i93_pc in enumerate(_i93_pol_pool):
+                    _i93_pt = [s if j != _i93_vi else _i93_pc for j, s in enumerate(_selected)]
+                    _i93_cur_inv = _i80_invariant_snapshot(_selected)
+                    _i93_test_inv = _i80_invariant_snapshot(_i93_pt)
+                    _i93_ok, _i93_reg = _i80_no_regression(_i93_cur_inv, _i93_test_inv)
+                    if not _i93_ok:
+                        _i93_ok = all(not _i93_cur_inv[k] for k in _i93_reg)
+                    if not _i93_ok:
+                        _i93_ok = all(
+                            (not _i93_cur_inv[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined", "nsgr", "density_floor", "per_item_sd"})
+                            for k in _i93_reg
+                        )
+                    if _i93_ok:
+                        _log.info("iter93 policy rescue: replaced idx=%d '%s' with '%s'",
+                                  _i93_vi, str(getattr(_i93_vs, "title", ""))[:60],
+                                  str(getattr(_i93_pc, "title", ""))[:60])
+                        _selected[_i93_vi] = _i93_pc
+                        _i80_changed = True
+                        _i93_pol_swapped = True
+                        break
+            if not _i93_pol_swapped:
+                _log.warning("iter93 policy rescue: FAILED us=%d cn=%d pool=%d victims=%d",
+                             _i93_usp, _i93_cnp, len(_i93_pol_pool), len(_i93_pol_victims))
         # iter80b: enforce domain concentration cap (max _DIV_MAX_DOMAIN per domain)
         for _i80_dom_round in range(10):
             _i80_dom_c = _DivCounter(_f6_domain_key(s) for s in _selected)
