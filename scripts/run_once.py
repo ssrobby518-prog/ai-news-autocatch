@@ -11601,7 +11601,7 @@ def _f600_run_fast_path(
                         _i80_nsgr_ok = all(not _i80_nsgr_cur_inv[k] for k in _i80_nsgr_reg)
                     if not _i80_nsgr_ok:
                         _i80_nsgr_ok = all(
-                            (not _i80_nsgr_cur_inv[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined", "nsgr"})
+                            (not _i80_nsgr_cur_inv[k]) or (k in {"max_domain", "tc_cap", "gr_cap", "tc_gr_combined", "nsgr", "density_floor", "per_item_sd"})
                             for k in _i80_nsgr_reg
                         )
                     _i80_nsgr_test_total = sum(1 for s in _i80_nsgr_test if _is_non_strategic_google_research(s))
