@@ -15376,7 +15376,13 @@ def _f600_run_fast_path(
                     "rank": _co_wi,
                     "final_score": int(getattr(_co_ws, "frontier_score", 0) or 0),
                 })
-            _co_snap_top2 = [it["url_hash"] for it in _co_snap_items[:2] if it.get("url_hash")]
+            # iter96: top 2 by strategic density score (protects most information-dense items)
+            _co_snap_by_sd = sorted(_co_snap_items,
+                                     key=lambda x: _sd72_all_scores.get(
+                                         id(_selected[x["rank"]]), {}
+                                     ).get("strategic_density_score", 0),
+                                     reverse=True)
+            _co_snap_top2 = [it["url_hash"] for it in _co_snap_by_sd[:2] if it.get("url_hash")]
             try:
                 import subprocess as _co_sp
                 _co_git_head = _co_sp.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, stderr=_co_sp.DEVNULL).strip()
