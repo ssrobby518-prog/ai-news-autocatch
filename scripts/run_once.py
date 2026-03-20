@@ -10256,10 +10256,14 @@ def _f600_run_fast_path(
                         _co_repl2_tc = _is_techcrunch(_co_repl2)
                         _co_repl2_gr = _f6_is_google_research_blog(_co_repl2)
                         _co_f_skip_reason = None
+                        _co_cur_tcgr = _co_cur_tc + _co_cur_gr
                         if _co_repl2_tc and not _co_old_tc and _co_cur_tc >= 3:
                             _co_f_skip_reason = "tc_cap"
                         if _co_repl2_gr and not _co_old_gr and _co_cur_gr >= 3:
                             _co_f_skip_reason = "gr_cap"
+                        # iter96: combined TC+GR cap — prevent flooding with GR even if individual cap OK
+                        if (_co_repl2_tc or _co_repl2_gr) and _co_cur_tcgr >= 5:
+                            _co_f_skip_reason = "tcgr_cap"
                         # iter93: protect china_ai_gov — if losing last china_ai_gov item, replacement must also be china_ai_gov
                         _co_old_cag = _is_china_ai_gov(_selected[_co_bi])
                         _co_cur_cag = sum(1 for s in _selected if _is_china_ai_gov(s))
@@ -11953,6 +11957,93 @@ def _f600_run_fast_path(
                           len(set(_ct72b_strategic_bucket(s) for s in _selected)),
                           len(set(_f6_vendor_key(s) for s in _selected if _is_target_player(s))))
 
+    # --- iter96: strategic bucket coverage rescue — ensure buckets >= 5 after all swaps ---
+    if _is_daily and len(_selected) >= _max_events:
+        _i96_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
+        if len(_i96_buckets) < 5:
+            _log.info("iter96 bucket rescue: buckets=%d < 5, attempting fix", len(_i96_buckets))
+            # Build pool: prefer items from NEW buckets not already in selection
+            _i96_pool = [it for it in _f6_tier(300) if it not in _selected
+                         and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                         and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                         and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                         and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)
+                         and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+            if not _i96_pool:
+                _i96_pool = [it for it in _f6_tier(300) if it not in _selected
+                             and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                             and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                             and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                             and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)
+                             and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
+            # Sort: items from NEW buckets first, then fulltext length
+            _i96_pool.sort(key=lambda it: (
+                0 if _ct72b_strategic_bucket(it) not in _i96_buckets else 1,
+                -int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
+            _i96_changed = False
+            for _i96_round in range(10):
+                _i96_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
+                if len(_i96_buckets) >= 5:
+                    break
+                if not _i96_pool:
+                    break
+                # Find items from over-represented buckets (count >= 2)
+                _i96_bc = _DivCounter(_ct72b_strategic_bucket(s) for s in _selected)
+                _i96_victims = sorted(
+                    [(i, s) for i, s in enumerate(_selected)
+                     if _i96_bc.get(_ct72b_strategic_bucket(s), 0) >= 2],
+                    key=lambda x: (-_i96_bc.get(_ct72b_strategic_bucket(x[1]), 0), _f6_bfp(x[1]))
+                )
+                _i96_swapped = False
+                for _i96_vi, _i96_vs in _i96_victims:
+                    if _i96_swapped:
+                        break
+                    for _i96_ci, _i96_cand in enumerate(_i96_pool):
+                        _i96_cb = _ct72b_strategic_bucket(_i96_cand)
+                        if _i96_cb in _i96_buckets:
+                            continue  # must bring a NEW bucket
+                        _i96_test = [s if j != _i96_vi else _i96_cand for j, s in enumerate(_selected)]
+                        _i96_cur_inv = _i80_invariant_snapshot(_selected)
+                        _i96_test_inv = _i80_invariant_snapshot(_i96_test)
+                        _i96_ok, _i96_reg = _i80_no_regression(_i96_cur_inv, _i96_test_inv)
+                        if not _i96_ok:
+                            _i96_ok = all(not _i96_cur_inv[k] for k in _i96_reg)
+                        # Defer: max_domain, density (we're fixing a critical gate)
+                        if not _i96_ok:
+                            _i96_ok = all(
+                                (not _i96_cur_inv[k]) or (k in {"max_domain", "density_floor", "per_item_sd", "sd_avg"})
+                                for k in _i96_reg
+                            )
+                        if _i96_ok:
+                            _log.info("iter96 bucket rescue: replaced bucket='%s'[%d] '%s' with bucket='%s' '%s'",
+                                      _ct72b_strategic_bucket(_i96_vs), _i96_vi,
+                                      str(getattr(_i96_vs, "title", ""))[:60],
+                                      _i96_cb, str(getattr(_i96_cand, "title", ""))[:60])
+                            _selected[_i96_vi] = _i96_cand
+                            _i96_pool.pop(_i96_ci)
+                            _i96_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
+                            _i96_changed = True
+                            _i96_swapped = True
+                            break
+                if not _i96_swapped:
+                    _log.warning("iter96 bucket rescue: stuck at buckets=%d", len(_i96_buckets))
+                    break
+            if _i96_changed:
+                _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+                _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+                try:
+                    _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)
+                except Exception:
+                    pass
+                _log.info("iter96 bucket rescue done: buckets=%d domains=%d vendors=%d tc=%d gr=%d",
+                          len(set(_ct72b_strategic_bucket(s) for s in _selected)),
+                          len(set(_f6_domain_key(s) for s in _selected)),
+                          len(set(_f6_vendor_key(s) for s in _selected) - {"other"}),
+                          sum(1 for s in _selected if _is_techcrunch(s)),
+                          sum(1 for s in _selected if _f6_is_google_research_blog(s)))
+
     # --- iter80: FINAL IMMUTABLE SNAPSHOT — all subsequent meta/gates/brief use this ---
     if _is_daily and len(_selected) >= _max_events:
         _i80_final_selection = list(_selected)  # immutable copy
@@ -13232,7 +13323,7 @@ def _f600_run_fast_path(
     # --- Step 5: TIME_BUDGET_GUARD_BEFORE_TRANSLATION (iter42: DAILY 120s; else 150s) ---
     _elapsed_pre_xlat = time.time() - t_start
     stg["before_translation_seconds"] = round(_elapsed_pre_xlat, 1)
-    _pre_xlat_limit = 100 if _is_daily else 150  # iter92: raised from 90 to 100 for thermal headroom (AWS devdoc swap + carryover swap)
+    _pre_xlat_limit = 110 if _is_daily else 150  # iter96: raised from 100 to 110 for bucket rescue + carryover swap headroom
     if _elapsed_pre_xlat > _pre_xlat_limit:
         _f6_fail(
             "TIME_BUDGET_GUARD_BEFORE_TRANSLATION",
