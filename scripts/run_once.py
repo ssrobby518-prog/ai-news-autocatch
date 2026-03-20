@@ -15376,11 +15376,14 @@ def _f600_run_fast_path(
                     "rank": _co_wi,
                     "final_score": int(getattr(_co_ws, "frontier_score", 0) or 0),
                 })
-            # iter96: top 2 by strategic density score (protects most information-dense items)
+            # iter96: top 2 by importance — sole critical-gate providers first, then strategic density
+            _co_cag_count = sum(1 for s in _selected if _is_china_ai_gov(s))
             _co_snap_by_sd = sorted(_co_snap_items,
-                                     key=lambda x: _sd72_all_scores.get(
-                                         id(_selected[x["rank"]]), {}
-                                     ).get("strategic_density_score", 0),
+                                     key=lambda x: (
+                                         1 if (_co_cag_count == 1 and _is_china_ai_gov(_selected[x["rank"]])) else 0,
+                                         _sd72_all_scores.get(
+                                             id(_selected[x["rank"]]), {}
+                                         ).get("strategic_density_score", 0)),
                                      reverse=True)
             _co_snap_top2 = [it["url_hash"] for it in _co_snap_by_sd[:2] if it.get("url_hash")]
             try:
