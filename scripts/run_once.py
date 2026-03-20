@@ -12044,6 +12044,91 @@ def _f600_run_fast_path(
                           sum(1 for s in _selected if _is_techcrunch(s)),
                           sum(1 for s in _selected if _f6_is_google_research_blog(s)))
 
+    # --- iter96: per-item strategic density rescue — replace items with SD < 15 ---
+    if _is_daily and len(_selected) >= _max_events:
+        _i96_sd_floor = 15
+        # Ensure all selected items have SD scores
+        for _i96_es in _selected:
+            if id(_i96_es) not in _sd72_all_scores:
+                _sd72_all_scores[id(_i96_es)] = _sd72_score(_i96_es)
+        _i96_sd_thin = [(i, s) for i, s in enumerate(_selected)
+                        if _sd72_all_scores.get(id(s), {}).get("strategic_density_score", 0) < _i96_sd_floor]
+        if _i96_sd_thin:
+            _log.info("iter96 SD rescue: %d items below SD floor=%d: %s", len(_i96_sd_thin), _i96_sd_floor,
+                      [(i, _sd72_all_scores.get(id(s), {}).get("strategic_density_score", 0),
+                        str(getattr(s, "title", ""))[:50]) for i, s in _i96_sd_thin])
+            # Build pool: wider than strict — allow items from raw_items (not just tier 300)
+            _i96_sd_pool = [it for it in _f6_tier(300) if it not in _selected
+                            and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                            and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
+                            and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                            and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)
+                            and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
+            # Pre-compute SD scores for pool candidates
+            for _i96_pc in _i96_sd_pool:
+                if id(_i96_pc) not in _sd72_all_scores:
+                    _sd72_all_scores[id(_i96_pc)] = _sd72_score(_i96_pc)
+            # Filter pool to items with SD >= floor
+            _i96_sd_pool = [it for it in _i96_sd_pool
+                            if _sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0) >= _i96_sd_floor]
+            # Sort: same-vendor as thin item first (preserves target_player), then SD descending
+            for _i96_ti, _i96_ts in _i96_sd_thin:
+                _i96_thin_vendor = _f6_vendor_key(_i96_ts)
+                _i96_sd_pool.sort(key=lambda it: (
+                    0 if _f6_vendor_key(it) == _i96_thin_vendor else 1,  # same vendor first
+                    -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0),
+                    -int(getattr(it, "fulltext_len", 0) or 0)))
+            _log.info("iter96 SD rescue: pool=%d (SD>=%d) top_vendors=%s", len(_i96_sd_pool), _i96_sd_floor,
+                      [(str(getattr(it, "title", ""))[:30], _f6_vendor_key(it),
+                        _sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0))
+                       for it in _i96_sd_pool[:5]])
+            _i96_sd_changed = False
+            for _i96_ti, _i96_ts in _i96_sd_thin:
+                _i96_sd_swapped = False
+                for _i96_sci, _i96_sc in enumerate(_i96_sd_pool):
+                    _i96_test = [s if j != _i96_ti else _i96_sc for j, s in enumerate(_selected)]
+                    _i96_cur_inv = _i80_invariant_snapshot(_selected)
+                    _i96_test_inv = _i80_invariant_snapshot(_i96_test)
+                    _i96_ok, _i96_reg = _i80_no_regression(_i96_cur_inv, _i96_test_inv)
+                    if not _i96_ok:
+                        # Allow regression on already-failing invariants + density (we're fixing SD)
+                        _i96_ok = all(
+                            (not _i96_cur_inv[k]) or (k in {"per_item_sd", "sd_avg", "density_floor"})
+                            for k in _i96_reg
+                        )
+                    # iter96: relaxed — also allow max_domain/max_vendor if same vendor swap
+                    if not _i96_ok and _f6_vendor_key(_i96_sc) == _f6_vendor_key(_i96_ts):
+                        _i96_ok = all(
+                            (not _i96_cur_inv[k]) or (k in {"per_item_sd", "sd_avg", "density_floor", "max_domain", "max_vendor"})
+                            for k in _i96_reg
+                        )
+                    if _i96_ok:
+                        _old_sd = _sd72_all_scores.get(id(_i96_ts), {}).get("strategic_density_score", 0)
+                        _new_sd = _sd72_all_scores.get(id(_i96_sc), {}).get("strategic_density_score", 0)
+                        _log.info("iter96 SD rescue: replaced idx=%d SD=%d '%s' with SD=%d '%s' vendor=%s",
+                                  _i96_ti, _old_sd, str(getattr(_i96_ts, "title", ""))[:60],
+                                  _new_sd, str(getattr(_i96_sc, "title", ""))[:60], _f6_vendor_key(_i96_sc))
+                        _selected[_i96_ti] = _i96_sc
+                        _i96_sd_pool.pop(_i96_sci)
+                        _i96_sd_changed = True
+                        _i96_sd_swapped = True
+                        break
+                if not _i96_sd_swapped:
+                    _log.warning("iter96 SD rescue FAIL: idx=%d SD=%d vendor=%s '%s' — no valid replacement in pool=%d",
+                                 _i96_ti,
+                                 _sd72_all_scores.get(id(_i96_ts), {}).get("strategic_density_score", 0),
+                                 _f6_vendor_key(_i96_ts),
+                                 str(getattr(_i96_ts, "title", ""))[:60], len(_i96_sd_pool))
+            if _i96_sd_changed:
+                _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+                _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+                try:
+                    _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)
+                except Exception:
+                    pass
+                _log.info("iter96 SD rescue done: min_sd=%d",
+                          min((_sd72_all_scores.get(id(s), {}).get("strategic_density_score", 0) for s in _selected), default=0))
+
     # --- iter80: FINAL IMMUTABLE SNAPSHOT — all subsequent meta/gates/brief use this ---
     if _is_daily and len(_selected) >= _max_events:
         _i80_final_selection = list(_selected)  # immutable copy
@@ -13194,6 +13279,18 @@ def _f600_run_fast_path(
         _f6_fail("STRATEGIC_BUCKET_COVERAGE_HARD_DAILY", _cm72_bucket_fail)
 
     # iter73: PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY gate (B7) — each item >= 15
+    # iter96: recompute per_item_sd from CURRENT _selected (swaps may have introduced thin items after line 9698)
+    if _is_daily:
+        _cm73_per_item_sd_pass = True
+        _cm73_per_item_sd_failures = []
+        for _cm73_ri, _cm73_rs in enumerate(_selected):
+            if id(_cm73_rs) not in _sd72_all_scores:
+                _sd72_all_scores[id(_cm73_rs)] = _sd72_score(_cm73_rs)
+            _cm73_rs_sd = _sd72_all_scores[id(_cm73_rs)].get("strategic_density_score", 0)
+            if _cm73_rs_sd < _cm73_sd_floor:
+                _cm73_per_item_sd_pass = False
+                _cm73_per_item_sd_failures.append({"idx": _cm73_ri, "score": _cm73_rs_sd,
+                                                   "title": str(getattr(_cm73_rs, "title", "") or "")[:80]})
     # iter95: NO deferral — if aws_devdoc swap introduces low-density item, the pipeline fails honestly
     _cm73_per_item_sd_deferred = False  # iter95: always false, no deferral allowed
     if _is_daily and not _cm73_per_item_sd_pass:
