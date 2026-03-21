@@ -7955,8 +7955,12 @@ def _f600_run_fast_path(
         r'|\b(?:fine[\-\s]?tun(?:e|ing)|training)\s+(?:guide|tutorial|walkthrough|example|job)\b'
         r')', _ct71_re.I)
     # iter90: only truly CEO-level business signals exempt AWS items from devdoc classification
+    # iter97: broadened exec exemption — product launches, availability, cross-region, year-in-review
+    # are CEO-grade signals even when published on ML blog
     _AWS_DEVDOC_EXEC_RE = _ct71_re.compile(
-        r'\b(?:acqui|partner|earnings|pricing|marketplace|regulation|compliance|CVE|security\s+(?:breach|incident)|組織調整|財報|高層)\b', _ct71_re.I)
+        r'\b(?:acqui|partner|earnings|pricing|marketplace|regulation|compliance|CVE|security\s+(?:breach|incident)'
+        r'|launch|introduc|announc|general\s+availability|cross[\-\s]region|global|preview|year\s+in\s+review'
+        r'|組織調整|財報|高層)\b', _ct71_re.I)
     # iter96: URL path detection — AWS blog categories that are inherently developer/tutorial content
     _AWS_DEVDOC_URL_RE = _ct71_re.compile(
         r'/blogs/(?:machine-learning|compute|containers|developer-tools|devops|big-data|infrastructure|networking)',
@@ -8140,7 +8144,8 @@ def _f600_run_fast_path(
     # iter54: DAILY_BIGTECH_ONLY — pool of items that are bigtech AND (official/media/code_release)
     # code_release from bigtech (e.g. GitHub microsoft/autogen) counts as official for DAILY purposes
     _BT_OM_TYPES = ("official", "media", "code_release")
-    _bt_om_pool = [it for it in _pool_700 if _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES]
+    _bt_om_pool = [it for it in _pool_700 if _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
+                   and not _is_aws_devdoc(it)]  # iter97: exclude aws_devdoc from master pool
 
     # iter53: domain/vendor quota-aware selection
     _DIV_MAX_DOMAIN = 3  # iter73: 10 items, max 1/3 → 3
@@ -8314,7 +8319,7 @@ def _f600_run_fast_path(
             it for it in _pool_700
             if _ct71_is_research_tutorial(it)
             and _f6_is_bigtech(it)
-            and not _f6_is_dev_noise(it)
+            and not _f6_is_dev_noise(it) and not _is_aws_devdoc(it)  # iter97
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
 
@@ -8611,11 +8616,11 @@ def _f600_run_fast_path(
                         break
             if not _p73_f5:
                 # penultimate resort — bigtech items from _pool_700 with density + strategic density pass
-                # iter77: exclude all ceo-prohibited (prevents google_research/tutorial/forum from entering)
+                # iter77: exclude all ceo-prohibited; iter97: exclude aws_devdoc
                 for it in _pool_700:
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
-                            and not _is_ceo_prohibited(it)
+                            and not _is_ceo_prohibited(it) and not _is_aws_devdoc(it)
                             and _f6_is_bigtech(it)
                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                             and _sd73_pass(it)):
@@ -8624,11 +8629,11 @@ def _f600_run_fast_path(
                         break
             if not _p73_f5:
                 # absolute last resort — bigtech items without strategic density pass (gate will check later)
-                # iter77: exclude all ceo-prohibited
+                # iter77: exclude all ceo-prohibited; iter97: exclude aws_devdoc
                 for it in _pool_700:
                     if (it not in _selected and _div_can_add(it, _selected)
                             and not _f6_is_dev_noise(it) and not _is_platform_domain(it)
-                            and not _is_ceo_prohibited(it)
+                            and not _is_ceo_prohibited(it) and not _is_aws_devdoc(it)
                             and _f6_is_bigtech(it)
                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN):
                         _sel_append(it)
@@ -9209,10 +9214,10 @@ def _f600_run_fast_path(
         # iter77: sort non-platform first; filter ceo_prohibited + density floor
         _div_backup = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
                        and not _f6_is_google_research_blog(it) and not _is_ceo_prohibited(it)
-                       and not _is_hf_blog_explainer(it)
+                       and not _is_hf_blog_explainer(it) and not _is_aws_devdoc(it)  # iter97: block aws_devdoc leak
                        and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                        and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
-        # iter81: if backup pool has no items from new domains, expand with relaxed density
+        # iter97: expand backup pool with dense new-domain items only (density >= 12 enforced)
         _div_cur_doms = set(_f6_domain_key(s) for s in _selected)
         _div_has_new = any(_f6_domain_key(it) not in _div_cur_doms for it in _div_backup)
         if not _div_has_new and len(_div_cur_doms) < _DIV_MIN_DOMAINS:
@@ -9220,12 +9225,13 @@ def _f600_run_fast_path(
                           and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                           and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
                           and not _is_developer_release(it) and not _is_indie_dev_tone(it)
-                          and not _is_tutorial_explainer(it)
+                          and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)  # iter97
                           and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
-                          and _f6_domain_key(it) not in _div_cur_doms]
+                          and _f6_domain_key(it) not in _div_cur_doms
+                          and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
             if _div_extra:
                 _div_backup.extend(_div_extra)
-                _log.info("iter81 div-swap: expanded backup pool with %d new-domain items (relaxed density)", len(_div_extra))
+                _log.info("iter97 div-swap: expanded backup pool with %d dense new-domain items", len(_div_extra))
         _div_backup.sort(key=lambda it: (0 if not _is_platform_domain(it) else 1,
                                          -int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
         for _div_round in range(30):
@@ -9504,6 +9510,7 @@ def _f600_run_fast_path(
             and _f6_src_type(it) not in ("dev_forum",)
             and not _f6_is_dev_noise(it)
             and not _f6_is_google_research_blog(it)
+            and not _is_aws_devdoc(it)  # iter97
             and (not _is_daily or (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES))
         ]
         _non_df_backup.sort(key=_f6_sort_key, reverse=True)
@@ -9638,7 +9645,8 @@ def _f600_run_fast_path(
         _bt_rescue_pool = [it for it in _f6_tier(300) if it not in _selected
                            and _f6_is_bigtech(it) and _i90_is_bigtech_audit(it)
                            and _f6_src_type(it) in _BT_OM_TYPES
-                           and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)]
+                           and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
+                           and not _is_aws_devdoc(it)]  # iter97
         _bt_rescue_pool.sort(key=lambda it: -_sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0))
         _i90_bt_rescue_count = 0
         for _bt_ri in range(len(_selected)):
@@ -9654,7 +9662,8 @@ def _f600_run_fast_path(
                 _bt_old_tc = _is_techcrunch(_bt_it)
                 _bt_old_gr = _f6_is_google_research_blog(_bt_it)
                 _bt_found = False
-                # iter93: two passes — prefer non-TC/GR, fallback to any (final_cap will fix)
+                # iter97: invariant-checked swap — no gate regression allowed
+                _bt_inv_before = _i80_invariant_snapshot(_selected)
                 for _bt_pass in range(2):
                     for _bt_cand in _bt_rescue_pool:
                         if _bt_cand not in _selected:
@@ -9664,6 +9673,16 @@ def _f600_run_fast_path(
                                     continue
                                 if _f6_is_google_research_blog(_bt_cand) and not _bt_old_gr and _bt_cur_gr >= _GOOGLE_RESEARCH_CAP:
                                     continue
+                            # iter97: invariant check — swap must not regress any gate
+                            _bt_test = list(_selected)
+                            _bt_test[_bt_ri] = _bt_cand
+                            _bt_inv_after = _i80_invariant_snapshot(_bt_test)
+                            _bt_inv_ok, _bt_inv_reg = _i80_no_regression(_bt_inv_before, _bt_inv_after)
+                            if not _bt_inv_ok:
+                                # Allow regression only for gates that were already failing
+                                _bt_inv_ok = all(not _bt_inv_before[k] for k in _bt_inv_reg)
+                            if not _bt_inv_ok:
+                                continue
                             _log.info("iter90: bigtech rescue — replacing non-bigtech idx=%d vendor=%s with %s (pass=%d)",
                                       _bt_ri, _f6_vendor_key(_bt_it), str(getattr(_bt_cand, "title", ""))[:60], _bt_pass)
                             _selected[_bt_ri] = _bt_cand
@@ -9672,6 +9691,8 @@ def _f600_run_fast_path(
                             break
                     if _bt_found:
                         break
+                if not _bt_found:
+                    _log.info("iter97: bigtech rescue SKIP idx=%d — no candidate passes invariant check", _bt_ri)
         if _i90_bt_rescue_count > 0:
             _log.info("iter90: bigtech rescue replaced %d non-bigtech items", _i90_bt_rescue_count)
 
@@ -10532,7 +10553,7 @@ def _f600_run_fast_path(
         # iter68→77: also filter by density, ceo_prohibited; sort non-platform first
         _div_backup2 = [it for it in _f6_tier(300) if it not in _selected and not _f6_is_dev_noise(it)
                         and not _f6_is_google_research_blog(it) and not _is_ceo_prohibited(it)
-                        and not _is_hf_blog_explainer(it)
+                        and not _is_hf_blog_explainer(it) and not _is_aws_devdoc(it)  # iter97
                         and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         _div_backup2.sort(key=lambda it: (0 if not _is_platform_domain(it) else 1,
@@ -10701,13 +10722,13 @@ def _f600_run_fast_path(
             _plat_repl_boma = [it for it in _f6_tier(300) if it not in _selected
                                and not _is_platform_domain(it)
                                and not _f6_is_google_research_blog(it)
-                               and not _is_ceo_prohibited(it)  # iter78b
+                               and not _is_ceo_prohibited(it) and not _is_aws_devdoc(it)  # iter97
                                and _ct72b_is_bigtech_official_media_actionable(it)
                                and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
             _plat_repl_other = [it for it in _f6_tier(300) if it not in _selected
                                 and not _is_platform_domain(it)
                                 and not _f6_is_google_research_blog(it)
-                                and not _is_ceo_prohibited(it)  # iter78b
+                                and not _is_ceo_prohibited(it) and not _is_aws_devdoc(it)  # iter97
                                 and _f6_is_bigtech(it)
                                 and not _ct72b_is_bigtech_official_media_actionable(it)
                                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
@@ -10962,11 +10983,11 @@ def _f600_run_fast_path(
                     and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         # iter81: sort FR pool so non-TC items come first (FR-1 picks first match → avoids TC bloat)
         _fr_pool.sort(key=lambda it: (1 if _is_techcrunch(it) else 0, -_f6_bfp(it)))
-        # iter78b: also build wider pool (pool_sorted, relaxed density) for target_player rescue only
+        # iter97: wider pool — density >= 12 enforced (no relaxation)
         _fr_pool_wide = [it for it in _pool_sorted if it not in _selected and it not in _fr_pool
                          and not _is_ceo_prohibited(it) and not _f6_is_dev_noise(it)
-                         and _is_target_player(it) and not _is_aws_devdoc(it)  # iter92
-                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
+                         and _is_target_player(it) and not _is_aws_devdoc(it)
+                         and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
         # iter81: sort wider pool too — prefer non-TC
         _fr_pool_wide.sort(key=lambda it: (1 if _is_techcrunch(it) else 0, -_f6_bfp(it)))
         _fr_changed = False
@@ -11215,12 +11236,12 @@ def _f600_run_fast_path(
                             and not _is_aws_devdoc(it)
                             and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]),
-                # Pass 2: broad pool (bigtech + non-devnoise, non-prohibited, non-aws-devdoc with density >= 8)
+                # Pass 2: broad pool (bigtech + density >= 12 — iter97: no relaxation)
                 ("broad", [it for it in _f6_tier(300) if it not in _selected
                            and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                            and not _is_aws_devdoc(it)
                            and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
-                           and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]),
+                           and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]),
             ]
             for _i90_pass_name, _i88_pool in _i90_pools:
                 if sum(1 for s in _selected if _is_aws_devdoc(s)) == 0:
@@ -11275,7 +11296,8 @@ def _f600_run_fast_path(
                                      and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                                      and not _is_aws_devdoc(it)
                                      and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
-                                     and _sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0) >= _cm73_sd_floor]  # iter95: enforce sd floor
+                                     and _sd72_all_scores.get(id(it), {}).get("strategic_density_score", 0) >= _cm73_sd_floor
+                                     and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]  # iter97: enforce density floor — no deferral
                 # Sort: new domains first, then by strategic density (higher first), then fulltext
                 _i90_nuclear_pool.sort(key=lambda it: (
                     0 if _f6_domain_key(it) not in _i90_existing_domains else 1,
@@ -11294,10 +11316,10 @@ def _f600_run_fast_path(
                     if _i90_target_idx is None:
                         break
                     _i90_swapped = False
-                    # iter96: nuclear swap — removing bad content > maintaining domain/density/vendor invariants
-                    # Deferrable: density + min_domains + max_vendor (losing aws domain / vendor shift acceptable)
+                    # iter97: nuclear swap — domain/vendor trade-off allowed (downstream diversity fix repairs)
+                    # Density deferral removed; density >= 12 enforced on nuclear pool
                     _i90_inv_before = _i80_invariant_snapshot(_selected)
-                    _i90_density_deferrable = {"density_floor", "per_item_sd", "sd_avg", "min_domains", "max_vendor"}
+                    _i90_swap_tradeoff = {"min_domains", "max_vendor", "max_domain"}
                     _i90_cur_tc = sum(1 for s in _selected if _is_techcrunch(s))  # iter92
                     _i90_nuc_vc = _DivCounter(_f6_vendor_key(s) for s in _selected)
                     _i90_nuc_max_vc = max(_i90_nuc_vc.values()) if _i90_nuc_vc else 0  # iter93: track vendor concentration
@@ -11315,9 +11337,9 @@ def _f600_run_fast_path(
                             continue
                         _i90_inv = _i80_invariant_snapshot(_i90_test)
                         _i90_ok, _i90_reg = _i80_no_regression(_i90_inv_before, _i90_inv)
-                        # iter96: accept if only density/domain invariants regress (removing bad content priority)
+                        # iter97: accept if only min_domains/max_vendor regress (density deferral removed)
                         if not _i90_ok:
-                            _i90_ok = all(k in _i90_density_deferrable or not _i90_inv_before[k] for k in _i90_reg)
+                            _i90_ok = all(k in _i90_swap_tradeoff or not _i90_inv_before[k] for k in _i90_reg)
                         if _i90_ok:
                             _log.info("iter90 AWS devdoc swap (nuclear): replaced idx=%d title='%s' with '%s' (domain=%s)",
                                       _i90_target_idx,
@@ -11457,17 +11479,7 @@ def _f600_run_fast_path(
                            and not _is_platform_domain(it) and not _is_hf_blog_explainer(it)
                            and not _is_aws_devdoc(it)  # iter92: prevent aws devdoc reintroduction
                            and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
-        # iter81: if pool empty, try relaxed density (>=8) to avoid "no pool" deadlock
-        if not _i80_final_pool:
-            _i80_final_pool = [it for it in _f6_tier(300) if it not in _selected
-                               and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
-                               and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
-                               and not _is_techcrunch(it) and not _f6_is_google_research_blog(it)
-                               and not _is_platform_domain(it) and not _is_hf_blog_explainer(it)
-                               and not _is_aws_devdoc(it)  # iter92: prevent aws devdoc reintroduction
-                               and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
-            if _i80_final_pool:
-                _log.info("iter81: final cap pool relaxed density (>=%d→>=8), pool=%d", _HDF_NEW_DENSITY_MIN, len(_i80_final_pool))
+        # iter97: removed relaxed density fallback — density >= 12 is hard, no deferral
         _i80_final_pool.sort(key=lambda it: (-int(getattr(it, "fulltext_len", 0) or 0), -_f6_bfp(it)))
         _i80_changed = False
         # enforce TC cap — iter81: try ALL TC items (sorted worst-first), not just the single worst
@@ -11825,17 +11837,7 @@ def _f600_run_fast_path(
                           and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)  # iter92
                           and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                           and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
-            # iter81: relaxed density fallback if pool empty
-            if not _i80b_pool:
-                _i80b_pool = [it for it in _f6_tier(300) if it not in _selected
-                              and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
-                              and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
-                              and not _is_developer_release(it) and not _is_indie_dev_tone(it)
-                              and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)  # iter92
-                              and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
-                              and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
-                if _i80b_pool:
-                    _log.info("iter81: domain diversity pool relaxed density (>=%d→>=8), pool=%d", _HDF_NEW_DENSITY_MIN, len(_i80b_pool))
+            # iter97: removed relaxed density fallback — density >= 12 is hard, no deferral
             # iter81: include any eligible items from NEW domains for domain diversity
             _i80b_cur_doms_check = set(_f6_domain_key(s) for s in _selected)
             _i80b_dense_short_pool = [
@@ -11864,7 +11866,7 @@ def _f600_run_fast_path(
                                    and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                                    and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
                                    and not _is_developer_release(it) and not _is_indie_dev_tone(it)
-                                   and not _is_tutorial_explainer(it)
+                                   and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)  # iter97
                                    and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
                                    and _f6_domain_key(it) not in _i80b_cur_doms_check]
                 if not _i80b_wide_pool:
@@ -11873,7 +11875,7 @@ def _f600_run_fast_path(
                                        and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
                                        and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
                                        and not _is_developer_release(it) and not _is_indie_dev_tone(it)
-                                       and not _is_tutorial_explainer(it)
+                                       and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)  # iter97
                                        and _f6_domain_key(it) not in _i80b_cur_doms_check]
                 if _i80b_wide_pool:
                     _i80b_pool.extend(_i80b_wide_pool)
@@ -11981,14 +11983,7 @@ def _f600_run_fast_path(
                          and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)
                          and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
                          and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
-            if not _i96_pool:
-                _i96_pool = [it for it in _f6_tier(300) if it not in _selected
-                             and not _f6_is_dev_noise(it) and not _is_ceo_prohibited(it)
-                             and not _is_hf_blog_explainer(it) and not _is_forum_discussion(it)
-                             and not _is_developer_release(it) and not _is_indie_dev_tone(it)
-                             and not _is_tutorial_explainer(it) and not _is_aws_devdoc(it)
-                             and _f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES
-                             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= 8]
+            # iter97: removed relaxed density fallback — density >= 12 is hard
             # Sort: items from NEW buckets first, then fulltext length
             _i96_pool.sort(key=lambda it: (
                 0 if _ct72b_strategic_bucket(it) not in _i96_buckets else 1,
@@ -13340,7 +13335,7 @@ def _f600_run_fast_path(
                 _cm73_per_item_sd_failures.append({"idx": _cm73_ri, "score": _cm73_rs_sd,
                                                    "title": str(getattr(_cm73_rs, "title", "") or "")[:80]})
     # iter95: NO deferral — if aws_devdoc swap introduces low-density item, the pipeline fails honestly
-    _cm73_per_item_sd_deferred = False  # iter95: always false, no deferral allowed
+    # iter97: _cm73_per_item_sd_deferred removed — no deferral concept exists
     if _is_daily and not _cm73_per_item_sd_pass:
         _cm73_sd_fail = f"PER_ITEM_STRATEGIC_DENSITY_1P5_HARD_DAILY_FAIL: {len(_cm73_per_item_sd_failures)} items below floor={_cm73_sd_floor}"
         _write_not_ready_report_md(
@@ -14494,18 +14489,10 @@ def _f600_run_fast_path(
 
     # iter83: finalize commit lock for post-selection mutations.
     # No final output is allowed unless the final selection satisfies all invariants.
-    # iter90: defer density_floor/per_item_sd/sd_avg when aws_devdoc clearing caused the drop
+    # iter97: final invariant — NO deferral, NO exemption; raw truth only
     if _is_daily and len(_selected) >= _max_events:
         _i83_final_inv = _i80_invariant_snapshot(_selected)
         _i83_final_inv_fail = [k for k, v in _i83_final_inv.items() if not v]
-        # iter90: if aws_devdoc was cleared and the only failures are density-related, accept
-        if _i83_final_inv_fail and _i88_aws_devdoc_swaps > 0:
-            _i90_density_defer_set = {"density_floor", "per_item_sd", "sd_avg", "target_player"}
-            _i83_non_deferred = [k for k in _i83_final_inv_fail if k not in _i90_density_defer_set]
-            if not _i83_non_deferred:
-                _log.info("iter90: final invariant check deferred density failures %s (aws_devdoc swap trade-off)",
-                          _i83_final_inv_fail)
-                _i83_final_inv_fail = []
         if _i83_final_inv_fail:
             _f6_fail(
                 "FINAL_SELECTION_INVARIANT_HARD",
@@ -14633,17 +14620,12 @@ def _f600_run_fast_path(
                 len(_i83_density_scores) > 0 and _i83_density_min >= _HDF_NEW_DENSITY_MIN
             )
             # iter90: preserve density deferral from aws_devdoc swap
-            if not _i83_density_floor_pass and _i88_aws_devdoc_swaps > 0:
-                _log.info("iter90: canonical snapshot density_floor_pass deferred (aws_devdoc swap, min=%s)", _i83_density_min)
-                _i83_density_floor_pass = True
+            # iter97: NO deferral — density_floor_pass is raw truth, never overridden
             _i83_sd_scores = [row.get("strategic_density_score", 0) for row in _i83_per_item]
             _i83_sd_avg = round(sum(_i83_sd_scores) / len(_i83_sd_scores), 2) if _i83_sd_scores else 0
             _i83_sd_min = min(_i83_sd_scores) if _i83_sd_scores else 0
             _i83_sd_target = int(locals().get("_sd72_target_avg", _cm73_sd_floor))
             _i83_sd_gate_pass = (len(_i83_sd_scores) > 0 and _i83_sd_avg >= _i83_sd_target)
-            # iter95: NO deferral — final truth only, all deferred flags = false
-            _i83_sd_gate_deferred = False
-            _i83_per_item_sd_deferred = False
 
             # Apply INJECT_ overrides for gate-check values (same as pre-swap section)
             _i83_plat_check = int(os.environ["INJECT_PLATFORM_DOMAIN_TOTAL"]) if os.environ.get("INJECT_PLATFORM_DOMAIN_TOTAL") else _i83_plat_total
@@ -14822,12 +14804,10 @@ def _f600_run_fast_path(
                 "strategic_bucket_coverage_pass": _i83_buckets_distinct >= 5,
                 "per_item_strategic_density_floor": _cm73_sd_floor,
                 "per_item_strategic_density_pass": _i83_per_item_sd_pass,
-                "per_item_sd_deferred_by_aws_devdoc_swap": _i83_per_item_sd_deferred,
                 "per_item_strategic_density_failures": _i83_per_item_sd_failures,
                 "strategic_density_gate_target_avg": _i83_sd_target,
                 "strategic_density_gate_avg": _i83_sd_avg,
                 "strategic_density_gate_pass": _i83_sd_gate_pass,
-                "strategic_density_deferred_by_aws_devdoc_swap": _i83_sd_gate_deferred,
                 "source_density_floor": _HDF_NEW_DENSITY_MIN,
                 "source_density_min": _i83_density_min,
                 "source_density_avg": _i83_density_avg,
@@ -15179,16 +15159,13 @@ def _f600_run_fast_path(
                 _i83_sd_meta["new_density_min"] = _HDF_NEW_DENSITY_MIN
                 _i83_sd_meta["density_multiplier_gate_pass"] = _i83_density_floor_pass
                 _i83_sd_meta["selected_all_pass_hard_floor"] = _i83_density_floor_pass
-                # iter95: NO deferral — density_deferred_by_aws_devdoc_swap always false
-                _i83_sd_meta["density_deferred_by_aws_devdoc_swap"] = False
+                # iter97: NO deferred fields — raw truth only
                 _i83_sd_meta["selected_avg_strategic_density_score"] = _i83_sd_avg
                 _i83_sd_meta["selected_min_strategic_density_score"] = _i83_sd_min
                 _i83_sd_meta["target_avg_density_1p5"] = _i83_sd_target
                 _i83_sd_meta["target_min_density_1p5"] = _cm73_sd_floor
                 _i83_sd_meta["strategic_density_gate_pass"] = _i83_sd_gate_pass
-                _i83_sd_meta["strategic_density_deferred_by_aws_devdoc_swap"] = _i83_sd_gate_deferred
                 _i83_sd_meta["per_item_strategic_density_gate_pass"] = _i83_per_item_sd_pass
-                _i83_sd_meta["per_item_sd_deferred_by_aws_devdoc_swap"] = _i83_per_item_sd_deferred
                 _i83_sd_meta["per_item_strategic_density_failures"] = _i83_per_item_sd_failures
                 _i83_sd_path.write_text(_f6_j.dumps(_i83_sd_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
