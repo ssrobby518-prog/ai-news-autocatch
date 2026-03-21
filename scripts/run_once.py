@@ -11228,6 +11228,13 @@ def _f600_run_fast_path(
     _i91_aws_swap_log: list = []  # iter91: per-swap audit trail
     if _is_daily and len(_selected) >= _max_events:
         _i88_aws_devdoc_found = sum(1 for s in _selected if _is_aws_devdoc(s))
+        # iter97: diagnostic — log all aws.amazon.com items and their devdoc classification
+        for _i97_di, _i97_ds in enumerate(_selected):
+            if _f6_domain_key(_i97_ds) == "aws.amazon.com" or _is_aws_devdoc(_i97_ds):
+                _i97_title = str(getattr(_i97_ds, "title", "") or "")[:100]
+                _i97_url = str(getattr(_i97_ds, "url", "") or getattr(_i97_ds, "link", "") or "")[:120]
+                _log.info("iter97 AWS_DIAG idx=%d is_devdoc=%s domain=%s title='%s' url='%s'",
+                          _i97_di, _is_aws_devdoc(_i97_ds), _f6_domain_key(_i97_ds), _i97_title, _i97_url)
         if _i88_aws_devdoc_found > 0:
             # Pass 1: strict pool (bigtech + official/media + density >= 12)
             _i90_pools = [
@@ -11363,6 +11370,33 @@ def _f600_run_fast_path(
                             _i90_fail_reasons.append(f"domain={_f6_domain_key(_i90_dbg)} fails={_i90_dbg_fails}")
                         _log.warning("iter90 AWS devdoc swap (nuclear): could not replace idx=%d; top candidate diagnostics: %s",
                                      _i90_target_idx, "; ".join(_i90_fail_reasons[:3]))
+                        # iter97: DEEP NUCLEAR — accept tc_cap/tc_gr/buckets regression
+                        # (downstream final_cap_enforcement will attempt repair)
+                        _i97_deep_tradeoff = {"min_domains", "max_vendor", "max_domain",
+                                              "tc_cap", "tc_gr_combined", "gr_cap", "buckets"}
+                        _i97_deep_swapped = False
+                        for _i97_dc in _i90_nuclear_pool:
+                            if _i97_dc in _selected:
+                                continue
+                            _i97_dt = [s if j != _i90_target_idx else _i97_dc for j, s in enumerate(_selected)]
+                            _i97_dinv = _i80_invariant_snapshot(_i97_dt)
+                            _i97_dok, _i97_dreg = _i80_no_regression(_i90_inv_before, _i97_dinv)
+                            if not _i97_dok:
+                                _i97_dok = all(k in _i97_deep_tradeoff or not _i90_inv_before[k] for k in _i97_dreg)
+                            if _i97_dok:
+                                _log.info("iter97 AWS devdoc DEEP NUCLEAR: replaced idx=%d title='%s' with '%s' (domain=%s, regression=%s)",
+                                          _i90_target_idx,
+                                          str(getattr(_selected[_i90_target_idx], "title", ""))[:60],
+                                          str(getattr(_i97_dc, "title", ""))[:60],
+                                          _f6_domain_key(_i97_dc),
+                                          [k for k in _i97_dreg if k not in {"min_domains", "max_vendor", "max_domain"}])
+                                _i91_aws_swap_log.append({"pass": "deep_nuclear", "swapped_out_title": str(getattr(_selected[_i90_target_idx], "title", ""))[:120], "swapped_in_title": str(getattr(_i97_dc, "title", ""))[:120], "swapped_out_domain": _f6_domain_key(_selected[_i90_target_idx]), "swapped_in_domain": _f6_domain_key(_i97_dc)})
+                                _selected[_i90_target_idx] = _i97_dc
+                                _i88_aws_devdoc_swaps += 1
+                                _i97_deep_swapped = True
+                                break
+                        if _i97_deep_swapped:
+                            continue  # try next aws_devdoc item
                         break
             # iter90 pass 4: coordinated two-item swap for target_player deadlock
             # When AWS devdoc item is sole Amazon tp, do simultaneous two-item swap:
