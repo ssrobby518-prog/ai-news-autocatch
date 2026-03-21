@@ -8167,7 +8167,9 @@ def _f600_run_fast_path(
     _oa_state_dir.mkdir(parents=True, exist_ok=True)
     _oa_prev_file = _oa_state_dir / "daily_last_ids.json"
     _oa_entrypoint = os.environ.get("PIPELINE_ENTRYPOINT", "direct")
-    _oa_overlap_policy = "allow_duplicates" if _oa_entrypoint == "desktop_button" else "daily_unique_only"
+    # iter96: only scheduled_task participates in daily dup system (iter76 spec)
+    # direct/desktop_button entrypoints must NOT read/write daily_last_ids.json
+    _oa_overlap_policy = "daily_unique_only" if _oa_entrypoint == "scheduled_task" else "allow_duplicates"
     _oa_dup_gate_enabled = (_oa_overlap_policy == "daily_unique_only")
     _oa_prev_ids: set = set()
     if _is_daily and _oa_dup_gate_enabled and _oa_prev_file.exists():
@@ -10264,8 +10266,10 @@ def _f600_run_fast_path(
                             _co_f_skip_reason = "tc_cap"
                         if _co_repl2_gr and not _co_old_gr and _co_cur_gr >= 3:
                             _co_f_skip_reason = "gr_cap"
-                        # iter96: combined TC+GR cap — prevent flooding with GR even if individual cap OK
-                        if (_co_repl2_tc or _co_repl2_gr) and _co_cur_tcgr >= 5:
+                        # iter96: combined TC+GR cap — prevent NET INCREASE when already at cap 5
+                        # Allow net-zero swaps (GR→GR or TC→TC) since they don't increase tcgr
+                        _co_net_tcgr_delta = (int(_co_repl2_tc) - int(_co_old_tc)) + (int(_co_repl2_gr) - int(_co_old_gr))
+                        if (_co_repl2_tc or _co_repl2_gr) and _co_cur_tcgr + _co_net_tcgr_delta > 5:
                             _co_f_skip_reason = "tcgr_cap"
                         # iter93: protect china_ai_gov — if losing last china_ai_gov item, replacement must also be china_ai_gov
                         _co_old_cag = _is_china_ai_gov(_selected[_co_bi])
