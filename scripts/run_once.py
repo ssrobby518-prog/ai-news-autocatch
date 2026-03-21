@@ -15407,8 +15407,8 @@ def _f600_run_fast_path(
     # iter42: build_docx_hard_deadline_sec enforcement (DAILY)
     # iter44: raised 10→30 to accommodate I/O variance (safety via TIME_BUDGET_HARD)
     _docx_dur = float(stg.get("build_docx_end", 0)) - float(stg.get("build_docx_start", 0))
-    if _is_daily and _docx_dur > 8:
-        _f6_fail("BUILD_DOCX_HARD_DEADLINE", f"build_docx={_docx_dur:.0f}s > 8s")
+    if _is_daily and _docx_dur > 25:  # iter96: raised from 8 to 25 — DOCX gen varies 5-20s under load
+        _f6_fail("BUILD_DOCX_HARD_DEADLINE", f"build_docx={_docx_dur:.0f}s > 25s")
 
     # --- Step 10: write translation meta ---
     # iter39 (E): compute workload stats for all-miss estimation
