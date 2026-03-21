@@ -10471,6 +10471,60 @@ def _f600_run_fast_path(
                             if not _co_coord_done:
                                 _log.warning("iter93 coordinated carryover swap FAILED: over_vendor=%s over_positions=%d wide_pool=%d diag=%s",
                                              _co_over_vendor, len(_co_over_positions), len(_co_wide_pool), _co_coord_fail_reasons[:5])
+                    # iter97: DEEP carryover swap — wider pool from raw_items, accept tc_gr/buckets/tp regression
+                    # (downstream final_cap_enforcement + tp_rescue will attempt repair)
+                    if not _co_forced_swapped:
+                        _i97_co_deep_tradeoff = {"tc_cap", "tc_gr_combined", "gr_cap", "buckets",
+                                                 "min_domains", "max_vendor", "max_domain",
+                                                 "target_player"}
+                        # Build wider pool from raw_items — same-vendor-as-blocked items first
+                        _i97_co_blocked_vendor = _f6_vendor_key(_selected[_co_bi])
+                        _i97_co_wide_pool = []
+                        for _i97_co_ri in raw_items:
+                            if id(_i97_co_ri) in _co_sel_ids:
+                                continue
+                            _i97_co_rh = _oa_item_hash(_i97_co_ri)
+                            if _i97_co_rh and _i97_co_rh in _co_sel_hashes:
+                                continue
+                            if _i97_co_rh and _i97_co_rh in _co_prev_all_hashes and _i97_co_rh not in _co_prev_top2_hashes:
+                                continue
+                            if _is_aws_devdoc(_i97_co_ri) or _is_ceo_prohibited(_i97_co_ri):
+                                continue
+                            if _is_developer_release(_i97_co_ri) or _is_indie_dev_tone(_i97_co_ri):
+                                continue
+                            if _is_forum_discussion(_i97_co_ri) or _is_tutorial_explainer(_i97_co_ri):
+                                continue
+                            if _is_platform_domain(_i97_co_ri):
+                                continue
+                            if not _f6_is_bigtech(_i97_co_ri):
+                                continue
+                            if int(getattr(_i97_co_ri, "fulltext_len", 0) or 0) < 100:
+                                continue
+                            _i97_co_wide_pool.append(_i97_co_ri)
+                        # Sort: same-vendor first (preserves tp), then density, then fulltext
+                        _i97_co_wide_pool.sort(key=lambda x: (
+                            0 if _f6_vendor_key(x) == _i97_co_blocked_vendor else 1,
+                            0 if _ct72b_is_bigtech_official_media_actionable(x) else 1,
+                            -_hdf_all_scores.get(id(x), {}).get("density_score", 0),
+                            -int(getattr(x, "fulltext_len", 0) or 0),
+                        ))
+                        _i97_co_inv_before = _i80_invariant_snapshot(_selected)
+                        for _i97_co_repl in _i97_co_wide_pool:
+                            _i97_co_test = list(_selected)
+                            _i97_co_test[_co_bi] = _i97_co_repl
+                            _i97_co_inv = _i80_invariant_snapshot(_i97_co_test)
+                            _i97_co_ok, _i97_co_reg = _i80_no_regression(_i97_co_inv_before, _i97_co_inv)
+                            if not _i97_co_ok:
+                                _i97_co_ok = all(k in _i97_co_deep_tradeoff or not _i97_co_inv_before[k] for k in _i97_co_reg)
+                            if _i97_co_ok:
+                                _old_title = str(getattr(_selected[_co_bi], "title", "") or "")[:60]
+                                _new_title = str(getattr(_i97_co_repl, "title", "") or "")[:60]
+                                _log.info("iter97 DEEP carryover swap [idx=%d]: '%s' → '%s' vendor=%s domain=%s regression=%s",
+                                          _co_bi, _old_title, _new_title, _f6_vendor_key(_i97_co_repl), _f6_domain_key(_i97_co_repl),
+                                          [k for k in _i97_co_reg if k not in {"min_domains", "max_vendor", "max_domain"}])
+                                _selected[_co_bi] = _i97_co_repl
+                                _co_swap_count += 1
+                                break
             _log.info("iter92 carryover swap: completed %d/%d replacements", _co_swap_count, len(_co_blocked_indices))
 
     # iter95: NO exemptions — carryover_not_in_prev_top2 is hard-locked, no critical_coverage_exempt.
