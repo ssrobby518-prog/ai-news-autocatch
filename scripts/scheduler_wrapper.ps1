@@ -15,6 +15,8 @@ $env:PIPELINE_SOFT_TARGET_SEC = "175"   # iter86b: fixed daily budget (soft=175,
 $env:PIPELINE_TIME_BUDGET_SEC = "230"   # iter86b: fixed daily budget — no drift allowed
 $env:BIGTECH_GATES_ENFORCE = "1"
 $env:PIPELINE_ENTRYPOINT = "scheduled_task"
+# iter98: ensure llama-server auto-start uses ctx=4096 (8192 causes partial GPU offload on RTX 4060)
+if (-not $env:LLAMA_CTX_SIZE) { $env:LLAMA_CTX_SIZE = "4096" }
 
 $logPath = Join-Path $repoRoot "outputs\scheduler.log"
 $logDir  = Join-Path $repoRoot "outputs"
@@ -74,6 +76,18 @@ if (Test-Path $cmFp) {
         $fpLines += "research_tutorial_total = $($cmD.research_tutorial_total)"
         $fpLines += "google_research_total = $($cmD.google_research_total)"
         $fpLines += "strategic_buckets_distinct = $($cmD.selected_strategic_buckets_distinct)"
+        $fpLines += "same_story_multi_source_total = $(if ($cmD.PSObject.Properties['same_story_multi_source_total']) { $cmD.same_story_multi_source_total } else { 'N/A' })"
+        $fpLines += "same_story_multi_source_pass = $(if ($cmD.PSObject.Properties['same_story_multi_source_pass']) { $cmD.same_story_multi_source_pass } else { 'N/A' })"
+        $fpLines += "event_internal_redundancy_total = $(if ($cmD.PSObject.Properties['event_internal_redundancy_total']) { $cmD.event_internal_redundancy_total } else { 'N/A' })"
+        $fpLines += "event_internal_redundancy_pass = $(if ($cmD.PSObject.Properties['event_internal_redundancy_pass']) { $cmD.event_internal_redundancy_pass } else { 'N/A' })"
+        # iter99: social community fingerprint
+        $fpLines += "social_english_count = $(if ($cmD.PSObject.Properties['social_english_count']) { $cmD.social_english_count } else { 'N/A' })"
+        $fpLines += "social_chinese_count = $(if ($cmD.PSObject.Properties['social_chinese_count']) { $cmD.social_chinese_count } else { 'N/A' })"
+        $fpLines += "social_total = $(if ($cmD.PSObject.Properties['social_total']) { $cmD.social_total } else { 'N/A' })"
+        $fpLines += "social_platforms = $(if ($cmD.PSObject.Properties['social_platforms']) { ($cmD.social_platforms -join ',') } else { 'N/A' })"
+        $fpLines += "social_low_info_total = $(if ($cmD.PSObject.Properties['social_low_info_total']) { $cmD.social_low_info_total } else { 'N/A' })"
+        $fpLines += "social_video_desc_total = $(if ($cmD.PSObject.Properties['social_video_description_only_total']) { $cmD.social_video_description_only_total } else { 'N/A' })"
+        $fpLines += "social_kol_promo_total = $(if ($cmD.PSObject.Properties['social_kol_promo_total']) { $cmD.social_kol_promo_total } else { 'N/A' })"
     } catch {}
 }
 if (Test-Path $sdFp) {

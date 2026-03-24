@@ -29,6 +29,8 @@ $env:PIPELINE_TIME_BUDGET_SEC = "230"   # iter86b: fixed daily budget — no dri
 $env:BIGTECH_GATES_ENFORCE = "1"
 # iter72c: always force entrypoint (was conditional; child powershell needs explicit env)
 $env:PIPELINE_ENTRYPOINT = "desktop_button"
+# iter98: ensure llama-server auto-start uses ctx=4096 (8192 causes partial GPU offload on RTX 4060)
+if (-not $env:LLAMA_CTX_SIZE) { $env:LLAMA_CTX_SIZE = "4096" }
 
 # --- Log setup ---
 $logDir = Join-Path $repoRoot "outputs"
@@ -174,6 +176,14 @@ if (Test-Path $cmPath) {
         Write-Log "research_tutorial_total  = $(if ($cmMeta.PSObject.Properties['research_tutorial_total']) { $cmMeta.research_tutorial_total } else { 'N/A' })"
         Write-Log "google_research_total    = $(if ($cmMeta.PSObject.Properties['google_research_total']) { $cmMeta.google_research_total } else { 'N/A' })"
         Write-Log "strategic_buckets_distinct = $(if ($cmMeta.PSObject.Properties['selected_strategic_buckets_distinct']) { $cmMeta.selected_strategic_buckets_distinct } else { 'N/A' })"
+        # iter99: social community fingerprint
+        Write-Log "social_english_count    = $(if ($cmMeta.PSObject.Properties['social_english_count']) { $cmMeta.social_english_count } else { 'N/A' })"
+        Write-Log "social_chinese_count    = $(if ($cmMeta.PSObject.Properties['social_chinese_count']) { $cmMeta.social_chinese_count } else { 'N/A' })"
+        Write-Log "social_total            = $(if ($cmMeta.PSObject.Properties['social_total']) { $cmMeta.social_total } else { 'N/A' })"
+        Write-Log "social_platforms        = $(if ($cmMeta.PSObject.Properties['social_platforms']) { ($cmMeta.social_platforms -join ',') } else { 'N/A' })"
+        Write-Log "social_low_info_total   = $(if ($cmMeta.PSObject.Properties['social_low_info_total']) { $cmMeta.social_low_info_total } else { 'N/A' })"
+        Write-Log "social_video_desc_total = $(if ($cmMeta.PSObject.Properties['social_video_description_only_total']) { $cmMeta.social_video_description_only_total } else { 'N/A' })"
+        Write-Log "social_kol_promo_total  = $(if ($cmMeta.PSObject.Properties['social_kol_promo_total']) { $cmMeta.social_kol_promo_total } else { 'N/A' })"
     } catch {}
 }
 if (Test-Path $sdmPath) {

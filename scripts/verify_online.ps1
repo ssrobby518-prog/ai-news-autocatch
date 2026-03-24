@@ -765,7 +765,18 @@ if ($false -and $SkipPipeline) {
     }
 
     # C) If not ready and LLAMA_AUTOSTART=1, launch llama_server.ps1
+    #    iter98: ensure junction C:\llama_node exists (llama-server.exe needs ANSI-safe path)
     if (-not $_qwenReady -and $_llAutoStart -eq 1) {
+        $_qwenNodeRoot = "C:\Projects\ai捕捉資訊\qwen_inference_node_4060"
+        $_junctionPath = "C:\llama_node"
+        if ((Test-Path $_qwenNodeRoot) -and -not (Test-Path $_junctionPath)) {
+            try {
+                cmd /c mklink /J "$_junctionPath" "$_qwenNodeRoot" 2>&1 | Out-Null
+                _Bs-Log ("junction created: {0} -> {1}" -f $_junctionPath, $_qwenNodeRoot)
+            } catch {
+                _Bs-Log ("junction creation failed: {0}" -f $_)
+            }
+        }
         $_lsScript = Join-Path $PSScriptRoot "llama_server.ps1"
         if (Test-Path $_lsScript) {
             _Bs-Log ("LLAMA_AUTOSTART=1: launching {0}" -f $_lsScript)
@@ -1093,7 +1104,7 @@ if (-not $_gpuTokPass) {
         -f $_gpuTokPerSec, $_gpuTokThreshold)
     Write-Output ("  => 失敗: {0}" -f $_gpuHardReason)
     # iter56/57: append VRAM busy context to next steps
-    $_gpuNextSteps = "請用 GPU 參數啟動 llama-server（-ngl 999 或 --n-gpu-layers 999）並確認 tok_per_sec_est >= 15。参考: scripts\llama_server.ps1 已内建 --n-gpu-layers -1 啟動邏輯，CUDA build 路徑為 C:\llama_node\llama-b8123-bin-win-cuda-12.4-x64\llama-server.exe。"
+    $_gpuNextSteps = "請用 GPU 參數啟動 llama-server（-ngl 999 或 --n-gpu-layers 999）並確認 tok_per_sec_est >= 15。参考: scripts\llama_server.ps1 已内建 --n-gpu-layers -1 啟動邏輯，節點根目錄為 C:\Projects\ai捕捉資訊\qwen_inference_node_4060（透過 junction 啟動）。"
     if ($script:_stressModeTriggered) {
         $_gpuNextSteps += "`nVRAM busy detected (trigger_level={0}) -> STRESS_600_MODE activated, but tok/s still below threshold. Close GPU-heavy apps (game) or reduce settings." -f $script:_stressTriggerLevel
     }
@@ -5695,6 +5706,133 @@ if ($_fast300Daily) {
 Write-Output ""
 
 # ---------------------------------------------------------------------------
+# iter98: SAME_STORY_MULTI_SOURCE_HARD — same_story_multi_source_total must be 0
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_ssMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "SAME_STORY_MULTI_SOURCE_HARD:"
+    if (Test-Path $_ssMetaPath) {
+        try {
+            $_ssMeta = Get-Content $_ssMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_ssTotal = if ($_ssMeta.PSObject.Properties['same_story_multi_source_total']) { [int]$_ssMeta.same_story_multi_source_total } else { 0 }
+            $_ssPass = if ($_ssMeta.PSObject.Properties['same_story_multi_source_pass']) { [bool]$_ssMeta.same_story_multi_source_pass } else { $true }
+            Write-Output ("  same_story_multi_source_total : {0}" -f $_ssTotal)
+            Write-Output ("  same_story_multi_source_pass  : {0}" -f $_ssPass)
+            if (-not $_ssPass) {
+                $_ssFail = ("SAME_STORY_MULTI_SOURCE_HARD_FAIL: same_story_multi_source_total={0} > 0" -f $_ssTotal)
+                Write-Output ("  => FAIL: {0}" -f $_ssFail)
+                Invoke-VerifyOnlineFailFast -Gate "SAME_STORY_MULTI_SOURCE_HARD" -Reason $_ssFail
+            }
+            Write-Output "  => SAME_STORY_MULTI_SOURCE_HARD: PASS"
+        } catch {
+            Write-Output ("  SAME_STORY_MULTI_SOURCE_HARD: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  SAME_STORY_MULTI_SOURCE_HARD: SKIP (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter98: EVENT_INTERNAL_REDUNDANCY_HARD — event_internal_redundancy_pass must be True
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_eirMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "EVENT_INTERNAL_REDUNDANCY_HARD:"
+    if (Test-Path $_eirMetaPath) {
+        try {
+            $_eirMeta = Get-Content $_eirMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_eirTotal = if ($_eirMeta.PSObject.Properties['event_internal_redundancy_total']) { [int]$_eirMeta.event_internal_redundancy_total } else { 0 }
+            $_eirPass = if ($_eirMeta.PSObject.Properties['event_internal_redundancy_pass']) { [bool]$_eirMeta.event_internal_redundancy_pass } else { $true }
+            Write-Output ("  event_internal_redundancy_total : {0}" -f $_eirTotal)
+            Write-Output ("  event_internal_redundancy_pass  : {0}" -f $_eirPass)
+            if (-not $_eirPass) {
+                $_eirFail = ("EVENT_INTERNAL_REDUNDANCY_HARD_FAIL: event_internal_redundancy_total={0} > 0" -f $_eirTotal)
+                Write-Output ("  => FAIL: {0}" -f $_eirFail)
+                Invoke-VerifyOnlineFailFast -Gate "EVENT_INTERNAL_REDUNDANCY_HARD" -Reason $_eirFail
+            }
+            Write-Output "  => EVENT_INTERNAL_REDUNDANCY_HARD: PASS"
+        } catch {
+            Write-Output ("  EVENT_INTERNAL_REDUNDANCY_HARD: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  EVENT_INTERNAL_REDUNDANCY_HARD: SKIP (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
+# iter99: SOCIAL_COMMUNITY_HARD_DAILY — social coverage gates
+# ---------------------------------------------------------------------------
+if ($_fast300Daily) {
+    $_socMetaPath = Join-Path $repoRoot "outputs\content_mix.meta.json"
+    Write-Output "SOCIAL_COMMUNITY_HARD_DAILY:"
+    if (Test-Path $_socMetaPath) {
+        try {
+            $_socMeta = Get-Content $_socMetaPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $_socEnCount = if ($_socMeta.PSObject.Properties['social_english_count']) { [int]$_socMeta.social_english_count } else { 0 }
+            $_socZhCount = if ($_socMeta.PSObject.Properties['social_chinese_count']) { [int]$_socMeta.social_chinese_count } else { 0 }
+            $_socTotal = if ($_socMeta.PSObject.Properties['social_total']) { [int]$_socMeta.social_total } else { 0 }
+            $_socEnPass = if ($_socMeta.PSObject.Properties['social_english_min_pass']) { [bool]$_socMeta.social_english_min_pass } else { $false }
+            $_socZhPass = if ($_socMeta.PSObject.Properties['social_chinese_min_pass']) { [bool]$_socMeta.social_chinese_min_pass } else { $false }
+            $_socTotalPass = if ($_socMeta.PSObject.Properties['social_total_min_pass']) { [bool]$_socMeta.social_total_min_pass } else { $false }
+            $_socLowInfoPass = if ($_socMeta.PSObject.Properties['social_low_info_pass']) { [bool]$_socMeta.social_low_info_pass } else { $true }
+            $_socVideoDescPass = if ($_socMeta.PSObject.Properties['social_video_description_only_pass']) { [bool]$_socMeta.social_video_description_only_pass } else { $true }
+            $_socKolPromoPass = if ($_socMeta.PSObject.Properties['social_kol_promo_pass']) { [bool]$_socMeta.social_kol_promo_pass } else { $true }
+            $_socPlatEnPass = if ($_socMeta.PSObject.Properties['social_platform_en_coverage_pass']) { [bool]$_socMeta.social_platform_en_coverage_pass } else { $false }
+            $_socPlatZhPass = if ($_socMeta.PSObject.Properties['social_platform_zh_coverage_pass']) { [bool]$_socMeta.social_platform_zh_coverage_pass } else { $false }
+            $_socLowInfo = if ($_socMeta.PSObject.Properties['social_low_info_total']) { [int]$_socMeta.social_low_info_total } else { 0 }
+            $_socVideoDesc = if ($_socMeta.PSObject.Properties['social_video_description_only_total']) { [int]$_socMeta.social_video_description_only_total } else { 0 }
+            $_socKolPromo = if ($_socMeta.PSObject.Properties['social_kol_promo_total']) { [int]$_socMeta.social_kol_promo_total } else { 0 }
+            Write-Output ("  social_english_count    : {0} (min=3, pass={1})" -f $_socEnCount, $_socEnPass)
+            Write-Output ("  social_chinese_count    : {0} (min=1, pass={1})" -f $_socZhCount, $_socZhPass)
+            Write-Output ("  social_total            : {0} (min=4, pass={1})" -f $_socTotal, $_socTotalPass)
+            Write-Output ("  social_low_info_total   : {0} (max=0, pass={1})" -f $_socLowInfo, $_socLowInfoPass)
+            Write-Output ("  social_video_desc_total : {0} (max=0, pass={1})" -f $_socVideoDesc, $_socVideoDescPass)
+            Write-Output ("  social_kol_promo_total  : {0} (max=0, pass={1})" -f $_socKolPromo, $_socKolPromoPass)
+            Write-Output ("  social_platform_en_pass : {0} (any 2 of X/Threads/TikTok/IG)" -f $_socPlatEnPass)
+            Write-Output ("  social_platform_zh_pass : {0} (any 1 of douyin/xiaohongshu/bilibili)" -f $_socPlatZhPass)
+            if (-not $_socEnPass) {
+                $_socEnFail = ("SOCIAL_ENGLISH_MIN_HARD_DAILY_FAIL: social_english_count={0} < 3" -f $_socEnCount)
+                Write-Output ("  => FAIL: {0}" -f $_socEnFail)
+                Invoke-VerifyOnlineFailFast -Gate "SOCIAL_ENGLISH_MIN_HARD_DAILY" -Reason $_socEnFail
+            }
+            if (-not $_socZhPass) {
+                $_socZhFail = ("SOCIAL_CHINESE_MIN_HARD_DAILY_FAIL: social_chinese_count={0} < 1" -f $_socZhCount)
+                Write-Output ("  => FAIL: {0}" -f $_socZhFail)
+                Invoke-VerifyOnlineFailFast -Gate "SOCIAL_CHINESE_MIN_HARD_DAILY" -Reason $_socZhFail
+            }
+            if (-not $_socTotalPass) {
+                $_socTotalFail = ("SOCIAL_TOTAL_MIN_HARD_DAILY_FAIL: social_total={0} < 4" -f $_socTotal)
+                Write-Output ("  => FAIL: {0}" -f $_socTotalFail)
+                Invoke-VerifyOnlineFailFast -Gate "SOCIAL_TOTAL_MIN_HARD_DAILY" -Reason $_socTotalFail
+            }
+            if (-not $_socLowInfoPass) {
+                $_socLiFail = ("SOCIAL_LOW_INFO_HARD_DAILY_FAIL: social_low_info_total={0} > 0" -f $_socLowInfo)
+                Write-Output ("  => FAIL: {0}" -f $_socLiFail)
+                Invoke-VerifyOnlineFailFast -Gate "SOCIAL_LOW_INFO_HARD_DAILY" -Reason $_socLiFail
+            }
+            if (-not $_socVideoDescPass) {
+                $_socVdFail = ("SOCIAL_VIDEO_DESCRIPTION_ONLY_HARD_DAILY_FAIL: video_desc_total={0} > 0" -f $_socVideoDesc)
+                Write-Output ("  => FAIL: {0}" -f $_socVdFail)
+                Invoke-VerifyOnlineFailFast -Gate "SOCIAL_VIDEO_DESCRIPTION_ONLY_HARD_DAILY" -Reason $_socVdFail
+            }
+            if (-not $_socKolPromoPass) {
+                $_socKpFail = ("SOCIAL_KOL_PROMO_HARD_DAILY_FAIL: kol_promo_total={0} > 0" -f $_socKolPromo)
+                Write-Output ("  => FAIL: {0}" -f $_socKpFail)
+                Invoke-VerifyOnlineFailFast -Gate "SOCIAL_KOL_PROMO_HARD_DAILY" -Reason $_socKpFail
+            }
+            Write-Output "  => SOCIAL_COMMUNITY_HARD_DAILY: PASS"
+        } catch {
+            Write-Output ("  SOCIAL_COMMUNITY_HARD_DAILY: WARN (parse error: {0})" -f $_)
+        }
+    } else {
+        Write-Output "  SOCIAL_COMMUNITY_HARD_DAILY: SKIP (content_mix.meta.json not found)"
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # iter93: SCHEDULED_CARRYOVER_MAX_HARD_DAILY — carryover_total <= 2
 # ---------------------------------------------------------------------------
 if ($_fast300Daily) {
@@ -6404,6 +6542,10 @@ if (Test-Path $_fpCmPath) {
         Write-Output ("selected_strategic_buckets_distinct = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_strategic_buckets_distinct']) { $_fpCm.selected_strategic_buckets_distinct } else { "N/A" }))
         Write-Output ("techcrunch_google_research_total    = {0}" -f $(if ($_fpCm.PSObject.Properties['techcrunch_google_research_total']) { $_fpCm.techcrunch_google_research_total } else { "N/A" }))
         Write-Output ("selected_role_axes_distinct          = {0}" -f $(if ($_fpCm.PSObject.Properties['selected_role_axes_distinct']) { $_fpCm.selected_role_axes_distinct } else { "N/A" }))
+        Write-Output ("same_story_multi_source_total        = {0}" -f $(if ($_fpCm.PSObject.Properties['same_story_multi_source_total']) { $_fpCm.same_story_multi_source_total } else { "N/A" }))
+        Write-Output ("same_story_multi_source_pass         = {0}" -f $(if ($_fpCm.PSObject.Properties['same_story_multi_source_pass']) { $_fpCm.same_story_multi_source_pass } else { "N/A" }))
+        Write-Output ("event_internal_redundancy_total      = {0}" -f $(if ($_fpCm.PSObject.Properties['event_internal_redundancy_total']) { $_fpCm.event_internal_redundancy_total } else { "N/A" }))
+        Write-Output ("event_internal_redundancy_pass       = {0}" -f $(if ($_fpCm.PSObject.Properties['event_internal_redundancy_pass']) { $_fpCm.event_internal_redundancy_pass } else { "N/A" }))
     } catch {}
 }
 if (Test-Path $_fpSdPath) {

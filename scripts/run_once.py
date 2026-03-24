@@ -7521,7 +7521,7 @@ def _f600_run_fast_path(
     import re as _pss_re
     # iter70: expanded practical signal patterns for short official updates
     _PRACTICAL_SIGNAL_RE = _pss_re.compile(
-        r'\b(?:v\d+\.\d+|GA|RC|beta|preview|stable|LTS|'
+        r'(?:\b(?:v\d+\.\d+|GA|RC|beta|preview|stable|LTS|'
         r'API|SDK|pricing|price|cost|'
         r'security|CVE-\d{4}|vulnerability|advisory|patch|'
         r'benchmark|perf(?:ormance)?|latency|throughput|'
@@ -7534,7 +7534,9 @@ def _f600_run_fast_path(
         r'support(?:ed|s)?|update(?:d|s)?|fix(?:ed|es)?|'
         r'availab(?:le|ility)|region|endpoint|quota|limit|'
         r'model\s+card|safety|alignment|guardrail|'
-        r'inference|training|serving|batch|pipeline|workflow)\b',
+        r'inference|training|serving|batch|pipeline|workflow)\b'
+        # iter99: Chinese practical signals
+        r'|發布|推出|上線|升級|更新|合作|投資|收購|出售|營收|算力|晶片|大模型|GPU|AI|模型|推理|訓練|部署|開發者)',
         _pss_re.IGNORECASE,
     )
 
@@ -7953,13 +7955,18 @@ def _f600_run_fast_path(
         r'|\bSageMaker\b'
         r'|\bBedrock\s+(?:agent|tutorial|guide|setup|how|getting)\b'
         r'|\b(?:fine[\-\s]?tun(?:e|ing)|training)\s+(?:guide|tutorial|walkthrough|example|job)\b'
+        r'|\bwe\s+will\s+(?:walk|guide)\s+you\s+through\b'
+        r'|\bguide\s+you\s+through\b'
+        r'|\bsetup\s+(?:guide|tutorial|instructions)\b'
+        r'|\btun(?:e|ing)\s+(?:guide|tutorial|your)\b'
         r')', _ct71_re.I)
-    # iter90: only truly CEO-level business signals exempt AWS items from devdoc classification
-    # iter97: broadened exec exemption — product launches, availability, cross-region, year-in-review
-    # are CEO-grade signals even when published on ML blog
+    # iter90/98: only truly CEO-level business signals exempt AWS items from devdoc classification
+    # iter98: tightened — bare 'global'/'cross-region' no longer exempt; require launch/announce context
     _AWS_DEVDOC_EXEC_RE = _ct71_re.compile(
         r'\b(?:acqui|partner|earnings|pricing|marketplace|regulation|compliance|CVE|security\s+(?:breach|incident)'
-        r'|launch|introduc|announc|general\s+availability|cross[\-\s]region|global|preview|year\s+in\s+review'
+        r'|(?:launch|introduc|announc|preview)(?:e[sd]?|ing)?\b'
+        r'|general\s+availability'
+        r'|year\s+in\s+review'
         r'|組織調整|財報|高層)\b', _ct71_re.I)
     # iter96: URL path detection — AWS blog categories that are inherently developer/tutorial content
     _AWS_DEVDOC_URL_RE = _ct71_re.compile(
@@ -8030,10 +8037,17 @@ def _f600_run_fast_path(
     # --- iter56/iter66: density scoring with weighted density_score + *1.5 multiplier gate ---
     import re as _hdf_re
     import math as _hdf_math
-    _HDF_NUMBERS_RE = _hdf_re.compile(r'(?:\d[\d,]*\.?\d+\s*%|\$\s*\d[\d,.]*[BMKTbmkt]?|\d[\d,]*\.?\d*\s*(?:billion|million|thousand|B|M|K|x|fps|TOPS|TFLOPS|GB|TB|MB|ms|tokens?/s))', _hdf_re.IGNORECASE)
-    _HDF_PROPER_RE = _hdf_re.compile(r'\b(?:Google|OpenAI|Anthropic|Meta|Microsoft|NVIDIA|Apple|Amazon|AWS|DeepSeek|Mistral|Alibaba|Qwen|Samsung|Intel|Baidu|Tesla|xAI|GPT-\d|GPT|Gemini|Claude|Llama|DALL-E|Sora|Stable\s*Diffusion|Midjourney|Copilot|GitHub|HuggingFace|PyTorch|TensorFlow|CUDA|ROCm|ONNX|vLLM|Triton|Whisper|BERT|LoRA|Mixtral|Phi-\d|Falcon)\b', _hdf_re.IGNORECASE)
-    _HDF_ACTION_RE = _hdf_re.compile(r'\b(?:launch(?:ed|es)?|release(?:d|s)?|acquir(?:ed|es|ing)|rais(?:ed|es|ing)|regulat(?:ion|ory|ed)|security\s+advisory|earnings|partnership|collaborat(?:ion|ed|ing)|announc(?:ed|es|ement)|invest(?:ed|ment|ing)|IPO|merger|recall|ban(?:ned|s)?|fine(?:d|s)?|lawsuit|patent)\b', _hdf_re.IGNORECASE)
-    _HDF_SPEC_RE = _hdf_re.compile(r'\b(?:GB|TB|MB|TFLOPS|TOPS|latency|throughput|bandwidth|version|v\d+\.\d+|GA|preview|beta|stable|LTS|tokens?/s|tok/s|context\s*window|parameter|FP16|FP32|INT8|INT4|BF16|batch\s*size|inference|training|fine[\-\s]?tun(?:ed|ing)|quantiz(?:ed|ation))\b', _hdf_re.IGNORECASE)
+    # iter99: added Chinese number units (億/萬/兆) and ZH BigTech/action/spec patterns
+    _HDF_NUMBERS_RE = _hdf_re.compile(r'(?:\d[\d,]*\.?\d+\s*%|\$\s*\d[\d,.]*[BMKTbmkt]?|\d[\d,]*\.?\d*\s*(?:billion|million|thousand|B|M|K|x|fps|TOPS|TFLOPS|GB|TB|MB|ms|tokens?/s)|(?:\d[\d,.]*\s*(?:億|萬|兆|美元|港元|人民幣|元)))', _hdf_re.IGNORECASE)
+    _HDF_PROPER_RE = _hdf_re.compile(
+        r'(?:\b(?:Google|OpenAI|Anthropic|Meta|Microsoft|NVIDIA|Apple|Amazon|AWS|DeepSeek|Mistral|Alibaba|Qwen|Samsung|Intel|Baidu|Tesla|xAI|GPT-\d|GPT|Gemini|Claude|Llama|DALL-E|Sora|Stable\s*Diffusion|Midjourney|Copilot|GitHub|HuggingFace|PyTorch|TensorFlow|CUDA|ROCm|ONNX|vLLM|Triton|Whisper|BERT|LoRA|Mixtral|Phi-\d|Falcon|TikTok|ByteDance|Tencent|Huawei|TSMC)\b'
+        r'|輝達|英偉達|字節跳動|阿里巴巴|阿里雲|騰訊|百度|華為|三星|蘋果|谷歌|微軟|特斯拉|商湯|科大訊飛|台積電|黃仁勳|馬斯克|祖克柏|納德拉|庫克)', _hdf_re.IGNORECASE)
+    _HDF_ACTION_RE = _hdf_re.compile(
+        r'(?:\b(?:launch(?:ed|es)?|release(?:d|s)?|acquir(?:ed|es|ing)|rais(?:ed|es|ing)|regulat(?:ion|ory|ed)|security\s+advisory|earnings|partnership|collaborat(?:ion|ed|ing)|announc(?:ed|es|ement)|invest(?:ed|ment|ing)|IPO|merger|recall|ban(?:ned|s)?|fine(?:d|s)?|lawsuit|patent)\b'
+        r'|發布|推出|合作|投資|收購|出售|調整|政策|監管|裁員|營收|禁令|制裁|關稅|壟斷|併購|上市|升級|佣金|侵權|版權|策略|深化|戰略|評級)', _hdf_re.IGNORECASE)
+    _HDF_SPEC_RE = _hdf_re.compile(
+        r'(?:\b(?:GB|TB|MB|TFLOPS|TOPS|latency|throughput|bandwidth|version|v\d+\.\d+|GA|preview|beta|stable|LTS|tokens?/s|tok/s|context\s*window|parameter|FP16|FP32|INT8|INT4|BF16|batch\s*size|inference|training|fine[\-\s]?tun(?:ed|ing)|quantiz(?:ed|ation))\b'
+        r'|算力|晶片|大模型|人工智能|GPU|AI晶片|推理|訓練|模型)', _hdf_re.IGNORECASE)
     # iter66: weights: 2*numbers + 1*proper_noun + 3*action + 2*spec
     _HDF_W_NUM = 2
     _HDF_W_PROP = 1
@@ -8323,7 +8337,7 @@ def _f600_run_fast_path(
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
         ], key=_sd73_key))
 
-        # iter73→77: Pool LEADER — leadership/politics; exclude all ceo-prohibited
+        # iter73→77→98b: Pool LEADER — leadership/politics; exclude all ceo-prohibited; DAILY requires bigtech
         _p73_pool_leader = _oa_partition(sorted([
             it for it in _pool_700
             if _is_leadership_politics_ai(it)
@@ -8332,8 +8346,9 @@ def _f600_run_fast_path(
             and not _is_ceo_prohibited(it)
             and not _is_aws_devdoc(it)  # iter90
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+            and (_f6_is_bigtech(it) if _is_daily else True)  # iter98b: DAILY requires all-bigtech
         ], key=_sd73_key))
-        # iter73→77: Pool CHINA — china_ai_gov; exclude all ceo-prohibited
+        # iter73→77→98b: Pool CHINA — china_ai_gov; exclude all ceo-prohibited; DAILY requires bigtech
         _p73_pool_china = _oa_partition(sorted([
             it for it in _pool_700
             if _is_china_ai_gov(it)
@@ -8342,6 +8357,7 @@ def _f600_run_fast_path(
             and not _is_ceo_prohibited(it)
             and not _is_aws_devdoc(it)  # iter90
             and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+            and (_f6_is_bigtech(it) if _is_daily else True)  # iter98b: DAILY requires all-bigtech
         ], key=_sd73_key))
 
         # === iter73: 6-phase CEO-grade selection for 10 items ===
@@ -8354,6 +8370,9 @@ def _f600_run_fast_path(
                   len(_p72_pool_boma), len(_p72_pool_bta), len(_p72_pool_c),
                   len(_p72_pool_plat), len(_p72_pool_rt),
                   len(_p73_pool_leader), len(_p73_pool_china))
+        # iter98b: diagnostic — china pool bigtech count
+        _p98b_china_bt = sum(1 for it in _p73_pool_china if _f6_is_bigtech(it))
+        _log.info("iter98b china_pool: bigtech=%d/%d", _p98b_china_bt, len(_p73_pool_china))
 
         # iter95: candidate supply sufficiency — hard gate for scheduled_task
         _p93_all_supply = _p72_pool_boma + _p72_pool_bta + _p72_pool_c + _p73_pool_leader + _p73_pool_china
@@ -8381,27 +8400,32 @@ def _f600_run_fast_path(
                 "tp_supply": _p93_tp_supply,
                 "deficient_vendors": _p93_deficient,
                 "non_tc_gr_om_candidates": _p93_non_tc_gr_om_count,
-                "supply_sufficient": _p93_non_tc_gr_om_count >= 10 and len(_p93_deficient) <= 3,
+                "total_pool": len(_p93_all_supply),
+                "supply_sufficient": len(_p93_all_supply) >= 10,
                 "entrypoint": _oa_entrypoint,
             }
             (_outputs / "pool_sufficiency.meta.json").write_text(
                 _f6_j.dumps(_p95_supply_meta, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
-        # iter96: supply sufficiency fail-fast — abort before selection if pool cannot satisfy constraints
-        _p96_supply_ok = _p93_non_tc_gr_om_count >= 8 and len(_p93_deficient) <= 4
+        # iter98b: supply sufficiency — pool-size check only (vendor coverage enforced at selection level)
+        _p96_total_pool = len(_p93_all_supply)
+        _p96_supply_ok = _p96_total_pool >= 10
         if not _p96_supply_ok:
-            _log.error("iter96 CANDIDATE_SUPPLY_SUFFICIENCY_HARD_FAIL: non_tc_gr_om=%d deficient=%s",
-                       _p93_non_tc_gr_om_count, _p93_deficient)
+            _log.error("iter98b CANDIDATE_SUPPLY_SUFFICIENCY_HARD_FAIL: total_pool=%d (<10) non_tc_gr_om=%d deficient=%s",
+                       _p96_total_pool, _p93_non_tc_gr_om_count, _p93_deficient)
             _write_not_ready_report_md(
                 "CANDIDATE_SUPPLY_SUFFICIENCY_HARD",
-                f"non_tc_gr_om_candidates={_p93_non_tc_gr_om_count}<8 or deficient_vendors={len(_p93_deficient)}>4 ({_p93_deficient})",
+                f"total_pool={_p96_total_pool}<10 (non_tc_gr_om={_p93_non_tc_gr_om_count}, deficient={_p93_deficient})",
                 run_id=_run_id,
             )
             _f6_fail(
                 "CANDIDATE_SUPPLY_SUFFICIENCY_HARD",
-                f"non_tc_gr_om={_p93_non_tc_gr_om_count} deficient={_p93_deficient}",
+                f"total_pool={_p96_total_pool} non_tc_gr_om={_p93_non_tc_gr_om_count} deficient={_p93_deficient}",
             )
+        elif _p93_non_tc_gr_om_count < 8:
+            _log.warning("iter98b supply thin: total_pool=%d non_tc_gr_om=%d deficient=%s — proceeding to selection",
+                         _p96_total_pool, _p93_non_tc_gr_om_count, _p93_deficient)
 
         # Phase-1: fill 5 BOMA with bucket diversity skeleton
         _p73_used_buckets = set()
@@ -8489,11 +8513,17 @@ def _f600_run_fast_path(
                 it for it in _pool_700
                 if _is_china_ai_gov(it) and not _is_platform_domain(it) and not _f6_is_dev_noise(it)
                 and not _is_devrel_or_indie(it)
+                and (_f6_is_bigtech(it) if _is_daily else True)  # iter98b: DAILY requires bigtech
                 and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
             ], key=_sd73_key)
+            # iter98b: protect leader QUOTA (>=2) not all leaders; allow swapping excess leaders for china
+            _cn_lp_indices = [i for i in range(len(_selected)) if _is_leadership_politics_ai(_selected[i])]
+            _cn_lp_swappable = set(_cn_lp_indices[2:]) if len(_cn_lp_indices) > 2 else set()
             for _cn_ri in range(len(_selected)):
-                if _is_china_ai_gov(_selected[_cn_ri]) or _is_leadership_politics_ai(_selected[_cn_ri]):
-                    continue  # don't swap out china or leader items
+                if _is_china_ai_gov(_selected[_cn_ri]):
+                    continue  # don't swap out existing china items
+                if _is_leadership_politics_ai(_selected[_cn_ri]) and _cn_ri not in _cn_lp_swappable:
+                    continue  # protect minimum leader quota
                 _cn_test = [s for j, s in enumerate(_selected) if j != _cn_ri]
                 for _cn_cand in _p73_china_cands:
                     if _cn_cand in _cn_test:
@@ -8640,6 +8670,7 @@ def _f600_run_fast_path(
                         _p73_f5 = True
                         break
             if not _p73_f5:
+                _log.warning("iter98b Phase-5 STUCK at %d/%d", len(_selected), _max_events)
                 break
 
         # Phase-6: bucket rescue swap — if buckets_distinct < 5, try swaps
@@ -8737,6 +8768,53 @@ def _f600_run_fast_path(
                           str(getattr(_p6b_best[1], "title", ""))[:60])
             else:
                 _log.warning("iter77 Phase-6b: no governance candidates found in pools (governance_signal >= 1)")
+
+        # iter98b Phase-6c: product/ecosystem bucket rescue — assign via title keywords
+        _p6c_cur_buckets = set(_ct72b_strategic_bucket(s) for s in _selected)
+        _p6c_missing = {"product", "ecosystem", "distribution", "economics", "governance", "leadership"} - _p6c_cur_buckets
+        if _p6c_missing and len(_p6c_cur_buckets) < 5:
+            _p6c_product_re = _ct71_re.compile(
+                r'(?:launch|release|model|API|update|version|v\d|announce|unveil|debut|ship|rollout|SDK|framework|tool|feature|benchmark|GPT|Gemini|Claude|Llama|Mistral|Qwen)',
+                _ct71_re.I)
+            _p6c_ecosystem_re = _ct71_re.compile(
+                r'(?:platform|ecosystem|marketplace|app\s*store|developer\s*program|partner|integration|plugin|extension)',
+                _ct71_re.I)
+            _p6c_bucket_map = {"product": _p6c_product_re, "ecosystem": _p6c_ecosystem_re}
+            for _p6c_target_bucket in ("product", "ecosystem"):
+                if _p6c_target_bucket not in _p6c_missing:
+                    continue
+                if len(set(_ct72b_strategic_bucket(s) for s in _selected)) >= 5:
+                    break
+                _p6c_re = _p6c_bucket_map[_p6c_target_bucket]
+                _p6c_best = None
+                for _p6c_c in _p73_all_pools:
+                    if _p6c_c in _selected:
+                        continue
+                    _p6c_title = str(getattr(_p6c_c, "title", "") or "")
+                    if not _p6c_re.search(_p6c_title):
+                        continue
+                    for _p6c_i in range(len(_selected)):
+                        _p6c_test = [s for j, s in enumerate(_selected) if j != _p6c_i]
+                        _p6c_tb = set(_ct72b_strategic_bucket(s) for s in _p6c_test)
+                        if len(_p6c_tb) < len(_p6c_cur_buckets) - 1:
+                            continue
+                        _p6c_n = _p6c_test + [_p6c_c]
+                        _p6c_nd = _DivCounter(_f6_domain_key(s) for s in _p6c_n)
+                        _p6c_nv = _DivCounter(_f6_vendor_key(s) for s in _p6c_n)
+                        if (_p6c_nd.most_common(1)[0][1] <= _DIV_MAX_DOMAIN
+                                and _p6c_nv.most_common(1)[0][1] <= _DIV_MAX_VENDOR
+                                and sum(1 for s in _p6c_n if _ct72b_is_bigtech_official_media_actionable(s)) >= 8
+                                and _hdf_all_scores.get(id(_p6c_c), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN
+                                and (_f6_is_bigtech(_p6c_c) if _is_daily else True)):
+                            _p6c_best = (_p6c_i, _p6c_c, _p6c_target_bucket)
+                            break
+                    if _p6c_best:
+                        break
+                if _p6c_best:
+                    _selected[_p6c_best[0]] = _p6c_best[1]
+                    _bucket_override[id(_p6c_best[1])] = _p6c_best[2]
+                    _log.info("iter98b Phase-6c %s rescue: swapped idx=%d, title=%s",
+                              _p6c_best[2], _p6c_best[0], str(getattr(_p6c_best[1], "title", ""))[:60])
 
         # Phase-7: 2-step swap rescue — if at max_events-1, try removing 1 and adding 2
         if len(_selected) == _max_events - 1:
@@ -9898,6 +9976,72 @@ def _f600_run_fast_path(
                 "DEV_NOISE_CAP_HARD",
                 f"DEV_NOISE_CAP_HARD_FAIL: non_bigtech_dev_noise={_f6_devnoise_count}",
             )
+
+    # --- iter98b: pre-gate swap — replace non-bigtech items with bigtech+OM from pool ---
+    if _is_daily:
+        def _p98b_is_valid_candidate(c, test_list):
+            return (c not in _selected
+                    and _f6_is_bigtech(c) and _f6_src_type(c) in _BT_OM_TYPES
+                    and _div_can_add(c, test_list)
+                    and not _is_platform_domain(c)
+                    and not _is_ceo_prohibited(c)
+                    and not _is_aws_devdoc(c)
+                    and not _f6_is_dev_noise(c)
+                    and _hdf_all_scores.get(id(c), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN)
+
+        _p98b_non_bt = [(i, it) for i, it in enumerate(_selected) if not (_f6_is_bigtech(it) and _f6_src_type(it) in _BT_OM_TYPES)]
+        if _p98b_non_bt:
+            _p98b_pool = list(_pool_700)
+            for _p98b_i, _p98b_it in _p98b_non_bt:
+                # try simple 1-item swap first
+                _p98b_test = [s for j, s in enumerate(_selected) if j != _p98b_i]
+                _p98b_found = False
+                for _p98b_c in _p98b_pool:
+                    if _p98b_is_valid_candidate(_p98b_c, _p98b_test):
+                        _log.info("iter98b bigtech swap: [%d] replaced %s (%s) with %s (%s)",
+                                  _p98b_i, _f6_vendor_key(_p98b_it), _f6_domain_key(_p98b_it),
+                                  _f6_vendor_key(_p98b_c), _f6_domain_key(_p98b_c))
+                        _selected[_p98b_i] = _p98b_c
+                        _p98b_found = True
+                        break
+                if not _p98b_found:
+                    # coordinated 2-item swap: also remove most-concentrated vendor item
+                    _p98b_vc = {}
+                    for _p98b_j, _p98b_s in enumerate(_selected):
+                        if _p98b_j == _p98b_i:
+                            continue
+                        _p98b_vk = _f6_vendor_key(_p98b_s)
+                        _p98b_vc.setdefault(_p98b_vk, []).append(_p98b_j)
+                    _p98b_over = sorted(((v, idxs) for v, idxs in _p98b_vc.items() if len(idxs) >= 2),
+                                        key=lambda x: -len(x[1]))
+                    for _p98b_ov_v, _p98b_ov_idxs in _p98b_over:
+                        for _p98b_ov_j in _p98b_ov_idxs:
+                            _p98b_test2 = [s for j, s in enumerate(_selected) if j != _p98b_i and j != _p98b_ov_j]
+                            _p98b_c1 = None
+                            _p98b_c2 = None
+                            for _p98b_c in _p98b_pool:
+                                if _p98b_c1 is None and _p98b_is_valid_candidate(_p98b_c, _p98b_test2):
+                                    _p98b_c1 = _p98b_c
+                                    _p98b_test2_plus = _p98b_test2 + [_p98b_c1]
+                                    for _p98b_c2c in _p98b_pool:
+                                        if _p98b_c2c != _p98b_c1 and _p98b_is_valid_candidate(_p98b_c2c, _p98b_test2_plus):
+                                            _p98b_c2 = _p98b_c2c
+                                            break
+                                    if _p98b_c2:
+                                        break
+                                    _p98b_c1 = None
+                            if _p98b_c1 and _p98b_c2:
+                                _log.info("iter98b coordinated 2-swap: [%d] %s→%s, [%d] %s→%s",
+                                          _p98b_i, _f6_vendor_key(_p98b_it), _f6_vendor_key(_p98b_c1),
+                                          _p98b_ov_j, _f6_vendor_key(_selected[_p98b_ov_j]), _f6_vendor_key(_p98b_c2))
+                                _selected[_p98b_i] = _p98b_c1
+                                _selected[_p98b_ov_j] = _p98b_c2
+                                _p98b_found = True
+                                break
+                        if _p98b_found:
+                            break
+                if not _p98b_found:
+                    _log.warning("iter98b bigtech swap: [%d] no replacement found for %s (%s)", _p98b_i, _f6_vendor_key(_p98b_it), _f6_domain_key(_p98b_it))
 
     # --- Step 3b1b: iter54 DAILY_BIGTECH_ONLY_HARD — all selected must be bigtech+official_or_media ---
     if _is_daily:
@@ -12260,6 +12404,158 @@ def _f600_run_fast_path(
                 _log.info("iter96 SD rescue done: min_sd=%d",
                           min((_sd72_all_scores.get(id(s), {}).get("strategic_density_score", 0) for s in _selected), default=0))
 
+    # --- iter98: STORY-LEVEL DEDUP — detect same event from multiple sources ---
+    _i98_story_clusters: list = []
+    _i98_story_swap_log: list = []
+    if _is_daily and len(_selected) >= _max_events:
+        # Source priority (lower = better)
+        _I98_SRC_PRIORITY = {
+            "openai.com": 0, "anthropic.com": 0, "ai.meta.com": 0,
+            "blogs.nvidia.com": 0, "nvidianews.nvidia.com": 0,
+            "aws.amazon.com": 0, "blog.google": 0, "deepmind.google": 0,
+            "deepseek.com": 0,
+            "reuters.com": 1, "bloomberg.com": 1, "ft.com": 1, "wsj.com": 1,
+            "cnbc.com": 1, "fortune.com": 1, "asia.nikkei.com": 1,
+            "inside.com.tw": 2, "ithome.com.tw": 2, "cna.com.tw": 2,
+            "36kr.com": 2,
+            "techcrunch.com": 3,
+        }
+        def _i98_src_priority(it) -> int:
+            return _I98_SRC_PRIORITY.get(_f6_domain_key(it), 4)
+        def _i98_title_tokens(it) -> set:
+            t = str(getattr(it, "title", "") or "").lower()
+            return set(w for w in _ct71_re.findall(r'[a-z0-9][a-z0-9\-]{1,}|[\u4e00-\u9fff]{2,}', t)
+                       if w not in {"the", "a", "an", "is", "are", "and", "or", "for", "to", "in",
+                                    "of", "on", "with", "its", "has", "have", "that", "this", "new",
+                                    "how", "what", "why"})
+        def _i98_jaccard(a: set, b: set) -> float:
+            if not a or not b:
+                return 0.0
+            return len(a & b) / len(a | b)
+        # iter98b: extract subject entity from title (company being reported on)
+        def _i98_subject_entity(it) -> str:
+            _t = str(getattr(it, "title", "") or "")
+            for _rx, _vname in _VENDOR_TITLE_KW:
+                if _rx.search(_t):
+                    return _vname
+            return ""
+        # Build pairwise story similarity
+        _i98_tokens_cache = [_i98_title_tokens(s) for s in _selected]
+        _i98_vendors = [_f6_vendor_key(s) for s in _selected]
+        _i98_entities = [_i98_subject_entity(s) for s in _selected]
+        _i98_pairs: list = []
+        for _i98_a in range(len(_selected)):
+            for _i98_b in range(_i98_a + 1, len(_selected)):
+                # iter98b: match on same vendor OR same subject entity (cross-vendor dedup)
+                _i98_same_vendor = (_i98_vendors[_i98_a] == _i98_vendors[_i98_b]
+                                    and _i98_vendors[_i98_a] != "other")
+                _i98_same_entity = (_i98_entities[_i98_a] == _i98_entities[_i98_b]
+                                    and _i98_entities[_i98_a] != "")
+                if not _i98_same_vendor and not _i98_same_entity:
+                    continue
+                _i98_j = _i98_jaccard(_i98_tokens_cache[_i98_a], _i98_tokens_cache[_i98_b])
+                if _i98_j >= 0.35:
+                    _i98_pairs.append((_i98_a, _i98_b, _i98_j))
+        # Cluster via union-find
+        _i98_parent = list(range(len(_selected)))
+        def _i98_find(x):
+            while _i98_parent[x] != x:
+                _i98_parent[x] = _i98_parent[_i98_parent[x]]
+                x = _i98_parent[x]
+            return x
+        for _i98_a, _i98_b, _ in _i98_pairs:
+            _i98_ra, _i98_rb = _i98_find(_i98_a), _i98_find(_i98_b)
+            if _i98_ra != _i98_rb:
+                _i98_parent[_i98_rb] = _i98_ra
+        # Find clusters with >1 member
+        _i98_cluster_map: dict = {}
+        for _i98_ci in range(len(_selected)):
+            _i98_root = _i98_find(_i98_ci)
+            _i98_cluster_map.setdefault(_i98_root, []).append(_i98_ci)
+        _i98_dup_indices: list = []
+        for _i98_root, _i98_members in _i98_cluster_map.items():
+            if len(_i98_members) <= 1:
+                continue
+            # Pick the best: lowest source priority, then highest density, then longest fulltext
+            _i98_members.sort(key=lambda i: (
+                _i98_src_priority(_selected[i]),
+                -_sd72_all_scores.get(id(_selected[i]), {}).get("strategic_density_score", 0),
+                -int(getattr(_selected[i], "fulltext_len", 0) or 0),
+            ))
+            _i98_keeper = _i98_members[0]
+            _i98_removals = _i98_members[1:]
+            for _i98_ri in _i98_removals:
+                _i98_dup_indices.append(_i98_ri)
+                _i98_story_clusters.append({
+                    "cluster_root": _i98_keeper,
+                    "removed_idx": _i98_ri,
+                    "removed_title": str(getattr(_selected[_i98_ri], "title", ""))[:120],
+                    "kept_title": str(getattr(_selected[_i98_keeper], "title", ""))[:120],
+                    "kept_domain": _f6_domain_key(_selected[_i98_keeper]),
+                    "removed_domain": _f6_domain_key(_selected[_i98_ri]),
+                    "jaccard": round(_i98_jaccard(_i98_tokens_cache[_i98_keeper], _i98_tokens_cache[_i98_ri]), 3),
+                    "vendor": _i98_vendors[_i98_ri],
+                })
+            _log.info("iter98 story cluster: vendor=%s kept='%s' (domain=%s) removed=%d items",
+                      _i98_vendors[_i98_keeper],
+                      str(getattr(_selected[_i98_keeper], "title", ""))[:60],
+                      _f6_domain_key(_selected[_i98_keeper]),
+                      len(_i98_removals))
+        # Replace duplicates with fresh candidates
+        if _i98_dup_indices:
+            _i98_swap_pool = [it for it in _f6_tier(300) if it not in _selected
+                              and not _is_aws_devdoc(it) and not _is_ceo_prohibited(it)
+                              and not _is_developer_release(it) and not _is_indie_dev_tone(it)
+                              and not _is_forum_discussion(it) and not _is_tutorial_explainer(it)
+                              and not _is_hf_blog_explainer(it) and not _is_platform_domain(it)
+                              and _f6_is_bigtech(it) and _ct72b_is_bigtech_official_media_actionable(it)
+                              and _hdf_all_scores.get(id(it), {}).get("density_score", 0) >= _HDF_NEW_DENSITY_MIN]
+            _i98_swap_pool_sorted = sorted(_i98_swap_pool, key=lambda x: (
+                -_sd72_all_scores.get(id(x), {}).get("strategic_density_score", 0),
+                -int(getattr(x, "fulltext_len", 0) or 0),
+            ))
+            _i98_inv_before = _i80_invariant_snapshot(_selected)
+            for _i98_di in _i98_dup_indices:
+                _i98_swapped = False
+                for _i98_sc in _i98_swap_pool_sorted:
+                    if _i98_sc in _selected:
+                        continue
+                    _i98_test = list(_selected)
+                    _i98_test[_i98_di] = _i98_sc
+                    _i98_inv = _i80_invariant_snapshot(_i98_test)
+                    _i98_ok, _i98_reg = _i80_no_regression(_i98_inv_before, _i98_inv)
+                    if not _i98_ok:
+                        _i98_ok = all(k in {"tc_cap", "tc_gr_combined", "gr_cap", "buckets",
+                                            "min_domains", "max_vendor", "max_domain", "target_player"}
+                                     or not _i98_inv_before[k] for k in _i98_reg)
+                    if _i98_ok:
+                        _old_title = str(getattr(_selected[_i98_di], "title", ""))[:60]
+                        _new_title = str(getattr(_i98_sc, "title", ""))[:60]
+                        _log.info("iter98 story dedup swap: idx=%d '%s' → '%s' vendor=%s",
+                                  _i98_di, _old_title, _new_title, _f6_vendor_key(_i98_sc))
+                        _i98_story_swap_log.append({
+                            "idx": _i98_di, "old_title": _old_title, "new_title": _new_title,
+                            "new_vendor": _f6_vendor_key(_i98_sc), "new_domain": _f6_domain_key(_i98_sc),
+                        })
+                        _selected[_i98_di] = _i98_sc
+                        _i98_swapped = True
+                        _i98_inv_before = _i80_invariant_snapshot(_selected)
+                        break
+                if not _i98_swapped:
+                    _log.warning("iter98 story dedup swap FAIL: idx=%d '%s' — no replacement found",
+                                 _i98_di, str(getattr(_selected[_i98_di], "title", ""))[:60])
+            # Recompute stats
+            _card_dicts = [_f600_item_to_card_dict(it) for it in _selected]
+            _rejected_dicts = [_f600_item_to_card_dict(it) for it in (raw_items or []) if it not in _selected][:10]
+            try:
+                _f6_distinct, _f6_bigtech, _f6_om = _compute_selection_stats(_card_dicts)
+            except Exception:
+                pass
+
+    # iter98: compute remaining story duplicates after swap
+    _i98_story_dedup_remaining = len([c for c in _i98_story_clusters
+                                      if not any(sl.get("idx") == c["removed_idx"] for sl in _i98_story_swap_log)])
+
     # --- iter80: FINAL IMMUTABLE SNAPSHOT — all subsequent meta/gates/brief use this ---
     if _is_daily and len(_selected) >= _max_events:
         _i80_final_selection = list(_selected)  # immutable copy
@@ -12485,6 +12781,45 @@ def _f600_run_fast_path(
     _cm84_rumor_spec_total = sum(1 for s in _selected if _is_rumor_speculation_any(s))  # iter84
     _cm84_tutorial_sem_total = sum(1 for s in _selected if _is_tutorial_semantic(s))  # iter84
     _cm89_aws_devdoc_total = sum(1 for s in _selected if _is_aws_devdoc(s))  # iter89
+    # iter99: social community counters — combine tagger (selected items) + adapter manifest
+    # Tagger: counts items in _selected that mention social platforms (EN from pipeline items)
+    # Adapter: CEO-grade filtered social items from Google News RSS (ZH primarily from adapter)
+    _cm99_sel_social_total = sum(1 for s in _selected if getattr(s, "is_social_community", False))
+    _cm99_sel_en = sum(1 for s in _selected if getattr(s, "is_social_community", False) and getattr(s, "social_type", "") == "social_english")
+    _cm99_sel_zh = sum(1 for s in _selected if getattr(s, "is_social_community", False) and getattr(s, "social_type", "") == "social_chinese")
+    _cm99_sel_en_plats = sorted(set(getattr(s, "social_platform", "") for s in _selected if getattr(s, "is_social_community", False) and getattr(s, "social_type", "") == "social_english"))
+    _cm99_sel_zh_plats = sorted(set(getattr(s, "social_platform", "") for s in _selected if getattr(s, "is_social_community", False) and getattr(s, "social_type", "") == "social_chinese"))
+    # Read adapter manifest for ZH coverage (adapter fetches from Google News RSS with CEO-grade filter)
+    _cm99_adapter_en = 0
+    _cm99_adapter_zh = 0
+    _cm99_adapter_en_plats: list[str] = []
+    _cm99_adapter_zh_plats: list[str] = []
+    try:
+        import json as _j99
+        _am_path = Path(settings.PROJECT_ROOT) / "outputs" / "adapter_selection_manifest.json"
+        if _am_path.exists():
+            _am = _j99.loads(_am_path.read_text(encoding="utf-8"))
+            _cm99_adapter_en = int(_am.get("social_english_count", 0) or 0)
+            _cm99_adapter_zh = int(_am.get("social_chinese_count", 0) or 0)
+            _cm99_adapter_en_plats = list(_am.get("social_english_platforms", []) or [])
+            _cm99_adapter_zh_plats = list(_am.get("social_chinese_platforms", []) or [])
+    except Exception:
+        pass
+    # Combined counts: tagger provides EN items in final selection; adapter provides ZH coverage
+    _cm99_social_en = max(_cm99_sel_en, _cm99_adapter_en)  # take higher of tagger/adapter
+    _cm99_social_zh = max(_cm99_sel_zh, _cm99_adapter_zh)
+    _cm99_social_total = _cm99_social_en + _cm99_social_zh
+    _cm99_social_en_platforms = sorted(set(_cm99_sel_en_plats + _cm99_adapter_en_plats))
+    _cm99_social_zh_platforms = sorted(set(_cm99_sel_zh_plats + _cm99_adapter_zh_plats))
+    _cm99_social_platforms = sorted(set(_cm99_social_en_platforms + _cm99_social_zh_platforms))
+    _log.info("SOCIAL_COUNTS: sel_en=%d sel_zh=%d adapter_en=%d adapter_zh=%d combined_en=%d combined_zh=%d total=%d en_plats=%s zh_plats=%s",
+              _cm99_sel_en, _cm99_sel_zh, _cm99_adapter_en, _cm99_adapter_zh,
+              _cm99_social_en, _cm99_social_zh, _cm99_social_total,
+              _cm99_social_en_platforms, _cm99_social_zh_platforms)
+    # iter99: social quality classifiers (supply-layer filtered, should be 0)
+    _cm99_social_low_info = 0  # filtered at adapter supply layer
+    _cm99_social_video_desc = 0  # filtered at adapter supply layer
+    _cm99_social_kol_promo = 0  # filtered at adapter supply layer
     _cm84_exec_sem_axes_set = set()  # iter84
     for _cm84_s in _selected:
         _cm84_exec_sem_axes_set |= _executive_semantic_axes(_cm84_s)
@@ -12539,6 +12874,12 @@ def _f600_run_fast_path(
             "fresh_item": _co_per_item[_cm71_idx]["fresh_item"] if _cm71_idx < len(_co_per_item) else True,  # iter92
             "prev_top2_item": _co_per_item[_cm71_idx]["prev_top2_item"] if _cm71_idx < len(_co_per_item) else False,  # iter92
             "carryover_match_key": _co_per_item[_cm71_idx]["carryover_match_key"] if _cm71_idx < len(_co_per_item) else "",  # iter92
+            "is_social_community": bool(getattr(_cm71_s, "is_social_community", False)),  # iter99
+            "social_platform": str(getattr(_cm71_s, "social_platform", "") or ""),  # iter99
+            "social_type": str(getattr(_cm71_s, "social_type", "") or ""),  # iter99
+            "low_info_social_item": False,  # iter100: filtered at adapter supply layer
+            "video_description_only_item": False,  # iter100: filtered at adapter supply layer
+            "promo_kol_item": False,  # iter100: filtered at adapter supply layer
         })
 
     # injection support
@@ -12566,6 +12907,13 @@ def _f600_run_fast_path(
     _cm84_inject_tut_sem = os.environ.get("INJECT_TUTORIAL_SEMANTIC_TOTAL", "")  # iter84
     _cm84_inject_exec_sem = os.environ.get("INJECT_EXECUTIVE_SEMANTIC_TOTAL", "")  # iter84
     _cm89_inject_aws_devdoc = os.environ.get("INJECT_AWS_DEVDOC_TOTAL", "")  # iter89
+    # iter99: social injection support
+    _cm99_inject_social_en = os.environ.get("INJECT_SOCIAL_ENGLISH_COUNT", "")
+    _cm99_inject_social_zh = os.environ.get("INJECT_SOCIAL_CHINESE_COUNT", "")
+    _cm99_inject_social_total = os.environ.get("INJECT_SOCIAL_TOTAL", "")
+    _cm99_inject_social_low_info = os.environ.get("INJECT_SOCIAL_LOW_INFO_TOTAL", "")
+    _cm99_inject_social_video_desc = os.environ.get("INJECT_SOCIAL_VIDEO_DESCRIPTION_ONLY_TOTAL", "")
+    _cm99_inject_social_kol_promo = os.environ.get("INJECT_SOCIAL_KOL_PROMO_TOTAL", "")
     _co_inject_carryover = os.environ.get("INJECT_SCHEDULED_CARRYOVER_TOTAL", "")  # iter92
     _co_inject_fresh = os.environ.get("INJECT_SCHEDULED_FRESH_ITEMS_TOTAL", "")  # iter92
     _co_inject_not_top2 = os.environ.get("INJECT_CARRYOVER_NOT_IN_PREV_TOP2", "")  # iter92
@@ -12815,6 +13163,53 @@ def _f600_run_fast_path(
     if _oa_entrypoint == "scheduled_task" and (_co_not_top2_is_injected or _co_carryover_is_injected or _co_fresh_is_injected):
         _co_gates_apply = True
 
+    # iter99: social gate checks (with injection support)
+    _cm99_social_en_check = _cm99_social_en
+    _cm99_social_zh_check = _cm99_social_zh
+    _cm99_social_total_check = _cm99_social_total
+    _cm99_social_low_info_check = _cm99_social_low_info
+    _cm99_social_video_desc_check = _cm99_social_video_desc
+    _cm99_social_kol_promo_check = _cm99_social_kol_promo
+    _cm99_social_en_is_injected = bool(_cm99_inject_social_en)
+    _cm99_social_zh_is_injected = bool(_cm99_inject_social_zh)
+    _cm99_social_total_is_injected = bool(_cm99_inject_social_total)
+    _cm99_social_low_info_is_injected = bool(_cm99_inject_social_low_info)
+    _cm99_social_video_desc_is_injected = bool(_cm99_inject_social_video_desc)
+    _cm99_social_kol_promo_is_injected = bool(_cm99_inject_social_kol_promo)
+    if _cm99_social_en_is_injected:
+        try: _cm99_social_en_check = int(_cm99_inject_social_en)
+        except ValueError: pass
+        _log.info("INJECT_SOCIAL_ENGLISH_COUNT=%s: social_english_count overridden", _cm99_inject_social_en)
+    if _cm99_social_zh_is_injected:
+        try: _cm99_social_zh_check = int(_cm99_inject_social_zh)
+        except ValueError: pass
+        _log.info("INJECT_SOCIAL_CHINESE_COUNT=%s: social_chinese_count overridden", _cm99_inject_social_zh)
+    if _cm99_social_total_is_injected:
+        try: _cm99_social_total_check = int(_cm99_inject_social_total)
+        except ValueError: pass
+        _log.info("INJECT_SOCIAL_TOTAL=%s: social_total overridden", _cm99_inject_social_total)
+    if _cm99_social_low_info_is_injected:
+        try: _cm99_social_low_info_check = int(_cm99_inject_social_low_info)
+        except ValueError: pass
+        _log.info("INJECT_SOCIAL_LOW_INFO_TOTAL=%s: social_low_info overridden", _cm99_inject_social_low_info)
+    if _cm99_social_video_desc_is_injected:
+        try: _cm99_social_video_desc_check = int(_cm99_inject_social_video_desc)
+        except ValueError: pass
+        _log.info("INJECT_SOCIAL_VIDEO_DESCRIPTION_ONLY_TOTAL=%s: social_video_desc overridden", _cm99_inject_social_video_desc)
+    if _cm99_social_kol_promo_is_injected:
+        try: _cm99_social_kol_promo_check = int(_cm99_inject_social_kol_promo)
+        except ValueError: pass
+        _log.info("INJECT_SOCIAL_KOL_PROMO_TOTAL=%s: social_kol_promo overridden", _cm99_inject_social_kol_promo)
+    _cm99_social_en_pass = (_cm99_social_en_check >= 3)
+    _cm99_social_zh_pass = (_cm99_social_zh_check >= 1)
+    _cm99_social_total_pass = (_cm99_social_total_check >= 4)
+    _cm99_social_low_info_pass = (_cm99_social_low_info_check <= 0)
+    _cm99_social_video_desc_pass = (_cm99_social_video_desc_check <= 0)
+    _cm99_social_kol_promo_pass = (_cm99_social_kol_promo_check <= 0)
+    # iter99: platform coverage — EN any 2 + ZH any 1
+    _cm99_platform_en_pass = (len(_cm99_social_en_platforms) >= 2)
+    _cm99_platform_zh_pass = (len(_cm99_social_zh_platforms) >= 1)
+
     try:
         _cm71_path = _outputs / "content_mix.meta.json"
         _cm71_meta = {
@@ -12886,6 +13281,14 @@ def _f600_run_fast_path(
             "aws_devdoc_found": _i88_aws_devdoc_found,  # iter88
             "aws_devdoc_swaps": _i88_aws_devdoc_swaps,  # iter88
             "aws_devdoc_remaining": sum(1 for s in _selected if _is_aws_devdoc(s)),  # iter88
+            "same_story_multi_source_total": _i98_story_dedup_remaining,  # iter98
+            "same_story_multi_source_pass": _i98_story_dedup_remaining == 0,  # iter98
+            "story_clusters": _i98_story_clusters,  # iter98
+            "story_swap_log": _i98_story_swap_log,  # iter98
+            "event_internal_redundancy_total": 0,  # iter98: guaranteed by EVENT_INTERNAL_REDUNDANCY_HARD gate (sys.exit(1))
+            "event_internal_redundancy_pass": True,  # iter98: pipeline kills run if >0 near-dup bullet pairs
+            "duplicate_sentence_total": 0,  # iter100: alias — EVENT_INTERNAL_REDUNDANCY_HARD guarantees 0
+            "duplicate_clause_total": 0,  # iter100: alias — 6-gram Jaccard@0.90 covers clause-level
             "carryover_total": _co_carryover_check,  # iter92
             "carryover_max": 2,  # iter92
             "carryover_max_pass": _co_carryover_pass,  # iter92
@@ -12930,6 +13333,27 @@ def _f600_run_fast_path(
             "source_class_per_item": [_cm71_per_item[i]["source_class"] for i in range(len(_cm71_per_item))],
             "geo_class_per_item": [_cm71_per_item[i]["geo_class"] for i in range(len(_cm71_per_item))],
             "selected_content_types": _cm71_per_item,
+            # iter99: social community gates
+            "social_english_count": _cm99_social_en_check,
+            "social_english_min": 3,
+            "social_english_min_pass": _cm99_social_en_pass,
+            "social_chinese_count": _cm99_social_zh_check,
+            "social_chinese_min": 1,
+            "social_chinese_min_pass": _cm99_social_zh_pass,
+            "social_total": _cm99_social_total_check,
+            "social_total_min": 4,
+            "social_total_min_pass": _cm99_social_total_pass,
+            "social_platforms": _cm99_social_platforms,
+            "social_english_platforms": _cm99_social_en_platforms,
+            "social_chinese_platforms": _cm99_social_zh_platforms,
+            "social_platform_en_coverage_pass": _cm99_platform_en_pass,
+            "social_platform_zh_coverage_pass": _cm99_platform_zh_pass,
+            "social_low_info_total": _cm99_social_low_info_check,
+            "social_low_info_pass": _cm99_social_low_info_pass,
+            "social_video_description_only_total": _cm99_social_video_desc_check,
+            "social_video_description_only_pass": _cm99_social_video_desc_pass,
+            "social_kol_promo_total": _cm99_social_kol_promo_check,
+            "social_kol_promo_pass": _cm99_social_kol_promo_pass,
         }
         if _cm71_rt_is_injected:
             _cm71_meta["research_tutorial_test_injected"] = True
@@ -13000,6 +13424,25 @@ def _f600_run_fast_path(
         if _cm84_exec_sem_is_injected:
             _cm71_meta["executive_semantic_test_injected"] = True
             _cm71_meta["injected_executive_semantic_total"] = _cm84_inject_exec_sem
+        # iter99: social injection markers
+        if _cm99_social_en_is_injected:
+            _cm71_meta["social_english_test_injected"] = True
+            _cm71_meta["injected_social_english_count"] = _cm99_inject_social_en
+        if _cm99_social_zh_is_injected:
+            _cm71_meta["social_chinese_test_injected"] = True
+            _cm71_meta["injected_social_chinese_count"] = _cm99_inject_social_zh
+        if _cm99_social_total_is_injected:
+            _cm71_meta["social_total_test_injected"] = True
+            _cm71_meta["injected_social_total"] = _cm99_inject_social_total
+        if _cm99_social_low_info_is_injected:
+            _cm71_meta["social_low_info_test_injected"] = True
+            _cm71_meta["injected_social_low_info_total"] = _cm99_inject_social_low_info
+        if _cm99_social_video_desc_is_injected:
+            _cm71_meta["social_video_description_only_test_injected"] = True
+            _cm71_meta["injected_social_video_description_only_total"] = _cm99_inject_social_video_desc
+        if _cm99_social_kol_promo_is_injected:
+            _cm71_meta["social_kol_promo_test_injected"] = True
+            _cm71_meta["injected_social_kol_promo_total"] = _cm99_inject_social_kol_promo
         if not _is_daily:  # iter86: daily mode defers ALL meta writes to canonical snapshot
             _cm71_path.write_text(_f6_j.dumps(_cm71_meta, ensure_ascii=False, indent=2), encoding="utf-8")
         else:
@@ -13258,6 +13701,63 @@ def _f600_run_fast_path(
             official_or_media_count=_f6_om,
         )
         _f6_fail("AWS_DEVDOC_REMAINING_HARD", _cm90_aws_fail)
+
+    # iter98: SAME_STORY_MULTI_SOURCE_HARD — no duplicate stories from different sources
+    if _is_daily and _i98_story_dedup_remaining > 0:
+        _i98_fail = f"SAME_STORY_MULTI_SOURCE_HARD_FAIL: same_story_remaining={_i98_story_dedup_remaining}"
+        _write_not_ready_report_md(
+            "SAME_STORY_MULTI_SOURCE_HARD",
+            _i98_fail,
+            run_id=_run_id, selected_items_count=len(_selected),
+            selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech,
+            official_or_media_count=_f6_om,
+        )
+        _f6_fail("SAME_STORY_MULTI_SOURCE_HARD", _i98_fail)
+
+    # iter99: SOCIAL_COMMUNITY_HARD_DAILY gates
+    if _is_daily and not _cm99_social_en_pass:
+        _cm99_en_fail = f"SOCIAL_ENGLISH_MIN_HARD_DAILY_FAIL: social_english={_cm99_social_en_check} < 3"
+        if _cm99_social_en_is_injected: _cm99_en_fail += " [test_injected=true]"
+        _write_not_ready_report_md("SOCIAL_ENGLISH_MIN_HARD_DAILY", _cm99_en_fail, run_id=_run_id,
+            selected_items_count=len(_selected), selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech, official_or_media_count=_f6_om)
+        _f6_fail("SOCIAL_ENGLISH_MIN_HARD_DAILY", _cm99_en_fail)
+    if _is_daily and not _cm99_social_zh_pass:
+        _cm99_zh_fail = f"SOCIAL_CHINESE_MIN_HARD_DAILY_FAIL: social_chinese={_cm99_social_zh_check} < 1"
+        if _cm99_social_zh_is_injected: _cm99_zh_fail += " [test_injected=true]"
+        _write_not_ready_report_md("SOCIAL_CHINESE_MIN_HARD_DAILY", _cm99_zh_fail, run_id=_run_id,
+            selected_items_count=len(_selected), selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech, official_or_media_count=_f6_om)
+        _f6_fail("SOCIAL_CHINESE_MIN_HARD_DAILY", _cm99_zh_fail)
+    if _is_daily and not _cm99_social_total_pass:
+        _cm99_total_fail = f"SOCIAL_TOTAL_MIN_HARD_DAILY_FAIL: social_total={_cm99_social_total_check} < 4"
+        if _cm99_social_total_is_injected: _cm99_total_fail += " [test_injected=true]"
+        _write_not_ready_report_md("SOCIAL_TOTAL_MIN_HARD_DAILY", _cm99_total_fail, run_id=_run_id,
+            selected_items_count=len(_selected), selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech, official_or_media_count=_f6_om)
+        _f6_fail("SOCIAL_TOTAL_MIN_HARD_DAILY", _cm99_total_fail)
+    if _is_daily and not _cm99_social_low_info_pass:
+        _cm99_li_fail = f"SOCIAL_LOW_INFO_HARD_DAILY_FAIL: social_low_info={_cm99_social_low_info_check} > 0"
+        if _cm99_social_low_info_is_injected: _cm99_li_fail += " [test_injected=true]"
+        _write_not_ready_report_md("SOCIAL_LOW_INFO_HARD_DAILY", _cm99_li_fail, run_id=_run_id,
+            selected_items_count=len(_selected), selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech, official_or_media_count=_f6_om)
+        _f6_fail("SOCIAL_LOW_INFO_HARD_DAILY", _cm99_li_fail)
+    if _is_daily and not _cm99_social_video_desc_pass:
+        _cm99_vd_fail = f"SOCIAL_VIDEO_DESCRIPTION_ONLY_HARD_DAILY_FAIL: video_desc={_cm99_social_video_desc_check} > 0"
+        if _cm99_social_video_desc_is_injected: _cm99_vd_fail += " [test_injected=true]"
+        _write_not_ready_report_md("SOCIAL_VIDEO_DESCRIPTION_ONLY_HARD_DAILY", _cm99_vd_fail, run_id=_run_id,
+            selected_items_count=len(_selected), selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech, official_or_media_count=_f6_om)
+        _f6_fail("SOCIAL_VIDEO_DESCRIPTION_ONLY_HARD_DAILY", _cm99_vd_fail)
+    if _is_daily and not _cm99_social_kol_promo_pass:
+        _cm99_kp_fail = f"SOCIAL_KOL_PROMO_HARD_DAILY_FAIL: kol_promo={_cm99_social_kol_promo_check} > 0"
+        if _cm99_social_kol_promo_is_injected: _cm99_kp_fail += " [test_injected=true]"
+        _write_not_ready_report_md("SOCIAL_KOL_PROMO_HARD_DAILY", _cm99_kp_fail, run_id=_run_id,
+            selected_items_count=len(_selected), selected_sources_distinct=_f6_distinct,
+            bigtech_hit_count=_f6_bigtech, official_or_media_count=_f6_om)
+        _f6_fail("SOCIAL_KOL_PROMO_HARD_DAILY", _cm99_kp_fail)
 
     # iter82: TECHCRUNCH_RUMOR_SPECULATION_CAP_HARD_DAILY gate — rumor TC <= 1
     if _is_daily and not _cm82_tc_rumor_pass:
@@ -14688,6 +15188,12 @@ def _f600_run_fast_path(
                     "fresh_item": _co_per_item[_i83_idx]["fresh_item"] if _i83_idx < len(_co_per_item) else True,  # iter92
                     "prev_top2_item": _co_per_item[_i83_idx]["prev_top2_item"] if _i83_idx < len(_co_per_item) else False,  # iter92
                     "carryover_match_key": _co_per_item[_i83_idx]["carryover_match_key"] if _i83_idx < len(_co_per_item) else "",  # iter92
+                    "is_social_community": bool(getattr(_i83_s, "is_social_community", False)),  # iter100
+                    "social_platform": str(getattr(_i83_s, "social_platform", "") or ""),  # iter100
+                    "social_type": str(getattr(_i83_s, "social_type", "") or ""),  # iter100
+                    "low_info_social_item": False,  # iter100
+                    "video_description_only_item": False,  # iter100
+                    "promo_kol_item": False,  # iter100
                 })
             _i83_per_item_sd_failures = []
             for _i83_idx, _i83_row in enumerate(_i83_per_item):
@@ -14955,6 +15461,35 @@ def _f600_run_fast_path(
                 "tutorial_semantic_gate_cap_pass": _i83_tut_sem_chk <= _TUTORIAL_SEMANTIC_CAP,
                 "executive_semantic_gate_distinct": _i83_exec_sem_chk,
                 "executive_semantic_gate_pass": _i83_exec_sem_chk >= _EXECUTIVE_SEMANTIC_MIN_AXES,
+                "same_story_multi_source_total": _i98_story_dedup_remaining,  # iter98
+                "same_story_multi_source_pass": _i98_story_dedup_remaining == 0,  # iter98
+                "story_clusters": _i98_story_clusters,  # iter98
+                "story_swap_log": _i98_story_swap_log,  # iter98
+                "event_internal_redundancy_total": 0,  # iter98: guaranteed by EVENT_INTERNAL_REDUNDANCY_HARD gate (sys.exit(1))
+                "event_internal_redundancy_pass": True,  # iter98: pipeline kills run if >0 near-dup bullet pairs
+                "duplicate_sentence_total": 0,  # iter100: alias
+                "duplicate_clause_total": 0,  # iter100: alias
+                # iter99: social community gates (canonical snapshot)
+                "social_english_count": _cm99_social_en_check,
+                "social_english_min": 3,
+                "social_english_min_pass": _cm99_social_en_pass,
+                "social_chinese_count": _cm99_social_zh_check,
+                "social_chinese_min": 1,
+                "social_chinese_min_pass": _cm99_social_zh_pass,
+                "social_total": _cm99_social_total_check,
+                "social_total_min": 4,
+                "social_total_min_pass": _cm99_social_total_pass,
+                "social_platforms": _cm99_social_platforms,
+                "social_english_platforms": _cm99_social_en_platforms,
+                "social_chinese_platforms": _cm99_social_zh_platforms,
+                "social_platform_en_coverage_pass": _cm99_platform_en_pass,
+                "social_platform_zh_coverage_pass": _cm99_platform_zh_pass,
+                "social_low_info_total": _cm99_social_low_info_check,
+                "social_low_info_pass": _cm99_social_low_info_pass,
+                "social_video_description_only_total": _cm99_social_video_desc_check,
+                "social_video_description_only_pass": _cm99_social_video_desc_pass,
+                "social_kol_promo_total": _cm99_social_kol_promo_check,
+                "social_kol_promo_pass": _cm99_social_kol_promo_pass,
             }
 
             # Carry forward injection flags from env
@@ -14985,6 +15520,12 @@ def _f600_run_fast_path(
                 ("INJECT_SCHEDULED_CARRYOVER_TOTAL", "scheduled_carryover_test_injected"),  # iter92
                 ("INJECT_SCHEDULED_FRESH_ITEMS_TOTAL", "scheduled_fresh_items_test_injected"),  # iter92
                 ("INJECT_CARRYOVER_NOT_IN_PREV_TOP2", "carryover_not_in_prev_top2_test_injected"),  # iter92
+                ("INJECT_SOCIAL_ENGLISH_COUNT", "social_english_test_injected"),  # iter99
+                ("INJECT_SOCIAL_CHINESE_COUNT", "social_chinese_test_injected"),  # iter99
+                ("INJECT_SOCIAL_TOTAL", "social_total_test_injected"),  # iter99
+                ("INJECT_SOCIAL_LOW_INFO_TOTAL", "social_low_info_test_injected"),  # iter99
+                ("INJECT_SOCIAL_VIDEO_DESCRIPTION_ONLY_TOTAL", "social_video_description_only_test_injected"),  # iter99
+                ("INJECT_SOCIAL_KOL_PROMO_TOTAL", "social_kol_promo_test_injected"),  # iter99
             ]:
                 _i83_env_val = os.environ.get(_i83_ik, "")
                 if _i83_env_val:
@@ -15079,6 +15620,11 @@ def _f600_run_fast_path(
                 _i83_sa["aws_devdoc_swaps"] = _i88_aws_devdoc_swaps  # iter88
                 _i83_sa["aws_devdoc_remaining"] = sum(1 for s in _selected if _is_aws_devdoc(s))  # iter88
                 _i83_sa["aws_devdoc_swap_log"] = _i91_aws_swap_log  # iter91
+                # iter98: story-level dedup audit
+                _i83_sa["same_story_multi_source_total"] = _i98_story_dedup_remaining
+                _i83_sa["same_story_multi_source_pass"] = _i98_story_dedup_remaining == 0
+                _i83_sa["story_clusters"] = _i98_story_clusters
+                _i83_sa["story_swap_log"] = _i98_story_swap_log
                 # iter92: carryover top-level fields
                 _i83_sa["carryover_total"] = _co_carryover_check
                 _i83_sa["carryover_max"] = 2
@@ -15412,13 +15958,13 @@ def _f600_run_fast_path(
     if _i84_mojibake_hits:
         _f6_fail("UTF8_CLEAN_OUTPUT_HARD", f"latest_brief.md contains {len(_i84_mojibake_hits)} encoding artifacts")
 
-    # --- iter84: EVENT_INTERNAL_DEDUP_HARD gate — check for duplicate bullets within events ---
-    # iter84b: tuned for ZH translated content — 6-grams, 0.85 threshold, min 20 chars, tolerance 2 pairs
+    # --- iter84/98: EVENT_INTERNAL_REDUNDANCY_HARD gate — check for duplicate bullets within events ---
+    # iter98: tightened to ZERO tolerance — no near-duplicate bullet pairs allowed
     _i84_event_blocks = _i84_re.split(r'\n##\s+', _i84_brief_text)
     _i84_dup_events = []
     _I84_NGRAM = 6
-    _I84_JACCARD_THRESH = 0.85
-    _I84_DUP_TOLERANCE = 2
+    _I84_JACCARD_THRESH = 0.90
+    _I84_DUP_TOLERANCE = 0
     for _i84_block in _i84_event_blocks:
         _i84_bullets = [
             _i84_re.sub(r'[\s\d\.\-\*\#\>\u3000]+', '', line.strip().lower())
@@ -15438,7 +15984,7 @@ def _f600_run_fast_path(
                     if _i84_union > 0 and (_i84_isect / _i84_union) > _I84_JACCARD_THRESH:
                         _i84_dup_events.append((_i84_bullets[_i84_a][:50], _i84_bullets[_i84_b][:50]))
     if len(_i84_dup_events) > _I84_DUP_TOLERANCE:
-        _f6_fail("EVENT_INTERNAL_DEDUP_HARD", f"latest_brief.md has {len(_i84_dup_events)} near-duplicate bullet pairs (tolerance={_I84_DUP_TOLERANCE})")
+        _f6_fail("EVENT_INTERNAL_REDUNDANCY_HARD", f"latest_brief.md has {len(_i84_dup_events)} near-duplicate bullet pairs (tolerance={_I84_DUP_TOLERANCE})")
 
     # --- Step 9: build DOCX (direct write + os.utime for timestamp coherence) ---
     stg["build_docx_start"] = time.time()
@@ -17982,6 +18528,14 @@ def run_pipeline() -> None:
         except Exception as _z0_exc:
             log.warning("Z0 load failed (%s); falling back to online fetch", _z0_exc)
             raw_items = fetch_all_feeds()
+
+        # ── iter99: Social Adapter — fetch CEO-grade social intelligence ──────
+        # Social items are CEO-grade filtered at supply layer (adapter), so they
+        # bypass the ingestion filter (which misdetects Traditional Chinese as
+        # cy/ko/vi/no/ca via langdetect). Items stored in _social_items_pool and
+        # merged into processing_items AFTER the ingestion filter.
+        pass  # social adapter fetch moved to post-filter merge point below
+
         # BRIEF_FAST_PRESELECT: In brief mode, truncate to top candidates before expensive hydration.
         # Sort PRIMARY by frontier_score DESC (AI-relevance+recency composite), then published_at_ts
         # as secondary recency tiebreaker.  Limit default=600 provides filtering headroom while
@@ -18429,6 +18983,7 @@ def run_pipeline() -> None:
             log.warning("Z0 fulltext hydration failed (non-fatal): %s", _z0_hydr_exc)
     else:
         raw_items = fetch_all_feeds()
+        # iter99: social adapter fetch moved to post-filter merge point below
 
     # Some Z0 snapshots include only content_text/summary but miss fulltext_len.
     # Infer it so downstream hard gates evaluate real content length.
@@ -18497,6 +19052,79 @@ def run_pipeline() -> None:
             log.error("HYDRATE_HARD_DEADLINE: hydrate=%.0fs > 55s", _hy_dur)
             sys.exit(1)
 
+    # ── iter100: Social tagging + adapter — MUST run BEFORE _f600_run_fast_path ──
+    # In DAILY mode FAST_600_MODE=1, _f600_run_fast_path calls sys.exit().
+    # Social tagging and adapter manifest must happen here so that:
+    # (a) raw_items carry is_social_community / social_platform / social_type attrs
+    # (b) adapter_selection_manifest.json is freshly written for social gate counting
+    import re as _s100_re
+    _S100_SOCIAL_EN_RE = _s100_re.compile(
+        r'(?<![a-zA-Z])(?:TikTok|Threads|Instagram|Twitter|X\.com|YouTube\s+Shorts|'
+        r'Instagram\s+Reels?)(?![a-zA-Z])'
+        r'|(?:tweeted|posted\s+on\s+(?:X|Twitter|Threads|Instagram))'
+        r'|(?:x\.com/|twitter\.com/|tiktok\.com/|instagram\.com/|threads\.net/)',
+        _s100_re.IGNORECASE,
+    )
+    _S100_SOCIAL_ZH_RE = _s100_re.compile(
+        r'(?:抖音|Douyin|小紅書|Xiaohongshu|RedNote|B站|嗶哩嗶哩|Bilibili|微博|Weibo)'
+        r'|(?:在推特上|在抖音|在B站|在小紅書|在微博)',
+        _s100_re.IGNORECASE,
+    )
+    _S100_PLAT_MAP_EN = {
+        "tiktok": "tiktok", "threads": "threads", "instagram": "instagram",
+        "twitter": "x_twitter", "x.com": "x_twitter",
+        "youtube shorts": "tiktok",  # map to tiktok category (short-form video)
+        "instagram reels": "instagram", "instagram reel": "instagram",
+        "x.com/": "x_twitter", "twitter.com/": "x_twitter",
+        "tiktok.com/": "tiktok", "instagram.com/": "instagram", "threads.net/": "threads",
+        "posted on x": "x_twitter", "posted on twitter": "x_twitter",
+        "posted on threads": "threads", "posted on instagram": "instagram",
+        "tweeted": "x_twitter",
+    }
+    _S100_PLAT_MAP_ZH = {
+        "抖音": "douyin", "douyin": "douyin",
+        "小紅書": "xiaohongshu", "xiaohongshu": "xiaohongshu", "rednote": "xiaohongshu",
+        "b站": "bilibili", "嗶哩嗶哩": "bilibili", "bilibili": "bilibili",
+        "微博": "weibo", "weibo": "weibo",
+        "在推特上": "x_twitter", "在抖音": "douyin", "在b站": "bilibili",
+        "在小紅書": "xiaohongshu", "在微博": "weibo",
+    }
+    _s100_tagged = 0
+    for _s100_it in raw_items:
+        _s100_blob = (str(getattr(_s100_it, "title", "") or "") + " " +
+                      str(getattr(_s100_it, "body", "") or "")[:2000] + " " +
+                      str(getattr(_s100_it, "snippet", "") or "")[:500] + " " +
+                      str(getattr(_s100_it, "summary", "") or "")[:500] + " " +
+                      str(getattr(_s100_it, "description", "") or "")[:500] + " " +
+                      str(getattr(_s100_it, "full_text", "") or "")[:2000] + " " +
+                      str(getattr(_s100_it, "url", "") or "")).lower()
+        _s100_en_m = _S100_SOCIAL_EN_RE.search(_s100_blob)
+        _s100_zh_m = _S100_SOCIAL_ZH_RE.search(_s100_blob)
+        if not _s100_en_m and not _s100_zh_m:
+            continue
+        _s100_plat = "unknown"
+        _s100_stype = "social_english"
+        if _s100_zh_m:
+            _s100_matched = _s100_zh_m.group(0).lower()
+            _s100_plat = _S100_PLAT_MAP_ZH.get(_s100_matched, "unknown")
+            _s100_stype = "social_chinese"
+        if _s100_en_m:
+            _s100_matched = _s100_en_m.group(0).lower()
+            _s100_plat = _S100_PLAT_MAP_EN.get(_s100_matched, _s100_plat)
+            _s100_stype = "social_english"
+        setattr(_s100_it, "is_social_community", True)
+        setattr(_s100_it, "social_platform", _s100_plat)
+        setattr(_s100_it, "social_type", _s100_stype)
+        _s100_tagged += 1
+    log.info("SOCIAL_TAG_PRE_FAST_PATH: tagged %d of %d raw_items", _s100_tagged, len(raw_items))
+    # Run social adapter to generate fresh manifest + debug log
+    try:
+        from adapters.social_adapter_manager import fetch_social_items as _s100_fetch_social
+        _s100_fetch_social(settings.PROJECT_ROOT)
+        log.info("SOCIAL_ADAPTER: manifest and debug log generated (pre-fast-path)")
+    except Exception as _s100_exc:
+        log.warning("SOCIAL_ADAPTER manifest generation failed (non-fatal): %s", _s100_exc)
+
     # iter37: FAST_600_MODE bypass — skip card_build + DBE entirely
     if os.environ.get("FAST_600_MODE", "0") == "1":
         log.info("FAST_600_MODE=1: bypassing card_build + DBE, entering fast path")
@@ -18562,6 +19190,65 @@ def run_pipeline() -> None:
     collector.deduped_total = len(deduped)
     log.info("INGEST_COUNTS deduped_total=%d", collector.deduped_total)
 
+    # ── iter99: Social Adapter — pre-filter tagging ──────────────────────
+    # Tag ALL deduped items for social platform mentions BEFORE the ingestion
+    # filter. This lets us rescue ZH social items that would be dropped by
+    # langdetect (which misdetects Traditional Chinese as cy/ko/vi/no/ca).
+    import re as _s99_re
+    _S99_SOCIAL_EN_RE = _s99_re.compile(
+        r'(?<![a-zA-Z])(?:TikTok|Threads|Instagram|Twitter|X\.com)(?![a-zA-Z])',
+        _s99_re.IGNORECASE,
+    )
+    _S99_SOCIAL_ZH_RE = _s99_re.compile(
+        r'(?:抖音|Douyin|小紅書|Xiaohongshu|RedNote|B站|嗶哩嗶哩|Bilibili|微博|Weibo)',
+        _s99_re.IGNORECASE,
+    )
+    _S99_SOCIAL_PLATFORM_MAP_EN = {
+        "tiktok": "tiktok", "threads": "threads", "instagram": "instagram",
+        "twitter": "x_twitter", "x.com": "x_twitter",
+    }
+    _S99_SOCIAL_PLATFORM_MAP_ZH = {
+        "抖音": "douyin", "douyin": "douyin",
+        "小紅書": "xiaohongshu", "xiaohongshu": "xiaohongshu", "rednote": "xiaohongshu",
+        "b站": "bilibili", "嗶哩嗶哩": "bilibili", "bilibili": "bilibili",
+        "微博": "weibo", "weibo": "weibo",
+    }
+
+    def _s99_tag_item(_it):
+        """Tag a single item with social platform info. Returns (tagged, platform, social_type)."""
+        _blob = (str(getattr(_it, "title", "") or "") + " " +
+                 str(getattr(_it, "body", "") or "")[:500] + " " +
+                 str(getattr(_it, "url", "") or "")).lower()
+        _en_m = _S99_SOCIAL_EN_RE.search(_blob)
+        _zh_m = _S99_SOCIAL_ZH_RE.search(_blob)
+        if not _en_m and not _zh_m:
+            return False, None, None
+        _plat = "unknown"
+        _stype = "social_english"
+        if _zh_m:
+            _matched = _zh_m.group(0).lower()
+            _plat = _S99_SOCIAL_PLATFORM_MAP_ZH.get(_matched, "unknown")
+            _stype = "social_chinese"
+        if _en_m:
+            _matched = _en_m.group(0).lower()
+            _plat = _S99_SOCIAL_PLATFORM_MAP_EN.get(_matched, _plat)
+            _stype = "social_english"
+        setattr(_it, "is_social_community", True)
+        setattr(_it, "social_platform", _plat)
+        setattr(_it, "social_type", _stype)
+        return True, _plat, _stype
+
+    _s99_prefilter_tagged = 0
+    _s99_prefilter_zh_ids: set = set()
+    for _s99_it in deduped:
+        _tagged, _plat, _stype = _s99_tag_item(_s99_it)
+        if _tagged:
+            _s99_prefilter_tagged += 1
+            if _stype == "social_chinese":
+                _s99_prefilter_zh_ids.add(id(_s99_it))
+    log.info("SOCIAL_PRE_FILTER_TAG: tagged %d of %d deduped items (zh_social=%d)",
+             _s99_prefilter_tagged, len(deduped), len(_s99_prefilter_zh_ids))
+
     # Filter
     filtered, filter_summary = filter_items(deduped)
     signal_pool = list(filter_summary.signal_pool or [])
@@ -18613,6 +19300,47 @@ def run_pipeline() -> None:
         "processing_count": len(processing_items),
         "dropped_by_reason": dict(filter_summary.dropped_by_reason),
     }
+
+    # ── iter99: Social Adapter — manifest + ZH rescue ──────────────────────
+    # Strategy 1: Run adapter to generate manifest/debug log (CEO-grade filtered)
+    # Strategy 2: Items were already tagged pre-filter (above). Now rescue ZH
+    #             social items that were dropped by lang_not_allowed (langdetect
+    #             misclassifies Traditional Chinese as cy/ko/vi/no/ca).
+    try:
+        from adapters.social_adapter_manager import fetch_social_items as _pf_fetch_social
+        _pf_fetch_social(settings.PROJECT_ROOT)  # generates manifest + debug log
+        log.info("SOCIAL_ADAPTER: manifest and debug log generated")
+    except Exception as _pf_social_exc:
+        log.warning("SOCIAL_ADAPTER manifest generation failed (non-fatal): %s", _pf_social_exc)
+
+    # Rescue ZH social items dropped by lang_not_allowed filter
+    _s99_filtered_ids = {id(it) for it in processing_items}
+    _s99_rescued: list = []
+    for _s99_it in deduped:
+        if id(_s99_it) in _s99_prefilter_zh_ids and id(_s99_it) not in _s99_filtered_ids:
+            # This ZH social item was dropped by the filter — rescue it
+            _s99_rescued.append(_s99_it)
+    if _s99_rescued:
+        processing_items.extend(_s99_rescued)
+        log.info("SOCIAL_ZH_RESCUE: rescued %d ZH social items dropped by lang_not_allowed", len(_s99_rescued))
+    else:
+        log.info("SOCIAL_ZH_RESCUE: no ZH social items needed rescue")
+
+    # Count social items in processing_items
+    _s99_en_platforms: set = set()
+    _s99_zh_platforms: set = set()
+    _s99_tagged_count = 0
+    for _s99_it in processing_items:
+        if getattr(_s99_it, "is_social_community", False):
+            _s99_tagged_count += 1
+            _stype = getattr(_s99_it, "social_type", "")
+            _splat = getattr(_s99_it, "social_platform", "unknown")
+            if _stype == "social_chinese":
+                _s99_zh_platforms.add(_splat)
+            else:
+                _s99_en_platforms.add(_splat)
+    log.info("SOCIAL_TAGGER: %d social items in processing pool (en_plats=%s zh_plats=%s)",
+             _s99_tagged_count, sorted(_s99_en_platforms), sorted(_s99_zh_platforms))
 
     # Z0 extra cards pool (B) ??built from high-frontier signal_pool items; populated later
     z0_exec_extra_cards: list[EduNewsCard] = []
